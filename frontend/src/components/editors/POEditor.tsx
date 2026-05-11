@@ -60,8 +60,6 @@ import {
   Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy,
   X, GitCommit, Eye, AlertTriangle, Check, Calendar, Loader2, Hash, Printer
 } from "lucide-react"
-import { pdf } from '@react-pdf/renderer'
-import { PurchaseOrderPDF } from '@/components/pdf/PurchaseOrderPDF'
 import { PartForm } from "@/components/forms/PartForm"
 import { POAuditTrail } from "./POAuditTrail"
 
@@ -638,9 +636,11 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     if (!po) return
     setIsPrinting(true)
     try {
-      const [project, companySettings] = await Promise.all([
+      const [project, companySettings, { pdf }, { PurchaseOrderPDF }] = await Promise.all([
         api.projects.get(po.project_id) as Promise<Project>,
         api.companySettings.get(),
+        import('@react-pdf/renderer'),
+        import('@/components/pdf/PurchaseOrderPDF'),
       ])
       const blob = await pdf(
         <PurchaseOrderPDF po={po} project={project} companySettings={companySettings} />

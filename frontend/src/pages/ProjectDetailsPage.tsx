@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 // Card components available if needed
@@ -29,10 +29,25 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
-import { QuoteEditor } from "@/components/editors/QuoteEditor"
-import { POEditor } from "@/components/editors/POEditor"
-import { InvoiceEditor } from "@/components/editors/InvoiceEditor"
 import { api } from "@/api/client"
+
+const QuoteEditor = lazy(() =>
+  import("@/components/editors/QuoteEditor").then((m) => ({ default: m.QuoteEditor }))
+)
+const POEditor = lazy(() =>
+  import("@/components/editors/POEditor").then((m) => ({ default: m.POEditor }))
+)
+const InvoiceEditor = lazy(() =>
+  import("@/components/editors/InvoiceEditor").then((m) => ({ default: m.InvoiceEditor }))
+)
+
+function EditorFallback() {
+  return (
+    <div className="h-full flex items-center justify-center text-muted-foreground">
+      <div className="text-sm">Loading editor…</div>
+    </div>
+  )
+}
 import type { ProjectFull, Profile, Invoice } from "@/types"
 import {
   ArrowLeft,
@@ -454,26 +469,30 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                 <p>Select a document from the sidebar or create a new one</p>
               </div>
             </div>
-          ) : selectedDoc.type === "quote" ? (
-            <QuoteEditor
-              quoteId={selectedDoc.id}
-              onUpdate={() => {
-                fetchProject()
-                if (project?.quotes) fetchInvoices(project.quotes)
-              }}
-            />
-          ) : selectedDoc.type === "po" ? (
-            <POEditor
-              poId={selectedDoc.id}
-              onUpdate={fetchProject}
-              onSelectPO={(newPoId) => setSelectedDoc({ type: "po", id: newPoId })}
-              onDirtyStateChange={handleEditorDirtyChange}
-            />
           ) : (
-            <InvoiceEditor invoiceId={selectedDoc.id} onUpdate={() => {
-              fetchProject()
-              if (project?.quotes) fetchInvoices(project.quotes)
-            }} />
+            <Suspense fallback={<EditorFallback />}>
+              {selectedDoc.type === "quote" ? (
+                <QuoteEditor
+                  quoteId={selectedDoc.id}
+                  onUpdate={() => {
+                    fetchProject()
+                    if (project?.quotes) fetchInvoices(project.quotes)
+                  }}
+                />
+              ) : selectedDoc.type === "po" ? (
+                <POEditor
+                  poId={selectedDoc.id}
+                  onUpdate={fetchProject}
+                  onSelectPO={(newPoId) => setSelectedDoc({ type: "po", id: newPoId })}
+                  onDirtyStateChange={handleEditorDirtyChange}
+                />
+              ) : (
+                <InvoiceEditor invoiceId={selectedDoc.id} onUpdate={() => {
+                  fetchProject()
+                  if (project?.quotes) fetchInvoices(project.quotes)
+                }} />
+              )}
+            </Suspense>
           )}
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, lazy, Suspense } from "react"
 import { Show, SignInButton, SignUpButton, UserButton } from "@clerk/react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -15,13 +15,31 @@ import { PartForm } from "@/components/forms/PartForm"
 import { LaborForm } from "@/components/forms/LaborForm"
 import { MiscForm } from "@/components/forms/MiscForm"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { ProfilesPage } from "@/pages/ProfilesPage"
 import { ProjectsPage } from "@/pages/ProjectsPage"
-import { ProjectDetailsPage } from "@/pages/ProjectDetailsPage"
-import { ReportsPage } from "@/pages/ReportsPage"
-import { SettingsPage } from "@/pages/SettingsPage"
-import { MigrationPage } from "@/pages/MigrationPage"
 import { api } from "@/api/client"
+
+// Lazy-loaded pages: keep ProjectsPage eager (default landing), defer the rest.
+const ProfilesPage = lazy(() =>
+  import("@/pages/ProfilesPage").then((m) => ({ default: m.ProfilesPage }))
+)
+const ProjectDetailsPage = lazy(() =>
+  import("@/pages/ProjectDetailsPage").then((m) => ({ default: m.ProjectDetailsPage }))
+)
+const ReportsPage = lazy(() =>
+  import("@/pages/ReportsPage").then((m) => ({ default: m.ReportsPage }))
+)
+const SettingsPage = lazy(() =>
+  import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))
+)
+const MigrationPage = lazy(() =>
+  import("@/pages/MigrationPage").then((m) => ({ default: m.MigrationPage }))
+)
+
+function PageFallback() {
+  return (
+    <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
+  )
+}
 import type { Part, Labor, Miscellaneous } from "@/types"
 import {
   Package,
@@ -658,11 +676,13 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
-        {currentView === "project-details" ? (
-          renderContent()
-        ) : (
-          <div className="p-6">{renderContent()}</div>
-        )}
+        <Suspense fallback={<PageFallback />}>
+          {currentView === "project-details" ? (
+            renderContent()
+          ) : (
+            <div className="p-6">{renderContent()}</div>
+          )}
+        </Suspense>
       </main>
 
       {/* Part Dialog */}

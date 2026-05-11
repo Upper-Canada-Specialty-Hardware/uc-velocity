@@ -56,8 +56,6 @@ import type {
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
 import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash } from "lucide-react"
-import { pdf } from '@react-pdf/renderer'
-import { QuotePDF } from '@/components/pdf/QuotePDF'
 import type { CompanySettings, Project, SystemRate } from '@/types'
 import { QuoteAuditTrail } from "./QuoteAuditTrail"
 import { PartForm } from "@/components/forms/PartForm"
@@ -1938,9 +1936,11 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     if (!quote) return
     setIsPrinting(true)
     try {
-      const [project, companySettings] = await Promise.all([
+      const [project, companySettings, { pdf }, { QuotePDF }] = await Promise.all([
         api.projects.get(quote.project_id) as Promise<Project>,
         api.companySettings.get(),
+        import('@react-pdf/renderer'),
+        import('@/components/pdf/QuotePDF'),
       ])
       const blob = await pdf(
         <QuotePDF quote={quote} project={project} companySettings={companySettings} />
