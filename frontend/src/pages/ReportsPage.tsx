@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { api } from '@/api/client'
 import { formatCurrency } from '@/lib/pricing'
+import { formatDate } from '@/lib/format'
 import type { InvoiceSummaryItem, CompanySettings, BacklogQuoteItem } from '@/types'
 import { FileText, Download, Loader2, ChevronRight, ChevronDown, FileSpreadsheet } from 'lucide-react'
 
@@ -238,7 +239,7 @@ export function ReportsPage() {
                       {invoices.map((inv) => (
                         <tr key={inv.invoice_id} className="hover:bg-muted/50">
                           <td className="px-3 py-2">{inv.invoice_id}</td>
-                          <td className="px-3 py-2">{new Date(inv.invoice_date).toLocaleDateString()}</td>
+                          <td className="px-3 py-2">{formatDate(inv.invoice_date)}</td>
                           <td className="px-3 py-2">{inv.uca_project_number}</td>
                           <td className="px-3 py-2">{inv.client_po_number || '—'}</td>
                           <td className="px-3 py-2">{inv.customer_name} — {inv.project_name}</td>
