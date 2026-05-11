@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-// Card components available if needed
+import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -29,7 +29,39 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
 import { api } from "@/api/client"
+import type { ProjectFull, Profile, Invoice } from "@/types"
+import {
+  ArrowLeft,
+  Plus,
+  FileText,
+  ShoppingCart,
+  Trash2,
+  User,
+  Mail,
+  Phone,
+  Receipt,
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Search,
+} from "lucide-react"
 
 const QuoteEditor = lazy(() =>
   import("@/components/editors/QuoteEditor").then((m) => ({ default: m.QuoteEditor }))
@@ -48,19 +80,6 @@ function EditorFallback() {
     </div>
   )
 }
-import type { ProjectFull, Profile, Invoice } from "@/types"
-import {
-  ArrowLeft,
-  Plus,
-  FileText,
-  ShoppingCart,
-  Trash2,
-  User,
-  Mail,
-  Phone,
-  Receipt,
-  AlertTriangle,
-} from "lucide-react"
 
 interface ProjectDetailsPageProps {
   projectId: number
@@ -70,6 +89,47 @@ interface ProjectDetailsPageProps {
 
 type DocumentType = "quote" | "po" | "invoice"
 type SelectedDocument = { type: DocumentType; id: number } | null
+type TabKey = "quotes" | "pos" | "invoices"
+
+type RecentDoc = {
+  type: DocumentType
+  id: number
+  label: string
+  sublabel?: string
+  ts: number
+}
+
+const TAB_STORAGE_KEY = (projectId: number) => `ucv:projectTab:${projectId}`
+const RECENT_DOCS_KEY = (projectId: number) => `ucv:recentDocs:${projectId}`
+
+function tabForType(t: DocumentType): TabKey {
+  if (t === "quote") return "quotes"
+  if (t === "po") return "pos"
+  return "invoices"
+}
+
+function loadActiveTab(projectId: number, initialDoc: ProjectDetailsPageProps["initialDoc"]): TabKey {
+  if (initialDoc) return tabForType(initialDoc.type)
+  try {
+    const raw = localStorage.getItem(TAB_STORAGE_KEY(projectId))
+    if (raw === "quotes" || raw === "pos" || raw === "invoices") return raw
+  } catch {
+    // ignore
+  }
+  return "quotes"
+}
+
+function loadRecentDocs(projectId: number): RecentDoc[] {
+  try {
+    const raw = localStorage.getItem(RECENT_DOCS_KEY(projectId))
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.slice(0, 3)
+  } catch {
+    return []
+  }
+}
 
 export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDetailsPageProps) {
   const [project, setProject] = useState<ProjectFull | null>(null)
@@ -80,6 +140,18 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
   const [selectedDoc, setSelectedDoc] = useState<SelectedDocument>(() =>
     initialDoc ? { type: initialDoc.type, id: initialDoc.id } : null
   )
+
+  // Sidebar nav state
+  const [activeTab, setActiveTab] = useState<TabKey>(() => loadActiveTab(projectId, initialDoc))
+  const [filter, setFilter] = useState("")
+  const [debouncedFilter, setDebouncedFilter] = useState("")
+  const [highlightedIndex, setHighlightedIndex] = useState(0)
+  const [cmdOpen, setCmdOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [recentDocs, setRecentDocs] = useState<RecentDoc[]>(() => loadRecentDocs(projectId))
+
+  // Delete confirmation (replaces window.confirm)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: "quote" | "po"; id: number } | null>(null)
 
   // Unsaved changes navigation guard
   const editorDirtyRef = useRef(false)
@@ -170,11 +242,89 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
     }
   }, [project?.quotes])
 
+  // Debounce filter (150ms)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFilter(filter), 150)
+    return () => clearTimeout(t)
+  }, [filter])
+
+  // Reset keyboard highlight when filter or tab changes
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [activeTab, debouncedFilter])
+
+  // Persist active tab per project
+  useEffect(() => {
+    try {
+      localStorage.setItem(TAB_STORAGE_KEY(projectId), activeTab)
+    } catch {
+      // ignore quota / disabled storage
+    }
+  }, [projectId, activeTab])
+
+  // Global Cmd/Ctrl+K opens command palette
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault()
+        setCmdOpen((v) => !v)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
+  // Track recently viewed when a doc becomes selected (or when project data refreshes
+  // and a previously-stale entry is now resolvable)
+  useEffect(() => {
+    if (!selectedDoc || !project) return
+    let label = ""
+    let sublabel: string | undefined
+    if (selectedDoc.type === "quote") {
+      const q = project.quotes.find((x) => x.id === selectedDoc.id)
+      if (!q) return
+      label = `Quote ${q.quote_number}`
+      sublabel = q.status
+    } else if (selectedDoc.type === "po") {
+      const p = project.purchase_orders.find((x) => x.id === selectedDoc.id)
+      if (!p) return
+      label = `PO ${p.po_number}`
+      sublabel = p.vendor.name
+    } else {
+      const inv = invoices.find((x) => x.id === selectedDoc.id)
+      if (!inv) return
+      label = `Invoice ${inv.id} - ${inv.quoteNumber}`
+      sublabel = inv.status
+    }
+    setRecentDocs((prev) => {
+      const without = prev.filter((d) => !(d.type === selectedDoc.type && d.id === selectedDoc.id))
+      const next: RecentDoc[] = [
+        { type: selectedDoc.type, id: selectedDoc.id, label, sublabel, ts: Date.now() },
+        ...without,
+      ].slice(0, 3)
+      try {
+        localStorage.setItem(RECENT_DOCS_KEY(projectId), JSON.stringify(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }, [selectedDoc, project, invoices, projectId])
+
+  // Open a doc through the unsaved-changes guard; ensures the right tab is active.
+  const openDoc = useCallback((type: DocumentType, id: number) => {
+    guardedNavigate(() => {
+      setActiveTab(tabForType(type))
+      setSelectedDoc({ type, id })
+    })
+  }, [guardedNavigate])
+
   const handleCreateQuote = async () => {
     try {
       const quote = await api.quotes.create({ project_id: projectId })
       setQuoteDialogOpen(false)
       await fetchProject()
+      setActiveTab("quotes")
       setSelectedDoc({ type: "quote", id: quote.id })
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to create quote")
@@ -191,39 +341,120 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       setPoDialogOpen(false)
       setSelectedVendorId("")
       await fetchProject()
+      setActiveTab("pos")
       setSelectedDoc({ type: "po", id: po.id })
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to create purchase order")
     }
   }
 
-  const handleDeleteQuote = async (id: number, e: React.MouseEvent) => {
+  const requestDeleteQuote = (id: number, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!confirm("Delete this quote?")) return
+    setDeleteConfirm({ type: "quote", id })
+  }
+
+  const requestDeletePO = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setDeleteConfirm({ type: "po", id })
+  }
+
+  const performDelete = async () => {
+    if (!deleteConfirm) return
+    const { type, id } = deleteConfirm
+    setDeleteConfirm(null)
     try {
-      await api.quotes.delete(id)
-      if (selectedDoc?.type === "quote" && selectedDoc.id === id) {
+      if (type === "quote") {
+        await api.quotes.delete(id)
+      } else {
+        await api.purchaseOrders.delete(id)
+      }
+      if (selectedDoc?.type === type && selectedDoc.id === id) {
         setSelectedDoc(null)
       }
       fetchProject()
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete quote")
+      alert(err instanceof Error ? err.message : `Failed to delete ${type === "po" ? "PO" : "quote"}`)
     }
   }
 
-  const handleDeletePO = async (id: number, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!confirm("Delete this purchase order?")) return
-    try {
-      await api.purchaseOrders.delete(id)
-      if (selectedDoc?.type === "po" && selectedDoc.id === id) {
-        setSelectedDoc(null)
-      }
-      fetchProject()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete PO")
+  // Filtered lists (memoized against debounced filter input)
+  const filteredQuotes = useMemo(() => {
+    if (!project) return []
+    const n = debouncedFilter.trim().toLowerCase()
+    if (!n) return project.quotes
+    return project.quotes.filter((q) => {
+      const hay = [
+        q.quote_number,
+        q.status,
+        new Date(q.created_at).toLocaleDateString(),
+      ].join(" ").toLowerCase()
+      return hay.includes(n)
+    })
+  }, [project, debouncedFilter])
+
+  const filteredPOs = useMemo(() => {
+    if (!project) return []
+    const n = debouncedFilter.trim().toLowerCase()
+    if (!n) return project.purchase_orders
+    return project.purchase_orders.filter((p) => {
+      const hay = [
+        p.po_number,
+        p.status,
+        p.vendor.name,
+        new Date(p.created_at).toLocaleDateString(),
+      ].join(" ").toLowerCase()
+      return hay.includes(n)
+    })
+  }, [project, debouncedFilter])
+
+  const filteredInvoices = useMemo(() => {
+    const n = debouncedFilter.trim().toLowerCase()
+    if (!n) return invoices
+    return invoices.filter((inv) => {
+      const hay = [
+        `invoice ${inv.id}`,
+        inv.status,
+        inv.quoteNumber,
+        new Date(inv.created_at).toLocaleDateString(),
+      ].join(" ").toLowerCase()
+      return hay.includes(n)
+    })
+  }, [invoices, debouncedFilter])
+
+  // Active items power keyboard nav (Up/Down/Enter)
+  const activeItems = useMemo(() => {
+    if (activeTab === "quotes") return filteredQuotes.map((q) => ({ type: "quote" as const, id: q.id }))
+    if (activeTab === "pos") return filteredPOs.map((p) => ({ type: "po" as const, id: p.id }))
+    return filteredInvoices.map((i) => ({ type: "invoice" as const, id: i.id }))
+  }, [activeTab, filteredQuotes, filteredPOs, filteredInvoices])
+
+  const onSidebarKeyDown = (e: React.KeyboardEvent) => {
+    if (activeItems.length === 0) return
+    if (e.key === "ArrowDown") {
+      e.preventDefault()
+      setHighlightedIndex((i) => Math.min(activeItems.length - 1, i + 1))
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault()
+      setHighlightedIndex((i) => Math.max(0, i - 1))
+    } else if (e.key === "Enter") {
+      const target = e.target as HTMLElement
+      // Let buttons (delete trash, etc.) handle their own Enter
+      if (target.tagName === "BUTTON") return
+      e.preventDefault()
+      const item = activeItems[Math.min(highlightedIndex, activeItems.length - 1)]
+      if (item) openDoc(item.type, item.id)
     }
   }
+
+  // Drop stale recents that no longer exist (e.g., deleted docs); render-time only.
+  const validRecents = useMemo(() => {
+    if (!project) return []
+    return recentDocs.filter((d) => {
+      if (d.type === "quote") return project.quotes.some((q) => q.id === d.id)
+      if (d.type === "po") return project.purchase_orders.some((p) => p.id === d.id)
+      return invoices.some((i) => i.id === d.id)
+    })
+  }, [recentDocs, project, invoices])
 
   if (loading) {
     return <div className="p-8 text-center text-muted-foreground">Loading...</div>
@@ -241,6 +472,12 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
         </Button>
       </div>
     )
+  }
+
+  const counts = {
+    quotes: project.quotes.length,
+    pos: project.purchase_orders.length,
+    invoices: invoices.length,
   }
 
   return (
@@ -289,186 +526,162 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
-        <div className="w-72 border-r bg-muted/30 flex flex-col">
-          <div className="p-4 border-b">
-            <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-              Documents
-            </h2>
-          </div>
-
-          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-            {/* Quotes Section */}
-            <div className="flex-1 flex flex-col min-h-0 p-4 pb-2">
-              <div className="flex items-center justify-between mb-2 flex-none">
-                <h3 className="text-sm font-medium flex items-center gap-2">
-                  <FileText className="h-4 w-4" />
-                  Quotes
-                </h3>
-                <Button size="sm" variant="ghost" onClick={() => setQuoteDialogOpen(true)}>
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </div>
-              <ScrollArea className="flex-1 min-h-0">
-                <div className="space-y-1 pr-2">
-                  {project.quotes.length === 0 ? (
-                    <p className="text-xs text-muted-foreground py-2">No quotes yet</p>
-                  ) : (
-                    project.quotes.map((quote) => (
-                      <div
-                        key={quote.id}
-                        className={`flex items-center justify-between p-2 rounded-md cursor-pointer group ${
-                          selectedDoc?.type === "quote" && selectedDoc.id === quote.id
-                            ? "bg-primary/10 text-primary"
-                            : "hover:bg-muted"
-                        }`}
-                        onClick={() => guardedNavigate(() => setSelectedDoc({ type: "quote", id: quote.id }))}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium flex items-center gap-2">
-                            {quote.quote_number}
-                            <Badge
-                              variant="secondary"
-                              className={`text-[10px] px-1.5 py-0 ${
-                                quote.status === "Draft" ? "bg-gray-100 text-gray-600" :
-                                quote.status === "Work Order" ? "bg-blue-100 text-blue-600" :
-                                quote.status === "Invoiced" ? "bg-amber-100 text-amber-600" :
-                                "bg-green-100 text-green-600"
-                              }`}
-                            >
-                              {quote.status}
-                            </Badge>
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {new Date(quote.created_at).toLocaleDateString()}
-                          </div>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 flex-shrink-0"
-                          onClick={(e) => handleDeleteQuote(quote.id, e)}
-                        >
-                          <Trash2 className="h-3 w-3 text-destructive" />
-                        </Button>
-                      </div>
-                    ))
+        <div
+          className={`${sidebarCollapsed ? "w-12" : "w-72"} border-r bg-muted/30 flex flex-col transition-[width] duration-150`}
+        >
+          {sidebarCollapsed ? (
+            <CollapsedSidebar
+              activeTab={activeTab}
+              counts={counts}
+              onExpand={() => setSidebarCollapsed(false)}
+              onSelectTab={(t) => {
+                setActiveTab(t)
+                setSidebarCollapsed(false)
+              }}
+              onNewQuote={() => setQuoteDialogOpen(true)}
+              onNewPO={() => setPoDialogOpen(true)}
+            />
+          ) : (
+            <>
+              <div className="p-3 border-b flex items-center justify-between gap-2">
+                <h2 className="font-semibold text-xs text-muted-foreground uppercase tracking-wide">
+                  Documents
+                </h2>
+                <div className="flex items-center gap-1">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" variant="outline" className="h-7 gap-1 px-2">
+                        <Plus className="h-3.5 w-3.5" />
+                        <span className="text-xs">New</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => setQuoteDialogOpen(true)}>
+                        <FileText className="h-4 w-4 mr-2" />
+                        New Quote
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => setPoDialogOpen(true)}>
+                        <ShoppingCart className="h-4 w-4 mr-2" />
+                        New Purchase Order
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {selectedDoc !== null && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      onClick={() => setSidebarCollapsed(true)}
+                      title="Collapse sidebar"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
                   )}
                 </div>
-              </ScrollArea>
-            </div>
-
-            <Separator className="flex-none" />
-
-            {/* Purchase Orders Section */}
-            <div className="flex-1 flex flex-col min-h-0 p-4 py-2">
-              <div className="flex items-center justify-between mb-2 flex-none">
-                <h3 className="text-sm font-medium flex items-center gap-2">
-                  <ShoppingCart className="h-4 w-4" />
-                  Purchase Orders
-                </h3>
-                <Button size="sm" variant="ghost" onClick={() => setPoDialogOpen(true)}>
-                  <Plus className="h-4 w-4" />
-                </Button>
               </div>
-              <ScrollArea className="flex-1 min-h-0">
-                <div className="space-y-1 pr-2">
-                  {project.purchase_orders.length === 0 ? (
-                    <p className="text-xs text-muted-foreground py-2">No purchase orders yet</p>
-                  ) : (
-                    project.purchase_orders.map((po) => (
-                      <div
-                        key={po.id}
-                        className={`flex items-center justify-between p-2 rounded-md cursor-pointer group ${
-                          selectedDoc?.type === "po" && selectedDoc.id === po.id
-                            ? "bg-primary/10 text-primary"
-                            : "hover:bg-muted"
-                        }`}
-                        onClick={() => guardedNavigate(() => setSelectedDoc({ type: "po", id: po.id }))}
-                      >
-                        <div>
-                          <div className="text-sm font-medium">{po.po_number}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {po.vendor.name}
-                          </div>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0"
-                          onClick={(e) => handleDeletePO(po.id, e)}
-                        >
-                          <Trash2 className="h-3 w-3 text-destructive" />
-                        </Button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </ScrollArea>
-            </div>
 
-            <Separator className="flex-none" />
-
-            {/* Invoices Section */}
-            <div className="flex-1 flex flex-col min-h-0 p-4 pt-2">
-              <div className="flex items-center justify-between mb-2 flex-none">
-                <h3 className="text-sm font-medium flex items-center gap-2">
-                  <Receipt className="h-4 w-4" />
-                  Invoices
-                </h3>
-              </div>
-              <ScrollArea className="flex-1 min-h-0">
-                <div className="space-y-1 pr-2">
-                  {invoices.length === 0 ? (
-                    <p className="text-xs text-muted-foreground py-2">No invoices yet</p>
-                  ) : (
-                    invoices.map((invoice) => (
-                      <div
-                        key={invoice.id}
-                        className={`flex items-center justify-between p-2 rounded-md cursor-pointer group ${
-                          selectedDoc?.type === "invoice" && selectedDoc.id === invoice.id
-                            ? "bg-primary/10 text-primary"
-                            : "hover:bg-muted"
-                        }`}
-                        onClick={() => guardedNavigate(() => setSelectedDoc({ type: "invoice", id: invoice.id }))}
-                      >
-                        <div>
-                          <div className="text-sm font-medium flex items-center gap-2">
-                            Invoice #{invoice.id}
-                            <Badge
-                              variant={
-                                invoice.status === "Paid"
-                                  ? "default"
-                                  : invoice.status === "Voided"
-                                  ? "destructive"
-                                  : "secondary"
-                              }
-                              className="text-xs"
-                            >
-                              {invoice.status}
-                            </Badge>
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {invoice.quoteNumber} - {new Date(invoice.created_at).toLocaleDateString()}
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
+              <Tabs
+                value={activeTab}
+                onValueChange={(v) => setActiveTab(v as TabKey)}
+                className="flex-1 flex flex-col min-h-0"
+              >
+                <div className="px-3 pt-3 pb-2 flex-none space-y-2" onKeyDown={onSidebarKeyDown}>
+                  <TabsList className="w-full grid grid-cols-3 h-8">
+                    <TabsTrigger value="quotes" className="text-xs px-1">
+                      Quotes ({counts.quotes})
+                    </TabsTrigger>
+                    <TabsTrigger value="pos" className="text-xs px-1">
+                      POs ({counts.pos})
+                    </TabsTrigger>
+                    <TabsTrigger value="invoices" className="text-xs px-1">
+                      Invoices ({counts.invoices})
+                    </TabsTrigger>
+                  </TabsList>
+                  <div className="relative">
+                    <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                    <Input
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      placeholder="Filter… (⌘K to search all)"
+                      className="h-8 text-xs pl-7"
+                    />
+                  </div>
                 </div>
-              </ScrollArea>
-            </div>
-          </div>
+                <div className="flex-1 min-h-0 px-3 pb-3" onKeyDown={onSidebarKeyDown}>
+                  <ScrollArea className="h-full">
+                    <div className="space-y-1 pr-2">
+                      {activeTab === "quotes" && (
+                        filteredQuotes.length === 0 ? (
+                          <EmptyListMessage
+                            hasFilter={debouncedFilter.length > 0}
+                            emptyText="No quotes yet"
+                          />
+                        ) : (
+                          filteredQuotes.map((quote, idx) => (
+                            <QuoteRow
+                              key={quote.id}
+                              quote={quote}
+                              isSelected={selectedDoc?.type === "quote" && selectedDoc.id === quote.id}
+                              isHighlighted={highlightedIndex === idx}
+                              onSelect={() => openDoc("quote", quote.id)}
+                              onDelete={(e) => requestDeleteQuote(quote.id, e)}
+                            />
+                          ))
+                        )
+                      )}
+                      {activeTab === "pos" && (
+                        filteredPOs.length === 0 ? (
+                          <EmptyListMessage
+                            hasFilter={debouncedFilter.length > 0}
+                            emptyText="No purchase orders yet"
+                          />
+                        ) : (
+                          filteredPOs.map((po, idx) => (
+                            <PORow
+                              key={po.id}
+                              po={po}
+                              isSelected={selectedDoc?.type === "po" && selectedDoc.id === po.id}
+                              isHighlighted={highlightedIndex === idx}
+                              onSelect={() => openDoc("po", po.id)}
+                              onDelete={(e) => requestDeletePO(po.id, e)}
+                            />
+                          ))
+                        )
+                      )}
+                      {activeTab === "invoices" && (
+                        filteredInvoices.length === 0 ? (
+                          <EmptyListMessage
+                            hasFilter={debouncedFilter.length > 0}
+                            emptyText="No invoices yet"
+                          />
+                        ) : (
+                          filteredInvoices.map((invoice, idx) => (
+                            <InvoiceRow
+                              key={invoice.id}
+                              invoice={invoice}
+                              isSelected={selectedDoc?.type === "invoice" && selectedDoc.id === invoice.id}
+                              isHighlighted={highlightedIndex === idx}
+                              onSelect={() => openDoc("invoice", invoice.id)}
+                            />
+                          ))
+                        )
+                      )}
+                    </div>
+                  </ScrollArea>
+                </div>
+              </Tabs>
+            </>
+          )}
         </div>
 
         {/* Document Editor */}
         <div className="flex-1 overflow-auto">
           {selectedDoc === null ? (
-            <div className="h-full flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>Select a document from the sidebar or create a new one</p>
-              </div>
-            </div>
+            <EmptyEditorState
+              recents={validRecents}
+              onOpenRecent={(d) => openDoc(d.type, d.id)}
+              onOpenPalette={() => setCmdOpen(true)}
+            />
           ) : (
             <Suspense fallback={<EditorFallback />}>
               {selectedDoc.type === "quote" ? (
@@ -579,6 +792,373 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Delete Confirmation */}
+      <AlertDialog
+        open={deleteConfirm !== null}
+        onOpenChange={(open) => { if (!open) setDeleteConfirm(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {deleteConfirm?.type === "po" ? "purchase order" : "quote"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={performDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Command Palette (Ctrl/Cmd+K) */}
+      <CommandDialog open={cmdOpen} onOpenChange={setCmdOpen}>
+        <CommandInput placeholder="Search quotes, POs, and invoices in this project…" />
+        <CommandList>
+          <CommandEmpty>No matching documents</CommandEmpty>
+          {project.quotes.length > 0 && (
+            <CommandGroup heading="Quotes">
+              {project.quotes.map((q) => (
+                <CommandItem
+                  key={`q-${q.id}`}
+                  value={`quote ${q.quote_number} ${q.status} ${new Date(q.created_at).toLocaleDateString()}`}
+                  onSelect={() => {
+                    setCmdOpen(false)
+                    openDoc("quote", q.id)
+                  }}
+                >
+                  <FileText className="h-4 w-4" />
+                  <span className="flex-1">{q.quote_number}</span>
+                  <Badge variant="secondary" className="text-[10px]">{q.status}</Badge>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {project.purchase_orders.length > 0 && (
+            <CommandGroup heading="Purchase Orders">
+              {project.purchase_orders.map((p) => (
+                <CommandItem
+                  key={`p-${p.id}`}
+                  value={`po ${p.po_number} ${p.status} ${p.vendor.name}`}
+                  onSelect={() => {
+                    setCmdOpen(false)
+                    openDoc("po", p.id)
+                  }}
+                >
+                  <ShoppingCart className="h-4 w-4" />
+                  <span className="flex-1">{p.po_number}</span>
+                  <span className="text-xs text-muted-foreground truncate max-w-[10rem]">{p.vendor.name}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {invoices.length > 0 && (
+            <CommandGroup heading="Invoices">
+              {invoices.map((inv) => (
+                <CommandItem
+                  key={`i-${inv.id}`}
+                  value={`invoice ${inv.id} ${inv.status} ${inv.quoteNumber}`}
+                  onSelect={() => {
+                    setCmdOpen(false)
+                    openDoc("invoice", inv.id)
+                  }}
+                >
+                  <Receipt className="h-4 w-4" />
+                  <span className="flex-1">Invoice {inv.id} - {inv.quoteNumber}</span>
+                  <Badge variant="secondary" className="text-[10px]">{inv.status}</Badge>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+        </CommandList>
+      </CommandDialog>
+    </div>
+  )
+}
+
+// ===== Subcomponents =====
+
+function EmptyListMessage({ hasFilter, emptyText }: { hasFilter: boolean; emptyText: string }) {
+  return (
+    <p className="text-xs text-muted-foreground py-2 px-1">
+      {hasFilter ? "No matches" : emptyText}
+    </p>
+  )
+}
+
+interface QuoteRowProps {
+  quote: ProjectFull["quotes"][number]
+  isSelected: boolean
+  isHighlighted: boolean
+  onSelect: () => void
+  onDelete: (e: React.MouseEvent) => void
+}
+
+function QuoteRow({ quote, isSelected, isHighlighted, onSelect, onDelete }: QuoteRowProps) {
+  return (
+    <div
+      className={`flex items-center justify-between p-2 rounded-md cursor-pointer group transition-colors ${
+        isSelected
+          ? "bg-primary/10 text-primary"
+          : isHighlighted
+          ? "bg-muted ring-1 ring-ring/40"
+          : "hover:bg-muted"
+      }`}
+      onClick={onSelect}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium flex items-center gap-2">
+          <span className="truncate">{quote.quote_number}</span>
+          <Badge
+            variant="secondary"
+            className={`text-[10px] px-1.5 py-0 ${
+              quote.status === "Draft" ? "bg-gray-100 text-gray-600" :
+              quote.status === "Work Order" ? "bg-blue-100 text-blue-600" :
+              quote.status === "Invoiced" ? "bg-amber-100 text-amber-600" :
+              "bg-green-100 text-green-600"
+            }`}
+          >
+            {quote.status}
+          </Badge>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {new Date(quote.created_at).toLocaleDateString()}
+        </div>
+      </div>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 flex-shrink-0"
+        onClick={onDelete}
+      >
+        <Trash2 className="h-3 w-3 text-destructive" />
+      </Button>
+    </div>
+  )
+}
+
+interface PORowProps {
+  po: ProjectFull["purchase_orders"][number]
+  isSelected: boolean
+  isHighlighted: boolean
+  onSelect: () => void
+  onDelete: (e: React.MouseEvent) => void
+}
+
+function PORow({ po, isSelected, isHighlighted, onSelect, onDelete }: PORowProps) {
+  return (
+    <div
+      className={`flex items-center justify-between p-2 rounded-md cursor-pointer group transition-colors ${
+        isSelected
+          ? "bg-primary/10 text-primary"
+          : isHighlighted
+          ? "bg-muted ring-1 ring-ring/40"
+          : "hover:bg-muted"
+      }`}
+      onClick={onSelect}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">{po.po_number}</div>
+        <div className="text-xs text-muted-foreground truncate">{po.vendor.name}</div>
+      </div>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 flex-shrink-0"
+        onClick={onDelete}
+      >
+        <Trash2 className="h-3 w-3 text-destructive" />
+      </Button>
+    </div>
+  )
+}
+
+interface InvoiceRowProps {
+  invoice: Invoice & { quoteId: number; quoteNumber: string }
+  isSelected: boolean
+  isHighlighted: boolean
+  onSelect: () => void
+}
+
+function InvoiceRow({ invoice, isSelected, isHighlighted, onSelect }: InvoiceRowProps) {
+  return (
+    <div
+      className={`flex items-center justify-between p-2 rounded-md cursor-pointer group transition-colors ${
+        isSelected
+          ? "bg-primary/10 text-primary"
+          : isHighlighted
+          ? "bg-muted ring-1 ring-ring/40"
+          : "hover:bg-muted"
+      }`}
+      onClick={onSelect}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium flex items-center gap-2">
+          <span className="truncate">Invoice {invoice.id} - {invoice.quoteNumber}</span>
+          <Badge
+            variant={
+              invoice.status === "Paid"
+                ? "default"
+                : invoice.status === "Voided"
+                ? "destructive"
+                : "secondary"
+            }
+            className="text-[10px] px-1.5 py-0"
+          >
+            {invoice.status}
+          </Badge>
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {new Date(invoice.created_at).toLocaleDateString()}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface CollapsedSidebarProps {
+  activeTab: TabKey
+  counts: { quotes: number; pos: number; invoices: number }
+  onExpand: () => void
+  onSelectTab: (t: TabKey) => void
+  onNewQuote: () => void
+  onNewPO: () => void
+}
+
+function CollapsedSidebar({
+  activeTab,
+  counts,
+  onExpand,
+  onSelectTab,
+  onNewQuote,
+  onNewPO,
+}: CollapsedSidebarProps) {
+  const tabs: { key: TabKey; Icon: typeof FileText; label: string; count: number }[] = [
+    { key: "quotes", Icon: FileText, label: "Quotes", count: counts.quotes },
+    { key: "pos", Icon: ShoppingCart, label: "Purchase Orders", count: counts.pos },
+    { key: "invoices", Icon: Receipt, label: "Invoices", count: counts.invoices },
+  ]
+  return (
+    <div className="flex flex-col items-center py-3 gap-2">
+      <Button
+        size="icon"
+        variant="ghost"
+        onClick={onExpand}
+        className="h-8 w-8"
+        title="Expand sidebar"
+      >
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+      <Separator className="w-6" />
+      {tabs.map(({ key, Icon, label, count }) => (
+        <Button
+          key={key}
+          size="icon"
+          variant={activeTab === key ? "secondary" : "ghost"}
+          onClick={() => onSelectTab(key)}
+          title={`${label} (${count})`}
+          className="h-8 w-8 relative"
+        >
+          <Icon className="h-4 w-4" />
+          {count > 0 && (
+            <span className="absolute -top-1 -right-1 bg-primary text-primary-foreground rounded-full text-[9px] h-4 min-w-[16px] px-1 flex items-center justify-center leading-none">
+              {count}
+            </span>
+          )}
+        </Button>
+      ))}
+      <Separator className="w-6" />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="icon" variant="ghost" className="h-8 w-8" title="New document">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="right" align="start">
+          <DropdownMenuItem onSelect={onNewQuote}>
+            <FileText className="h-4 w-4 mr-2" />
+            New Quote
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onNewPO}>
+            <ShoppingCart className="h-4 w-4 mr-2" />
+            New Purchase Order
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
+interface EmptyEditorStateProps {
+  recents: RecentDoc[]
+  onOpenRecent: (d: RecentDoc) => void
+  onOpenPalette: () => void
+}
+
+function EmptyEditorState({ recents, onOpenRecent, onOpenPalette }: EmptyEditorStateProps) {
+  if (recents.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center text-muted-foreground p-8">
+        <div className="text-center">
+          <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
+          <p>Select a document from the sidebar or create a new one</p>
+          <p className="text-xs mt-3">
+            Press{" "}
+            <kbd className="px-1.5 py-0.5 bg-muted rounded text-foreground font-mono text-[10px]">⌘K</kbd>
+            {" "}or{" "}
+            <kbd className="px-1.5 py-0.5 bg-muted rounded text-foreground font-mono text-[10px]">Ctrl K</kbd>
+            {" "}for global search
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="h-full flex items-center justify-center text-muted-foreground p-8">
+      <div className="w-full max-w-md">
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
+          <Clock className="h-4 w-4" />
+          Recently viewed
+        </div>
+        <div className="space-y-2">
+          {recents.map((d) => {
+            const Icon = d.type === "quote" ? FileText : d.type === "po" ? ShoppingCart : Receipt
+            return (
+              <button
+                key={`${d.type}-${d.id}`}
+                className="w-full text-left p-3 rounded-md border bg-card hover:bg-accent transition-colors flex items-center gap-3"
+                onClick={() => onOpenRecent(d)}
+              >
+                <Icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-sm text-foreground truncate">{d.label}</div>
+                  {d.sublabel && (
+                    <div className="text-xs text-muted-foreground truncate">{d.sublabel}</div>
+                  )}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+        <div className="text-xs text-muted-foreground mt-4 text-center">
+          <button
+            type="button"
+            className="hover:text-foreground underline-offset-4 hover:underline"
+            onClick={onOpenPalette}
+          >
+            Press <kbd className="px-1.5 py-0.5 bg-muted rounded text-foreground font-mono text-[10px]">⌘K</kbd> to search across all documents
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
