@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useMemo } from "react"
+import { Fragment, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -18,8 +18,9 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ProjectForm } from "@/components/forms/ProjectForm"
+import type { ProjectFormInput } from "@/components/forms/ProjectForm"
 import { api } from "@/api/client"
-import type { Project, Quote, PurchaseOrder } from "@/types"
+import type { ProjectListView, ProjectSearchResult } from "@/types"
 import { Plus, Trash2, Pencil, FolderOpen, Search, FileText, ShoppingCart } from "lucide-react"
 
 interface ProjectsPageProps {
@@ -29,32 +30,48 @@ interface ProjectsPageProps {
   onSearchTermChange: (value: string) => void
 }
 
+const SEARCH_DEBOUNCE_MS = 300
+
+const toSearchResultShape = (p: ProjectListView): ProjectSearchResult => ({
+  ...p,
+  matched_quotes: [],
+  matched_pos: [],
+})
+
+const toFormInput = (p: ProjectListView): ProjectFormInput => ({
+  id: p.id,
+  name: p.name,
+  customer_id: p.customer_id,
+  status: p.status,
+  ucsh_project_number: p.ucsh_project_number,
+  project_lead: p.project_lead,
+  uca_project_number: p.uca_project_number,
+  created_on: p.created_on,
+})
+
 export function ProjectsPage({
   onSelectProject,
   onSelectChildDoc,
   searchTerm,
   onSearchTermChange,
 }: ProjectsPageProps) {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [quotes, setQuotes] = useState<Quote[]>([])
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
+  const [baseProjects, setBaseProjects] = useState<ProjectSearchResult[]>([])
+  const [searchResults, setSearchResults] = useState<ProjectSearchResult[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [debouncedTerm, setDebouncedTerm] = useState(searchTerm)
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingProject, setEditingProject] = useState<Project | null>(null)
+  const [editingProject, setEditingProject] = useState<ProjectFormInput | null>(null)
 
-  const fetchData = async () => {
+  // When a search is active, show search results; otherwise show the full list.
+  const displayProjects = searchResults ?? baseProjects
+
+  const fetchBaseList = async () => {
     setLoading(true)
     setError(null)
     try {
-      const [projectsData, quotesData, posData] = await Promise.all([
-        api.projects.getAll(),
-        api.quotes.getAll(),
-        api.purchaseOrders.getAll(),
-      ])
-      setProjects(projectsData)
-      setQuotes(quotesData)
-      setPurchaseOrders(posData)
+      const data = await api.projects.getListView()
+      setBaseProjects(data.map(toSearchResultShape))
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch projects")
     } finally {
@@ -63,23 +80,67 @@ export function ProjectsPage({
   }
 
   useEffect(() => {
-    fetchData()
+    fetchBaseList()
   }, [])
+
+  // Debounce raw search term so we don't fire a request on every keystroke.
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedTerm(searchTerm), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(handle)
+  }, [searchTerm])
+
+  // Run cross-entity search when the debounced term changes. Use a cancelled flag
+  // so a stale response from an earlier query can't overwrite a newer one.
+  useEffect(() => {
+    const term = debouncedTerm.trim()
+    if (!term) {
+      setSearchResults(null)
+      return
+    }
+    let cancelled = false
+    api.projects
+      .search(term)
+      .then((data) => {
+        if (!cancelled) setSearchResults(data)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Search failed")
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [debouncedTerm])
+
+  // After a mutation, refresh both the base list and any active search.
+  const refreshAll = async () => {
+    await fetchBaseList()
+    const term = debouncedTerm.trim()
+    if (!term) {
+      setSearchResults(null)
+      return
+    }
+    try {
+      const data = await api.projects.search(term)
+      setSearchResults(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Search failed")
+    }
+  }
 
   const handleDelete = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation()
     if (!confirm("Are you sure you want to delete this project? All quotes and purchase orders will be deleted.")) return
     try {
       await api.projects.delete(id)
-      fetchData()
+      refreshAll()
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to delete project")
     }
   }
 
-  const handleEdit = (project: Project, e: React.MouseEvent) => {
+  const handleEdit = (project: ProjectListView, e: React.MouseEvent) => {
     e.stopPropagation()
-    setEditingProject(project)
+    setEditingProject(toFormInput(project))
     setDialogOpen(true)
   }
 
@@ -107,75 +168,6 @@ export function ProjectsPage({
         return <Badge variant="outline">{status}</Badge>
     }
   }
-
-  const quotesByProject = useMemo(() => {
-    const map = new Map<number, Quote[]>()
-    for (const q of quotes) {
-      const arr = map.get(q.project_id) ?? []
-      arr.push(q)
-      map.set(q.project_id, arr)
-    }
-    return map
-  }, [quotes])
-
-  const posByProject = useMemo(() => {
-    const map = new Map<number, PurchaseOrder[]>()
-    for (const po of purchaseOrders) {
-      const arr = map.get(po.project_id) ?? []
-      arr.push(po)
-      map.set(po.project_id, arr)
-    }
-    return map
-  }, [purchaseOrders])
-
-  // Cross-entity search: a project is kept if it matches directly OR any of its
-  // quotes/POs match. When kept via children, we record which ones matched so
-  // the user can click straight into that doc.
-  const { filteredProjects, matchesByProject } = useMemo(() => {
-    const term = searchTerm.toLowerCase().trim()
-    if (!term) {
-      return {
-        filteredProjects: projects,
-        matchesByProject: new Map<number, { quotes: Quote[]; pos: PurchaseOrder[] }>(),
-      }
-    }
-    const matches = new Map<number, { quotes: Quote[]; pos: PurchaseOrder[] }>()
-    const filtered = projects.filter((project) => {
-      const directMatch =
-        project.name.toLowerCase().includes(term) ||
-        project.uca_project_number.toLowerCase().includes(term) ||
-        (project.ucsh_project_number?.toLowerCase().includes(term) ?? false) ||
-        project.customer.name.toLowerCase().includes(term) ||
-        (project.project_lead?.toLowerCase().includes(term) ?? false) ||
-        project.status.toLowerCase().includes(term)
-
-      const projectQuotes = quotesByProject.get(project.id) ?? []
-      const projectPOs = posByProject.get(project.id) ?? []
-
-      const matchedQuotes = projectQuotes.filter(
-        (q) =>
-          q.quote_number.toLowerCase().includes(term) ||
-          (q.client_po_number?.toLowerCase().includes(term) ?? false) ||
-          (q.work_description?.toLowerCase().includes(term) ?? false),
-      )
-      const matchedPOs = projectPOs.filter(
-        (po) =>
-          po.po_number.toLowerCase().includes(term) ||
-          po.vendor.name.toLowerCase().includes(term) ||
-          (po.vendor_po_number?.toLowerCase().includes(term) ?? false) ||
-          (po.work_description?.toLowerCase().includes(term) ?? false),
-      )
-
-      if (directMatch || matchedQuotes.length > 0 || matchedPOs.length > 0) {
-        if (matchedQuotes.length > 0 || matchedPOs.length > 0) {
-          matches.set(project.id, { quotes: matchedQuotes, pos: matchedPOs })
-        }
-        return true
-      }
-      return false
-    })
-    return { filteredProjects: filtered, matchesByProject: matches }
-  }, [projects, quotesByProject, posByProject, searchTerm])
 
   return (
     <div className="space-y-6">
@@ -209,9 +201,9 @@ export function ProjectsPage({
       <div className="bg-card rounded-lg border shadow-sm">
         {loading ? (
           <div className="p-8 text-center text-muted-foreground">Loading...</div>
-        ) : filteredProjects.length === 0 ? (
+        ) : displayProjects.length === 0 ? (
           <div className="p-8 text-center text-muted-foreground">
-            {projects.length === 0
+            {baseProjects.length === 0
               ? "No projects found. Create your first project to get started."
               : "No projects match your search."}
           </div>
@@ -230,8 +222,8 @@ export function ProjectsPage({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredProjects.map((project) => {
-                const childMatches = matchesByProject.get(project.id)
+              {displayProjects.map((project) => {
+                const hasChildMatches = project.matched_quotes.length > 0 || project.matched_pos.length > 0
                 return (
                   <Fragment key={project.id}>
                     <TableRow
@@ -246,7 +238,7 @@ export function ProjectsPage({
                           {project.name}
                         </div>
                       </TableCell>
-                      <TableCell>{project.customer.name}</TableCell>
+                      <TableCell>{project.customer_name}</TableCell>
                       <TableCell className="text-muted-foreground">{project.project_lead || "-"}</TableCell>
                       <TableCell>{getStatusBadge(project.status)}</TableCell>
                       <TableCell className="text-muted-foreground">
@@ -270,12 +262,12 @@ export function ProjectsPage({
                         </Button>
                       </TableCell>
                     </TableRow>
-                    {childMatches && (
+                    {hasChildMatches && (
                       <TableRow className="bg-muted/30 hover:bg-muted/30">
                         <TableCell colSpan={8} className="py-2">
                           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground pl-6">
                             <span className="uppercase tracking-wide">Matches:</span>
-                            {childMatches.quotes.map((q) => (
+                            {project.matched_quotes.map((q) => (
                               <Badge
                                 key={`q-${q.id}`}
                                 variant="outline"
@@ -289,7 +281,7 @@ export function ProjectsPage({
                                 {q.quote_number}
                               </Badge>
                             ))}
-                            {childMatches.pos.map((po) => (
+                            {project.matched_pos.map((po) => (
                               <Badge
                                 key={`po-${po.id}`}
                                 variant="outline"
@@ -301,7 +293,7 @@ export function ProjectsPage({
                               >
                                 <ShoppingCart className="h-3 w-3" />
                                 {po.po_number}
-                                <span className="text-muted-foreground font-sans">— {po.vendor.name}</span>
+                                <span className="text-muted-foreground font-sans">— {po.vendor_name}</span>
                               </Badge>
                             ))}
                           </div>
@@ -328,7 +320,7 @@ export function ProjectsPage({
             project={editingProject ?? undefined}
             onSuccess={() => {
               handleDialogClose(false)
-              fetchData()
+              refreshAll()
             }}
             onCancel={() => handleDialogClose(false)}
           />

@@ -281,6 +281,39 @@ export interface ProjectFull extends Project {
   purchase_orders: PurchaseOrder[];
 }
 
+// ===== Projects List View (lightweight, aggregated) =====
+export interface ProjectListView {
+  id: number;
+  name: string;
+  uca_project_number: string;
+  ucsh_project_number: string | null;
+  customer_id: number;
+  customer_name: string;
+  project_lead: string | null;
+  status: string;
+  created_on: string;
+  quote_count: number;
+  po_count: number;
+  latest_quote_number: string | null;
+  latest_po_number: string | null;
+}
+
+export interface MatchedQuoteRef {
+  id: number;
+  quote_number: string;
+}
+
+export interface MatchedPORef {
+  id: number;
+  po_number: string;
+  vendor_name: string;
+}
+
+export interface ProjectSearchResult extends ProjectListView {
+  matched_quotes: MatchedQuoteRef[];
+  matched_pos: MatchedPORef[];
+}
+
 // ===== Quote Line Items =====
 export type LineItemType = 'labor' | 'part' | 'misc';
 
