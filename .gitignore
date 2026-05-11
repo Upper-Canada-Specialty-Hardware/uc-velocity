@@ -76,3 +76,5 @@ tmpclaude-*
 # Claude Code settings and temporary files
 .claude/
 CLAUDE.md
+# Exception: the agentic-UI-testing knowledge base is intended to be shared
+!testing/CLAUDE.md
