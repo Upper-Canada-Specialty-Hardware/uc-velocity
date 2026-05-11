@@ -1,7 +1,23 @@
 from pydantic import BaseModel, validator
-from typing import List, Optional
+from typing import Generic, List, Optional, TypeVar
 from datetime import datetime
 from enum import Enum
+
+
+# ===== Generic Pagination Envelope =====
+T = TypeVar('T')
+
+
+class Paginated(BaseModel, Generic[T]):
+    """Standard response shape for paginated list endpoints.
+
+    `total` is the unfiltered total matching the query (independent of offset/limit),
+    so clients can render "X of Y" without an extra count round trip.
+    """
+    items: List[T]
+    total: int
+    limit: int
+    offset: int
 
 
 class ProfileType(str, Enum):

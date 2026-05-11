@@ -1,4 +1,5 @@
 import type {
+  Paginated, ListParams,
   Part, PartCreate,
   Labor, LaborCreate,
   Miscellaneous, MiscellaneousCreate,
@@ -48,10 +49,26 @@ async function request<T>(
   return response.json();
 }
 
+/** Build a `?key=value&...` querystring from a plain object, skipping null/undefined values. */
+function buildQuery(params: object): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) continue;
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+  }
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
 export const api = {
   // ===== Parts =====
   parts: {
-    getAll: () => request<Part[]>('/parts/'),
+    // Paginated list for list views. Returns {items, total, limit, offset}.
+    list: (params: ListParams = {}) =>
+      request<Paginated<Part>>(`/parts/${buildQuery(params)}`),
+    // Convenience: unbounded fetch (limit=0) returning just items.
+    // Used by autocomplete/dropdown loaders that need every row.
+    getAll: () =>
+      request<Paginated<Part>>('/parts/?limit=0').then(r => r.items),
     get: (id: number) => request<Part>(`/parts/${id}`),
     create: (data: PartCreate) =>
       request<Part>('/parts/', { method: 'POST', body: JSON.stringify(data) }),
@@ -75,8 +92,13 @@ export const api = {
 
   // ===== Profiles =====
   profiles: {
+    list: (params: ListParams & { profile_type?: ProfileType } = {}) =>
+      request<Paginated<Profile>>(`/profiles/${buildQuery(params)}`),
+    // Convenience: unbounded fetch returning just items.
     getAll: (type?: ProfileType) =>
-      request<Profile[]>(`/profiles/${type ? `?profile_type=${type}` : ''}`),
+      request<Paginated<Profile>>(
+        `/profiles/${buildQuery({ limit: 0, profile_type: type })}`
+      ).then(r => r.items),
     get: (id: number) => request<Profile>(`/profiles/${id}`),
     create: (data: ProfileCreate) =>
       request<Profile>('/profiles/', { method: 'POST', body: JSON.stringify(data) }),
@@ -96,7 +118,10 @@ export const api = {
 
   // ===== Projects =====
   projects: {
-    getAll: () => request<Project[]>('/projects/'),
+    list: (params: ListParams = {}) =>
+      request<Paginated<Project>>(`/projects/${buildQuery(params)}`),
+    getAll: () =>
+      request<Paginated<Project>>('/projects/?limit=0').then(r => r.items),
     getListView: () => request<ProjectListView[]>('/projects/list-view'),
     search: (q: string) =>
       request<ProjectSearchResult[]>(`/projects/search?q=${encodeURIComponent(q)}`),
@@ -142,7 +167,10 @@ export const api = {
 
   // ===== Quotes =====
   quotes: {
-    getAll: () => request<Quote[]>('/quotes/'),
+    list: (params: ListParams = {}) =>
+      request<Paginated<Quote>>(`/quotes/${buildQuery(params)}`),
+    getAll: () =>
+      request<Paginated<Quote>>('/quotes/?limit=0').then(r => r.items),
     get: (id: number) => request<Quote>(`/quotes/${id}`),
     create: (data: QuoteCreate) =>
       request<Quote>('/quotes/', { method: 'POST', body: JSON.stringify(data) }),
@@ -211,7 +239,10 @@ export const api = {
   // ===== Purchase Orders =====
   purchaseOrders: {
     // Core CRUD
-    getAll: () => request<PurchaseOrder[]>('/purchase-orders/'),
+    list: (params: ListParams = {}) =>
+      request<Paginated<PurchaseOrder>>(`/purchase-orders/${buildQuery(params)}`),
+    getAll: () =>
+      request<Paginated<PurchaseOrder>>('/purchase-orders/?limit=0').then(r => r.items),
 
     get: (id: number) => request<PurchaseOrder>(`/purchase-orders/${id}`),
 

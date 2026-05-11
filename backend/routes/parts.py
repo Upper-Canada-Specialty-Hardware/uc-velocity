@@ -1,12 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from typing import List
 
 from database import get_db
 from models import Part, Labor, Profile
-from schemas import PartCreate, PartUpdate, Part as PartSchema, PartWithLabor
+from schemas import PartCreate, PartUpdate, Part as PartSchema, PartWithLabor, Paginated
 
 router = APIRouter(prefix="/parts", tags=["parts"])
+
+# Default page size for list endpoints (issue #84).
+# `limit=0` is a sentinel meaning "no cap" — used by autocomplete/dropdown
+# loaders that legitimately need every row (e.g. PartForm vendor select).
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 10000
 
 
 def auto_calculate_cost(part: Part, db: Session) -> None:
@@ -22,17 +28,29 @@ def auto_calculate_cost(part: Part, db: Session) -> None:
             part.cost = part.list_price * (1 - effective_discount / 100)
 
 
-@router.get("/", response_model=List[PartWithLabor])
-def get_all_parts(skip: int = 0, limit: int = None, db: Session = Depends(get_db)):  # limit=None until pagination is implemented
-    """Get all parts with their linked labor items."""
-    parts = (
-        db.query(Part)
-        .options(joinedload(Part.labor_items), joinedload(Part.vendor))
-        .offset(skip)
-        .limit(limit)
-        .all()
+@router.get("/", response_model=Paginated[PartWithLabor])
+def get_all_parts(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(DEFAULT_LIMIT, ge=0, le=MAX_LIMIT),
+    skip: int = Query(0, ge=0, deprecated=True, description="Deprecated alias for offset"),
+    db: Session = Depends(get_db),
+):
+    """Paginated list of parts with their linked labor items.
+
+    Pass `limit=0` to fetch every row (used by autocomplete loaders).
+    """
+    effective_offset = offset or skip
+    base = db.query(Part).options(
+        joinedload(Part.labor_items), joinedload(Part.vendor)
     )
-    return parts
+    total = base.with_entities(Part.id).count()
+    q = base.order_by(Part.id).offset(effective_offset)
+    if limit > 0:
+        q = q.limit(limit)
+    items = q.all()
+    return Paginated[PartWithLabor](
+        items=items, total=total, limit=limit, offset=effective_offset
+    )
 
 
 @router.get("/{part_id}", response_model=PartWithLabor)

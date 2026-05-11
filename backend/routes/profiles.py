@@ -5,6 +5,7 @@ from typing import List, Optional
 from database import get_db
 from models import Profile, ProfileType as ModelProfileType, Contact, ContactPhone, PhoneType as ModelPhoneType
 from schemas import (
+    Paginated,
     ProfileCreate, ProfileUpdate, Profile as ProfileSchema,
     ContactCreate, ContactUpdate, Contact as ContactSchema
 )
@@ -12,25 +13,38 @@ from schemas import (
 router = APIRouter(prefix="/profiles", tags=["profiles"])
 
 _CACHE_CONTROL = "private, max-age=60"
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 10000
 
 
-@router.get("/", response_model=List[ProfileSchema])
+@router.get("/", response_model=Paginated[ProfileSchema])
 def get_all_profiles(
     response: Response,
-    skip: int = 0,
-    limit: int = None,  # No default limit until pagination is implemented
+    offset: int = Query(0, ge=0),
+    limit: int = Query(DEFAULT_LIMIT, ge=0, le=MAX_LIMIT),
+    skip: int = Query(0, ge=0, deprecated=True, description="Deprecated alias for offset"),
     profile_type: Optional[str] = Query(None, description="Filter by profile type (customer or vendor)"),
     db: Session = Depends(get_db)
 ):
-    """Get all profiles with optional filtering by type."""
-    query = db.query(Profile).options(
+    """Paginated list of profiles with optional filtering by type.
+
+    Pass `limit=0` to fetch every row (used by autocomplete loaders).
+    """
+    effective_offset = offset or skip
+    base = db.query(Profile).options(
         joinedload(Profile.contacts).joinedload(Contact.phone_numbers)
     )
     if profile_type:
-        query = query.filter(Profile.type == ModelProfileType(profile_type))
-    profiles = query.offset(skip).limit(limit).all()
+        base = base.filter(Profile.type == ModelProfileType(profile_type))
+    total = base.with_entities(Profile.id).count()
+    q = base.order_by(Profile.id).offset(effective_offset)
+    if limit > 0:
+        q = q.limit(limit)
+    profiles = q.all()
     response.headers["Cache-Control"] = _CACHE_CONTROL
-    return profiles
+    return Paginated[ProfileSchema](
+        items=profiles, total=total, limit=limit, offset=effective_offset
+    )
 
 
 @router.get("/{profile_id}", response_model=ProfileSchema)

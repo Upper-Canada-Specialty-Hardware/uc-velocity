@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, and_, cast, func, literal, or_
 from sqlalchemy.orm import Session, aliased, joinedload
 from typing import Dict, List, Optional, Set
@@ -7,6 +7,7 @@ import re
 from database import get_db
 from models import Project, Profile, ProfileType, PurchaseOrder, Quote
 from schemas import (
+    Paginated,
     ProjectCreate,
     ProjectUpdate,
     Project as ProjectSchema,
@@ -18,6 +19,10 @@ from schemas import (
     Quote as QuoteSchema,
 )
 from routes.purchase_orders import format_po_number
+
+# See parts.py for the same constants — kept inline per-module for clarity.
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 10000
 
 
 def format_quote_number(uca_project_number: str, quote_sequence: int, current_version: int) -> str:
@@ -89,17 +94,27 @@ def generate_next_uca_number(db: Session) -> str:
         return f"{increment_letter_prefix(prefix)}0001"
 
 
-@router.get("/", response_model=List[ProjectSchema])
-def get_all_projects(skip: int = 0, limit: int = None, db: Session = Depends(get_db)):  # limit=None until pagination is implemented
-    """Get all projects with customer info."""
-    projects = (
-        db.query(Project)
-        .options(joinedload(Project.customer))
-        .offset(skip)
-        .limit(limit)
-        .all()
+@router.get("/", response_model=Paginated[ProjectSchema])
+def get_all_projects(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(DEFAULT_LIMIT, ge=0, le=MAX_LIMIT),
+    skip: int = Query(0, ge=0, deprecated=True, description="Deprecated alias for offset"),
+    db: Session = Depends(get_db),
+):
+    """Paginated list of projects with customer info.
+
+    Pass `limit=0` to fetch every row.
+    """
+    effective_offset = offset or skip
+    base = db.query(Project).options(joinedload(Project.customer))
+    total = base.with_entities(Project.id).count()
+    q = base.order_by(Project.id).offset(effective_offset)
+    if limit > 0:
+        q = q.limit(limit)
+    items = q.all()
+    return Paginated[ProjectSchema](
+        items=items, total=total, limit=limit, offset=effective_offset
     )
-    return projects
 
 
 def _build_list_view_rows(db: Session, project_ids: Optional[Set[int]] = None) -> List[ProjectListView]:

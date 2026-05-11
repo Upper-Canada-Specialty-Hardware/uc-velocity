@@ -1,5 +1,22 @@
 // TypeScript interfaces matching backend schemas
 
+// ===== Pagination =====
+// Standard response envelope for paginated list endpoints (see backend
+// schemas.Paginated). `total` is the unfiltered total for the query
+// independent of offset/limit, so the UI can render "X of Y" without an
+// extra count round trip.
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ListParams {
+  offset?: number;
+  limit?: number;
+}
+
 // ===== Company Settings =====
 export interface CompanySettings {
   id: number;
