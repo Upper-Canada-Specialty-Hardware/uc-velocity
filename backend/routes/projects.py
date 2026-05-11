@@ -358,16 +358,16 @@ def search_projects(q: str = "", db: Session = Depends(get_db)):
 
 @router.get("/{project_id}", response_model=ProjectFull)
 def get_project(project_id: int, db: Session = Depends(get_db)):
-    """Get a single project with full nested structure (quotes, POs, line items)."""
+    """Get a single project with its quote/PO summaries (no nested line items).
+
+    Open a specific quote or PO via its own endpoint to load its line items.
+    """
     project = (
         db.query(Project)
         .options(
             joinedload(Project.customer),
-            joinedload(Project.quotes).joinedload(Quote.line_items),
-            joinedload(Project.purchase_orders).options(
-                joinedload(PurchaseOrder.vendor),
-                joinedload(PurchaseOrder.line_items)
-            )
+            joinedload(Project.quotes),
+            joinedload(Project.purchase_orders).joinedload(PurchaseOrder.vendor),
         )
         .filter(Project.id == project_id)
         .first()

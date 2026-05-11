@@ -60,8 +60,8 @@ export function ProfilesPage() {
     if (viewingProfile?.type === "vendor") {
       setLoadingParts(true)
       setImportResult(null)
-      api.parts.getAll()
-        .then(allParts => setVendorParts(allParts.filter(p => p.vendor_id === viewingProfile.id)))
+      api.parts.getAll({ vendor_id: viewingProfile.id })
+        .then(setVendorParts)
         .catch(() => setVendorParts([]))
         .finally(() => setLoadingParts(false))
     } else {
@@ -77,8 +77,8 @@ export function ProfilesPage() {
       const result = await api.vendorPricebook.import(viewingProfile.id, file)
       setImportResult(result)
       // Refresh vendor parts list
-      const allParts = await api.parts.getAll()
-      setVendorParts(allParts.filter(p => p.vendor_id === viewingProfile.id))
+      const refreshed = await api.parts.getAll({ vendor_id: viewingProfile.id })
+      setVendorParts(refreshed)
     } catch (err) {
       setImportResult({ created: 0, updated: 0, errors: [err instanceof Error ? err.message : "Import failed"] })
     } finally {

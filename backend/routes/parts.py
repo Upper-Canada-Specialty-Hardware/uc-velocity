@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from typing import List
+from typing import List, Optional
 
 from database import get_db
 from models import Part, Labor, Profile
@@ -32,17 +32,21 @@ def auto_calculate_cost(part: Part, db: Session) -> None:
 def get_all_parts(
     offset: int = Query(0, ge=0),
     limit: int = Query(DEFAULT_LIMIT, ge=0, le=MAX_LIMIT),
+    vendor_id: Optional[int] = Query(None, description="Filter to parts linked to this vendor"),
     skip: int = Query(0, ge=0, deprecated=True, description="Deprecated alias for offset"),
     db: Session = Depends(get_db),
 ):
     """Paginated list of parts with their linked labor items.
 
+    Optional `vendor_id` filters server-side to parts linked to that vendor.
     Pass `limit=0` to fetch every row (used by autocomplete loaders).
     """
     effective_offset = offset or skip
     base = db.query(Part).options(
         joinedload(Part.labor_items), joinedload(Part.vendor)
     )
+    if vendor_id is not None:
+        base = base.filter(Part.vendor_id == vendor_id)
     total = base.with_entities(Part.id).count()
     q = base.order_by(Part.id).offset(effective_offset)
     if limit > 0:

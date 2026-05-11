@@ -745,10 +745,39 @@ class POCommitEditsResponse(BaseModel):
     snapshot_version: int
 
 
-# ===== Project with nested documents =====
+# ===== Project-detail summary schemas =====
+# Lighter shapes used by ProjectFull so the project detail screen does not
+# hydrate every quote's and PO's line items. Open a specific quote/PO via
+# `GET /quotes/{id}` or `GET /purchase-orders/{id}` to get its line items.
+class QuoteSummary(QuoteBase):
+    id: int
+    quote_sequence: int
+    quote_number: Optional[str] = None
+    created_at: datetime
+    current_version: int = 0
+    cost_code_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class POSummary(PurchaseOrderBase):
+    id: int
+    created_at: datetime
+    po_sequence: int
+    current_version: int = 0
+    po_number: Optional[str] = None
+    cost_code_id: Optional[int] = None
+    vendor: Profile
+
+    class Config:
+        from_attributes = True
+
+
+# ===== Project with nested documents (no line items) =====
 class ProjectFull(Project):
-    quotes: List[Quote] = []
-    purchase_orders: List[PurchaseOrder] = []
+    quotes: List[QuoteSummary] = []
+    purchase_orders: List[POSummary] = []
 
     class Config:
         from_attributes = True
