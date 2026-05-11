@@ -1222,26 +1222,6 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handlePrintPO}
-            disabled={isPrinting}
-            className="gap-2"
-          >
-            {isPrinting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
-            {isPrinting ? "Generating..." : "Print PO"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCloneConfirmOpen(true)}
-            disabled={isCloning}
-            className="gap-2"
-          >
-            <Copy className="h-4 w-4" />
-            {isCloning ? "Cloning..." : "Clone PO"}
-          </Button>
           {getNextStatuses().length > 0 && editorMode === "view" && !hasStagedChanges ? (
             <Select value={po.status} onValueChange={(v) => handleStatusChange(v as POStatus)}>
               <SelectTrigger className={`w-32 ${getStatusBadgeColor(po.status)}`}>
@@ -1305,7 +1285,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                   {po.work_description ? (
                     <span className="text-sm">{po.work_description}</span>
                   ) : (
-                    <span className="text-sm text-muted-foreground italic">Not set</span>
+                    <span className="text-sm text-muted-foreground" title="Click pencil to set">—</span>
                   )}
                   <Button
                     variant="ghost"
@@ -1353,7 +1333,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                   {po.vendor_po_number ? (
                     <span className="text-sm font-medium">{po.vendor_po_number}</span>
                   ) : (
-                    <span className="text-sm text-muted-foreground italic">Not set</span>
+                    <span className="text-sm text-muted-foreground" title="Click pencil to set">—</span>
                   )}
                   <Button
                     variant="ghost"
@@ -1427,7 +1407,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                       {new Date(po.expected_delivery_date).toLocaleDateString()}
                     </span>
                   ) : (
-                    <span className="text-sm text-muted-foreground italic">Not set</span>
+                    <span className="text-sm text-muted-foreground" title="Click pencil to set">—</span>
                   )}
                   <Button
                     variant="ghost"
@@ -1532,6 +1512,31 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
       {/* ===== Floating Action Buttons ===== */}
       <div className="fixed bottom-6 right-6 z-50">
         <div className="flex flex-col items-end gap-2">
+          {/* Secondary actions (Print / Clone) always reachable in view mode */}
+          {editorMode === "view" && (
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePrintPO}
+                disabled={isPrinting}
+                className="shadow-md gap-2 bg-background"
+              >
+                {isPrinting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+                {isPrinting ? "Generating..." : "Print"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCloneConfirmOpen(true)}
+                disabled={isCloning}
+                className="shadow-md gap-2 bg-background"
+              >
+                <Copy className="h-4 w-4" />
+                {isCloning ? "Cloning..." : "Clone"}
+              </Button>
+            </div>
+          )}
           <div className="flex gap-2">
             {/* View Mode: Enter Edit Mode button (only for Draft POs that haven't been received) */}
             {editorMode === "view" && po.status === "Draft" && !hasBeenReceived && (
