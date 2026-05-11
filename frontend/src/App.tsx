@@ -17,6 +17,7 @@ import { MiscForm } from "@/components/forms/MiscForm"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { ProjectsPage } from "@/pages/ProjectsPage"
 import { api } from "@/api/client"
+import { useIsAdmin } from "@/hooks/use-is-admin"
 
 // Lazy-loaded pages: keep ProjectsPage eager (default landing), defer the rest.
 const ProfilesPage = lazy(() =>
@@ -67,6 +68,14 @@ function App() {
   const [projectSearchTerm, setProjectSearchTerm] = useState("")
   // When navigating into a project from a search-result chip, seed the editor to open that doc directly.
   const [pendingInitialDoc, setPendingInitialDoc] = useState<{ type: "quote" | "po"; id: number } | null>(null)
+
+  // Migration is an admin-only destructive surface; non-admins shouldn't see it.
+  const isAdmin = useIsAdmin()
+  useEffect(() => {
+    if (currentView === "migration" && !isAdmin) {
+      setCurrentView("projects")
+    }
+  }, [currentView, isAdmin])
 
   // Inventory state
   const [parts, setParts] = useState<Part[]>([])
@@ -233,6 +242,9 @@ function App() {
         return <SettingsPage />
 
       case "migration":
+        // Defensive gate in case state somehow lands here for a non-admin
+        // (the useEffect above will then redirect to projects on the next tick).
+        if (!isAdmin) return null
         return <MigrationPage />
 
       case "project-details":
@@ -662,14 +674,16 @@ function App() {
               <Settings className="h-4 w-4" />
               Settings
             </Button>
-            <Button
-              variant={currentView === "migration" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-2"
-              onClick={() => setCurrentView("migration")}
-            >
-              <DatabaseZap className="h-4 w-4" />
-              Migration
-            </Button>
+            {isAdmin && (
+              <Button
+                variant={currentView === "migration" ? "secondary" : "ghost"}
+                className="w-full justify-start gap-2"
+                onClick={() => setCurrentView("migration")}
+              >
+                <DatabaseZap className="h-4 w-4" />
+                Migration
+              </Button>
+            )}
           </nav>
         </ScrollArea>
       </aside>
