@@ -55,7 +55,7 @@ import type {
   StagedFulfillment, InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
-import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash } from "lucide-react"
+import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown } from "lucide-react"
 import type { CompanySettings, Project, SystemRate } from '@/types'
 import { QuoteAuditTrail } from "./QuoteAuditTrail"
 import { PartForm } from "@/components/forms/PartForm"
@@ -197,6 +197,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   const [editPreviewOpen, setEditPreviewOpen] = useState(false)
   const [commitConfirmOpen, setCommitConfirmOpen] = useState(false)
   const [noPendingDialogOpen, setNoPendingDialogOpen] = useState(false)
+  // Total Margin and other advanced totals are hidden by default to reduce surface noise.
+  const [showAdvancedTotals, setShowAdvancedTotals] = useState(false)
 
   // Quote version tracking for Flow 7E - detect external changes during invoicing or editing
   const [initialQuoteVersion, setInitialQuoteVersion] = useState<number | null>(null)
@@ -1977,7 +1979,37 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     addButtonLabel: string,
     extraButtons?: React.ReactNode,
     useEffectivePricing?: boolean  // For Labour section PMS % support
-  ) => (
+  ) => {
+    // Section-level markup default — pulled from the quote's section setting,
+    // falling back to the most common per-row markup so we always have a sensible
+    // value to compare overrides against.
+    const sectionDefault: number = (() => {
+      const fromQuote =
+        type === "part" ? quote?.parts_markup_percent :
+        type === "labor" ? quote?.labor_markup_percent :
+        quote?.misc_markup_percent
+      if (fromQuote != null) return fromQuote
+      const nonPms = items.filter((i) => !i.is_pms)
+      if (nonPms.length === 0) return 0
+      const counts = new Map<number, number>()
+      for (const it of nonPms) {
+        const m = it.markup_percent ?? 0
+        counts.set(m, (counts.get(m) ?? 0) + 1)
+      }
+      let mode = 0, best = -1
+      for (const [m, c] of counts) {
+        if (c > best) { best = c; mode = m }
+      }
+      return mode
+    })()
+    const hasMarkupOverrides = !quote?.markup_control_enabled && items.some(
+      (i) => !i.is_pms && (i.markup_percent ?? 0) !== sectionDefault
+    )
+    // Show the per-row Markup % column whenever the user might need to act on it:
+    // always in edit mode, otherwise only when at least one row diverges from the
+    // section default. Hidden entirely when the global markup toggle is on.
+    const showMarkupCol = !quote?.markup_control_enabled && (editorMode === "edit" || hasMarkupOverrides)
+    return (
     <Card>
       <CardHeader className="pb-3">
         <div className="flex justify-between items-center">
@@ -1987,6 +2019,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               {title}
             </CardTitle>
             {items.length > 0 && <StackedProgress items={items} />}
+            {items.length > 0 && (
+              <Badge variant="outline" className="text-xs font-normal gap-1">
+                <Percent className="h-3 w-3" />
+                Default markup: {sectionDefault}%
+              </Badge>
+            )}
           </div>
           <div className="flex gap-2">
             {/* Invoicing buttons - only visible in Invoicing mode */}
@@ -2070,8 +2108,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                 )}
                 {/* Unit Cost column - always visible */}
                 <TableHead className="text-right">Unit Cost</TableHead>
-                {/* Markup % column - always visible; editable in edit mode when global toggle is OFF */}
-                {!quote?.markup_control_enabled && (
+                {/* Markup % column — shown in edit mode, or when any row diverges from the section default */}
+                {showMarkupCol && (
                   <TableHead className="text-right">Markup %</TableHead>
                 )}
                 <TableHead className="text-right">Unit Price</TableHead>
@@ -2240,11 +2278,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                       )}
                     </TableCell>
 
-                    {/* Markup % Column — always visible; editable in edit mode when global toggle is OFF */}
-                    {!quote?.markup_control_enabled && (
+                    {/* Markup % Column — editable in edit mode; in view/invoicing modes
+                        shows em-dash for rows matching the section default and accent
+                        colour for genuine overrides. */}
+                    {showMarkupCol && (
                       <TableCell className="text-right">
                         {item.is_pms ? (
-                          <span className="text-muted-foreground">-</span>
+                          <span className="text-muted-foreground">—</span>
                         ) : editorMode === "edit" ? (
                           <Input
                             type="number"
@@ -2258,8 +2298,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                             }}
                             disabled={isDeleted || hasBeenInvoiced}
                           />
+                        ) : (item.markup_percent ?? 0) === sectionDefault ? (
+                          <span className="text-muted-foreground" title="Matches section default">—</span>
                         ) : (
-                          <span>{item.markup_percent ?? 0}%</span>
+                          <span className="font-medium text-amber-600 dark:text-amber-400" title="Override">
+                            {item.markup_percent ?? 0}%
+                          </span>
                         )}
                       </TableCell>
                     )}
@@ -2471,7 +2515,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                     {/* Unit Cost — for staged adds */}
                     <TableCell className="text-right text-muted-foreground">${addBaseCost.toFixed(2)}</TableCell>
                     {/* Markup % — for staged adds */}
-                    {!quote?.markup_control_enabled && (
+                    {showMarkupCol && (
                       <TableCell className="text-right text-green-700 dark:text-green-300">{addMarkup}%</TableCell>
                     )}
                     {/* Unit Price */}
@@ -2542,7 +2586,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                   {/* Unit Cost — empty in footer */}
                   <TableCell></TableCell>
                   {/* Markup % — empty in footer */}
-                  {!quote?.markup_control_enabled && (
+                  {showMarkupCol && (
                     <TableCell></TableCell>
                   )}
                   {/* Unit Price */}
@@ -2587,7 +2631,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                     {/* Unit Cost */}
                     <TableCell></TableCell>
                     {/* Markup % */}
-                    {!quote?.markup_control_enabled && (
+                    {showMarkupCol && (
                       <TableCell></TableCell>
                     )}
                     {/* Unit Price */}
@@ -2610,7 +2654,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
         )}
       </CardContent>
     </Card>
-  )
+    )
+  }
 
   return (
     <div className={`p-6 space-y-6 pb-24 rounded-lg transition-colors ${
@@ -2642,26 +2687,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handlePrintQuote}
-            disabled={isPrinting}
-            className="gap-2"
-          >
-            {isPrinting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
-            {isPrinting ? "Generating..." : "Print Quote"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCloneQuote}
-            disabled={isCloning}
-            className="gap-2"
-          >
-            <Copy className="h-4 w-4" />
-            {isCloning ? "Cloning..." : "Clone Quote"}
-          </Button>
           <Badge
             variant={quote.status === "Closed" ? "default" : "secondary"}
             className={
@@ -2716,7 +2741,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               {quote.client_po_number ? (
                 <span className="font-medium">{quote.client_po_number}</span>
               ) : (
-                <span className="text-muted-foreground italic">Not set</span>
+                <span className="text-muted-foreground" title={editorMode === "edit" ? "Click pencil to set" : undefined}>—</span>
               )}
               {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
@@ -2801,7 +2826,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               {quote.work_description ? (
                 <p className="whitespace-pre-wrap">{quote.work_description}</p>
               ) : (
-                <span className="text-muted-foreground italic">Not set</span>
+                <span className="text-muted-foreground" title={editorMode === "edit" ? "Click pencil to set" : undefined}>—</span>
               )}
               {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
@@ -2966,36 +2991,51 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               )}
             </div>
 
-            {/* Total Margin with formula tooltip */}
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-muted-foreground">Total Margin:</span>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger>
-                      <Info className="h-4 w-4 text-muted-foreground cursor-help" />
-                    </TooltipTrigger>
-                    <TooltipContent className="max-w-xs">
-                      <p className="text-xs">
-                        Margin % = (Selling Price - Mfg Cost) / Selling Price × 100
-                      </p>
-                      <p className="text-xs mt-1 text-muted-foreground">
-                        Manufacturing Cost = Parts cost only (Labor/Misc = $0)
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-              {hasStagedChanges ? (
-                <span className="text-lg font-semibold">
-                  {calculateTotalMargin().toFixed(2)}%
-                  <span className="text-muted-foreground mx-1">→</span>
-                  <span className="text-blue-600 dark:text-blue-400">{calculateProjectedMargin().toFixed(2)}%</span>
-                </span>
-              ) : (
-                <span className="text-lg font-semibold">{calculateTotalMargin().toFixed(2)}%</span>
-              )}
+            {/* Advanced totals toggle (Total Margin etc. hidden by default) */}
+            <div className="flex justify-end -mt-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+                onClick={() => setShowAdvancedTotals((v) => !v)}
+              >
+                {showAdvancedTotals ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                {showAdvancedTotals ? "Hide advanced totals" : "Show advanced totals"}
+              </Button>
             </div>
+
+            {/* Total Margin — advanced; redundant with Average Markup so off by default */}
+            {showAdvancedTotals && (
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-muted-foreground">Total Margin:</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs">
+                        <p className="text-xs">
+                          Margin % = (Selling Price - Mfg Cost) / Selling Price × 100
+                        </p>
+                        <p className="text-xs mt-1 text-muted-foreground">
+                          Manufacturing Cost = Parts cost only (Labor/Misc = $0)
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                {hasStagedChanges ? (
+                  <span className="text-lg font-semibold">
+                    {calculateTotalMargin().toFixed(2)}%
+                    <span className="text-muted-foreground mx-1">→</span>
+                    <span className="text-blue-600 dark:text-blue-400">{calculateProjectedMargin().toFixed(2)}%</span>
+                  </span>
+                ) : (
+                  <span className="text-lg font-semibold">{calculateTotalMargin().toFixed(2)}%</span>
+                )}
+              </div>
+            )}
 
             <Separator />
 
@@ -3066,11 +3106,30 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       {/* Unified Floating Button Group */}
       <div className="fixed bottom-6 right-6 z-50">
         <div className="flex flex-col items-end gap-2">
-          {/* Warning messages */}
-          {editorMode === "invoicing" && !quote.client_po_number && stagedFulfillments.size > 0 && (
-            <span className="text-sm text-amber-600 bg-amber-50 dark:bg-amber-950 dark:text-amber-400 px-3 py-1 rounded-md shadow-sm">
-              Client PO Number required
-            </span>
+          {/* Secondary actions always available (Print / Clone) */}
+          {editorMode === "view" && (
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePrintQuote}
+                disabled={isPrinting}
+                className="shadow-md gap-2 bg-background"
+              >
+                {isPrinting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+                {isPrinting ? "Generating..." : "Print"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCloneQuote}
+                disabled={isCloning}
+                className="shadow-md gap-2 bg-background"
+              >
+                <Copy className="h-4 w-4" />
+                {isCloning ? "Cloning..." : "Clone"}
+              </Button>
+            </div>
           )}
 
           <div className="flex gap-2">

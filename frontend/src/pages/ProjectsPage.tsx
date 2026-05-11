@@ -263,38 +263,41 @@ export function ProjectsPage({
                       </TableCell>
                     </TableRow>
                     {hasChildMatches && (
-                      <TableRow className="bg-muted/30 hover:bg-muted/30">
-                        <TableCell colSpan={8} className="py-2">
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground pl-6">
-                            <span className="uppercase tracking-wide">Matches:</span>
+                      <TableRow className="bg-muted/20 hover:bg-muted/30 border-l-2 border-l-primary/40">
+                        <TableCell colSpan={8} className="py-2 pl-10">
+                          <div className="flex flex-col gap-1 text-xs">
                             {project.matched_quotes.map((q) => (
-                              <Badge
+                              <button
                                 key={`q-${q.id}`}
-                                variant="outline"
-                                className="cursor-pointer gap-1 font-mono hover:bg-background"
+                                type="button"
+                                className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors w-fit"
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   onSelectChildDoc(project.id, { type: "quote", id: q.id })
                                 }}
                               >
+                                <span className="text-muted-foreground/60" aria-hidden>↳</span>
                                 <FileText className="h-3 w-3" />
-                                {q.quote_number}
-                              </Badge>
+                                <span>Quote</span>
+                                <span className="font-mono">{q.quote_number}</span>
+                              </button>
                             ))}
                             {project.matched_pos.map((po) => (
-                              <Badge
+                              <button
                                 key={`po-${po.id}`}
-                                variant="outline"
-                                className="cursor-pointer gap-1 font-mono hover:bg-background"
+                                type="button"
+                                className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors w-fit"
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   onSelectChildDoc(project.id, { type: "po", id: po.id })
                                 }}
                               >
+                                <span className="text-muted-foreground/60" aria-hidden>↳</span>
                                 <ShoppingCart className="h-3 w-3" />
-                                {po.po_number}
-                                <span className="text-muted-foreground font-sans">— {po.vendor_name}</span>
-                              </Badge>
+                                <span>PO</span>
+                                <span className="font-mono">{po.po_number}</span>
+                                <span className="text-muted-foreground/70">— {po.vendor_name}</span>
+                              </button>
                             ))}
                           </div>
                         </TableCell>
