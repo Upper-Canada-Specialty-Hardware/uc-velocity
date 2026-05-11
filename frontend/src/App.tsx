@@ -1,4 +1,5 @@
-import { useState, useEffect, lazy, Suspense } from "react"
+import { useState, useEffect, useMemo, lazy, Suspense } from "react"
+import { useLocation, useNavigate } from "react-router-dom"
 import { Show, SignInButton, SignUpButton, UserButton } from "@clerk/react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -61,21 +62,58 @@ import { Toaster } from "@/components/ui/toaster"
 
 type AppView = "profiles" | "projects" | "project-details" | "inventory" | "reports" | "settings" | "migration"
 
+type ParsedRoute =
+  | { view: Exclude<AppView, "project-details"> }
+  | {
+      view: "project-details"
+      projectId: number
+      initialDoc: { type: "quote" | "po"; id: number } | null
+    }
+
+function parseRoute(pathname: string): ParsedRoute {
+  if (pathname === "/profiles") return { view: "profiles" }
+  if (pathname === "/inventory") return { view: "inventory" }
+  if (pathname === "/reports") return { view: "reports" }
+  if (pathname === "/settings") return { view: "settings" }
+  if (pathname === "/admin/migration") return { view: "migration" }
+  // /projects/:id, /projects/:id/quotes|pos|invoices/:docId
+  const projMatch = pathname.match(/^\/projects\/(\d+)(?:\/(quotes|pos|invoices)\/(\d+))?$/)
+  if (projMatch) {
+    const projectId = parseInt(projMatch[1], 10)
+    const docSeg = projMatch[2]
+    const docId = projMatch[3] ? parseInt(projMatch[3], 10) : null
+    let initialDoc: { type: "quote" | "po"; id: number } | null = null
+    if (docId !== null) {
+      if (docSeg === "quotes") initialDoc = { type: "quote", id: docId }
+      else if (docSeg === "pos") initialDoc = { type: "po", id: docId }
+      // /invoices/:id deep-links open the project details and the invoice subview;
+      // the editor handles invoice selection via its initialDoc-like flow.
+      else if (docSeg === "invoices") initialDoc = { type: "quote", id: docId } // editor surfaces invoice through quote anyway
+    }
+    return { view: "project-details", projectId, initialDoc }
+  }
+  // /, /projects, anything else → projects landing
+  return { view: "projects" }
+}
+
 function App() {
-  const [currentView, setCurrentView] = useState<AppView>("projects")
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
+  const navigate = useNavigate()
+  const location = useLocation()
+  const route = useMemo(() => parseRoute(location.pathname), [location.pathname])
+  const currentView: AppView = route.view
+  const selectedProjectId = route.view === "project-details" ? route.projectId : null
+  const pendingInitialDoc = route.view === "project-details" ? route.initialDoc : null
+
   // Projects page search term — lifted here so it survives drilling into a project and coming back.
   const [projectSearchTerm, setProjectSearchTerm] = useState("")
-  // When navigating into a project from a search-result chip, seed the editor to open that doc directly.
-  const [pendingInitialDoc, setPendingInitialDoc] = useState<{ type: "quote" | "po"; id: number } | null>(null)
 
   // Migration is an admin-only destructive surface; non-admins shouldn't see it.
   const isAdmin = useIsAdmin()
   useEffect(() => {
     if (currentView === "migration" && !isAdmin) {
-      setCurrentView("projects")
+      navigate("/projects", { replace: true })
     }
-  }, [currentView, isAdmin])
+  }, [currentView, isAdmin, navigate])
 
   // Inventory state
   const [parts, setParts] = useState<Part[]>([])
@@ -203,21 +241,16 @@ function App() {
   }
 
   const handleSelectProject = (projectId: number) => {
-    setPendingInitialDoc(null)
-    setSelectedProjectId(projectId)
-    setCurrentView("project-details")
+    navigate(`/projects/${projectId}`)
   }
 
   const handleSelectChildDoc = (projectId: number, doc: { type: "quote" | "po"; id: number }) => {
-    setPendingInitialDoc(doc)
-    setSelectedProjectId(projectId)
-    setCurrentView("project-details")
+    const seg = doc.type === "quote" ? "quotes" : "pos"
+    navigate(`/projects/${projectId}/${seg}/${doc.id}`)
   }
 
   const handleBackToProjects = () => {
-    setSelectedProjectId(null)
-    setPendingInitialDoc(null)
-    setCurrentView("projects")
+    navigate("/projects")
   }
 
   const renderContent = () => {
@@ -249,7 +282,7 @@ function App() {
 
       case "project-details":
         if (selectedProjectId === null) {
-          setCurrentView("projects")
+          navigate("/projects", { replace: true })
           return null
         }
         return (
@@ -633,11 +666,7 @@ function App() {
             <Button
               variant={currentView === "projects" || currentView === "project-details" ? "secondary" : "ghost"}
               className="w-full justify-start gap-2"
-              onClick={() => {
-                setSelectedProjectId(null)
-                setPendingInitialDoc(null)
-                setCurrentView("projects")
-              }}
+              onClick={() => navigate("/projects")}
             >
               <FolderOpen className="h-4 w-4" />
               Projects
@@ -645,7 +674,7 @@ function App() {
             <Button
               variant={currentView === "profiles" ? "secondary" : "ghost"}
               className="w-full justify-start gap-2"
-              onClick={() => setCurrentView("profiles")}
+              onClick={() => navigate("/profiles")}
             >
               <Users className="h-4 w-4" />
               Profiles
@@ -653,7 +682,7 @@ function App() {
             <Button
               variant={currentView === "inventory" ? "secondary" : "ghost"}
               className="w-full justify-start gap-2"
-              onClick={() => setCurrentView("inventory")}
+              onClick={() => navigate("/inventory")}
             >
               <Boxes className="h-4 w-4" />
               Inventory
@@ -661,7 +690,7 @@ function App() {
             <Button
               variant={currentView === "reports" ? "secondary" : "ghost"}
               className="w-full justify-start gap-2"
-              onClick={() => setCurrentView("reports")}
+              onClick={() => navigate("/reports")}
             >
               <BarChart3 className="h-4 w-4" />
               Reports
@@ -669,7 +698,7 @@ function App() {
             <Button
               variant={currentView === "settings" ? "secondary" : "ghost"}
               className="w-full justify-start gap-2"
-              onClick={() => setCurrentView("settings")}
+              onClick={() => navigate("/settings")}
             >
               <Settings className="h-4 w-4" />
               Settings
@@ -678,7 +707,7 @@ function App() {
               <Button
                 variant={currentView === "migration" ? "secondary" : "ghost"}
                 className="w-full justify-start gap-2"
-                onClick={() => setCurrentView("migration")}
+                onClick={() => navigate("/admin/migration")}
               >
                 <DatabaseZap className="h-4 w-4" />
                 Migration
