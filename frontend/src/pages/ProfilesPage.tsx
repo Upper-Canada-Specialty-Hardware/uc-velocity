@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -18,11 +18,22 @@ import {
 } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProfileForm } from "@/components/forms/ProfileForm"
 import { Input } from "@/components/ui/input"
 import { api } from "@/api/client"
 import type { Profile, Part, PricebookImportResult } from "@/types"
-import { Plus, Trash2, Pencil, Users, Building, ExternalLink, Phone, Mail, MapPin, Upload } from "lucide-react"
+import {
+  Plus, Trash2, Pencil, Users, Building, ExternalLink, Phone, Mail, MapPin, Upload, Search,
+} from "lucide-react"
+import { EMPTY_VALUE } from "@/lib/format"
+
+type ProfileTab = "customers" | "vendors"
+
+function getPrimaryPhone(profile: Profile): string | null {
+  const phone = profile.contacts?.[0]?.phone_numbers?.[0]?.number
+  return phone ?? null
+}
 
 export function ProfilesPage() {
   const [profiles, setProfiles] = useState<Profile[]>([])
@@ -32,7 +43,12 @@ export function ProfilesPage() {
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null)
   const [viewingProfile, setViewingProfile] = useState<Profile | null>(null)
 
-  // Pricebook state
+  // Per-tab search — switching tabs preserves each tab's own search input.
+  const [activeTab, setActiveTab] = useState<ProfileTab>("customers")
+  const [customerSearch, setCustomerSearch] = useState("")
+  const [vendorSearch, setVendorSearch] = useState("")
+
+  // Pricebook state (vendor detail view)
   const [vendorParts, setVendorParts] = useState<Part[]>([])
   const [loadingParts, setLoadingParts] = useState(false)
   const [importingPricebook, setImportingPricebook] = useState(false)
@@ -87,7 +103,7 @@ export function ProfilesPage() {
   }
 
   const handleDelete = async (e: React.MouseEvent, id: number) => {
-    e.stopPropagation() // Prevent row click
+    e.stopPropagation()
     if (!confirm("Are you sure you want to delete this profile?")) return
     try {
       await api.profiles.delete(id)
@@ -98,7 +114,7 @@ export function ProfilesPage() {
   }
 
   const handleEdit = (e: React.MouseEvent, profile: Profile) => {
-    e.stopPropagation() // Prevent row click
+    e.stopPropagation()
     setEditingProfile(profile)
     setEditDialogOpen(true)
   }
@@ -119,91 +135,36 @@ export function ProfilesPage() {
     setViewingProfile(profile)
   }
 
-  // Split profiles into customers and vendors
-  const customers = profiles.filter(p => p.type === 'customer')
-  const vendors = profiles.filter(p => p.type === 'vendor')
+  const customers = useMemo(() => profiles.filter((p) => p.type === "customer"), [profiles])
+  const vendors = useMemo(() => profiles.filter((p) => p.type === "vendor"), [profiles])
 
-  // Profile table component for reuse
-  const ProfileTable = ({ profiles: tableProfiles, emptyMessage }: { profiles: Profile[], emptyMessage: string }) => (
-    <div className="bg-card rounded-lg border shadow-sm">
-      {tableProfiles.length === 0 ? (
-        <div className="p-6 text-center text-muted-foreground text-sm">
-          {emptyMessage}
-        </div>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Address</TableHead>
-              <TableHead>Contacts</TableHead>
-              <TableHead>Website</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {tableProfiles.map((profile) => (
-              <TableRow
-                key={profile.id}
-                className="cursor-pointer hover:bg-muted/50"
-                onClick={() => handleRowClick(profile)}
-              >
-                <TableCell className="font-medium">{profile.name}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  <div className="text-sm">{profile.address}</div>
-                  <div className="text-xs">{profile.postal_code}</div>
-                </TableCell>
-                <TableCell>
-                  <div className="text-sm">
-                    {profile.contacts.length} contact{profile.contacts.length !== 1 ? 's' : ''}
-                  </div>
-                  {profile.contacts.length > 0 && (
-                    <div className="text-xs text-muted-foreground">
-                      {profile.contacts[0].name}
-                      {profile.contacts.length > 1 && ` +${profile.contacts.length - 1} more`}
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {profile.website ? (
-                    <a
-                      href={profile.website}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline flex items-center gap-1 text-sm"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                      Visit
-                    </a>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </TableCell>
-                <TableCell className="text-right space-x-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleEdit(e, profile)}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => handleDelete(e, profile.id)}
-                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
-    </div>
-  )
+  const filteredCustomers = useMemo(() => {
+    const n = customerSearch.trim().toLowerCase()
+    if (!n) return customers
+    return customers.filter((p) => {
+      const hay = [
+        p.name,
+        p.address,
+        p.postal_code,
+        ...p.contacts.flatMap((c) => [c.name, c.email ?? "", ...c.phone_numbers.map((ph) => ph.number)]),
+      ].join(" ").toLowerCase()
+      return hay.includes(n)
+    })
+  }, [customers, customerSearch])
+
+  const filteredVendors = useMemo(() => {
+    const n = vendorSearch.trim().toLowerCase()
+    if (!n) return vendors
+    return vendors.filter((p) => {
+      const hay = [
+        p.name,
+        p.address,
+        p.postal_code,
+        ...p.contacts.flatMap((c) => [c.name, c.email ?? "", ...c.phone_numbers.map((ph) => ph.number)]),
+      ].join(" ").toLowerCase()
+      return hay.includes(n)
+    })
+  }, [vendors, vendorSearch])
 
   return (
     <div className="space-y-6">
@@ -227,27 +188,56 @@ export function ProfilesPage() {
       {loading ? (
         <div className="p-8 text-center text-muted-foreground">Loading...</div>
       ) : (
-        <div className="grid grid-cols-2 gap-6">
-          {/* Customers column */}
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Users className="h-5 w-5" />
-              Customers
-              <Badge variant="secondary" className="ml-2">{customers.length}</Badge>
-            </h2>
-            <ProfileTable profiles={customers} emptyMessage="No customers yet. Add your first customer profile." />
-          </div>
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ProfileTab)} className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="customers" className="gap-2">
+              <Users className="h-4 w-4" />
+              Customers ({customers.length})
+            </TabsTrigger>
+            <TabsTrigger value="vendors" className="gap-2">
+              <Building className="h-4 w-4" />
+              Vendors ({vendors.length})
+            </TabsTrigger>
+          </TabsList>
 
-          {/* Vendors column */}
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Building className="h-5 w-5" />
-              Vendors
-              <Badge variant="secondary" className="ml-2">{vendors.length}</Badge>
-            </h2>
-            <ProfileTable profiles={vendors} emptyMessage="No vendors yet. Add your first vendor profile." />
-          </div>
-        </div>
+          <TabsContent value="customers" className="space-y-4">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search customers by name, address, contact..."
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <ProfileTable
+              profiles={filteredCustomers}
+              emptyMessage={customerSearch ? "No customers match your search." : "No customers yet. Add your first customer profile."}
+              onRowClick={handleRowClick}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+            />
+          </TabsContent>
+
+          <TabsContent value="vendors" className="space-y-4">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search vendors by name, address, contact..."
+                value={vendorSearch}
+                onChange={(e) => setVendorSearch(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <ProfileTable
+              profiles={filteredVendors}
+              emptyMessage={vendorSearch ? "No vendors match your search." : "No vendors yet. Add your first vendor profile."}
+              onRowClick={handleRowClick}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+            />
+          </TabsContent>
+        </Tabs>
       )}
 
       {/* Edit Dialog */}
@@ -297,18 +287,18 @@ export function ProfilesPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm text-muted-foreground">PST (Provincial Tax Number)</p>
-                    <p className="font-medium">{viewingProfile.pst}</p>
+                    <p className="font-medium">{viewingProfile.pst || EMPTY_VALUE}</p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">Postal Code</p>
-                    <p className="font-medium">{viewingProfile.postal_code}</p>
+                    <p className="font-medium">{viewingProfile.postal_code || EMPTY_VALUE}</p>
                   </div>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground flex items-center gap-1">
                     <MapPin className="h-3 w-3" /> Address
                   </p>
-                  <p className="font-medium">{viewingProfile.address}</p>
+                  <p className="font-medium">{viewingProfile.address || EMPTY_VALUE}</p>
                 </div>
                 {viewingProfile.website && (
                   <div>
@@ -389,7 +379,7 @@ export function ProfilesPage() {
                           onChange={(e) => {
                             const file = e.target.files?.[0]
                             if (file) handlePricebookImport(file)
-                            e.target.value = "" // Reset so same file can be re-imported
+                            e.target.value = ""
                           }}
                           disabled={importingPricebook}
                         />
@@ -400,7 +390,6 @@ export function ProfilesPage() {
                       </div>
                     </div>
 
-                    {/* Import results */}
                     {importResult && (
                       <div className={`text-sm p-3 rounded-md border ${importResult.errors.length > 0 ? "bg-amber-50 dark:bg-amber-950 border-amber-200 dark:border-amber-800" : "bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800"}`}>
                         <p>
@@ -416,7 +405,6 @@ export function ProfilesPage() {
                       </div>
                     )}
 
-                    {/* Parts table */}
                     {loadingParts ? (
                       <p className="text-sm text-muted-foreground">Loading parts...</p>
                     ) : vendorParts.length === 0 ? (
@@ -441,14 +429,14 @@ export function ProfilesPage() {
                                 <TableCell className="font-medium">{part.part_number}</TableCell>
                                 <TableCell className="text-muted-foreground">{part.description}</TableCell>
                                 <TableCell className="text-right">
-                                  {part.list_price != null ? `$${part.list_price.toFixed(2)}` : "—"}
+                                  {part.list_price != null ? `$${part.list_price.toFixed(2)}` : EMPTY_VALUE}
                                 </TableCell>
                                 <TableCell className="text-right">
                                   {part.discount_percent != null
                                     ? `${part.discount_percent}%`
                                     : viewingProfile.default_discount_percent
                                       ? <span className="text-muted-foreground">{viewingProfile.default_discount_percent}% (default)</span>
-                                      : "—"}
+                                      : EMPTY_VALUE}
                                 </TableCell>
                                 <TableCell className="text-right font-medium">
                                   ${part.cost.toFixed(2)}
@@ -463,14 +451,12 @@ export function ProfilesPage() {
                 </>
               )}
 
-              {/* Default Discount display for vendors */}
               {viewingProfile.type === "vendor" && viewingProfile.default_discount_percent != null && (
                 <div className="text-sm text-muted-foreground">
                   Default Vendor Discount: <strong>{viewingProfile.default_discount_percent}%</strong>
                 </div>
               )}
 
-              {/* Close button */}
               <div className="flex justify-end pt-4">
                 <Button variant="outline" onClick={() => setViewingProfile(null)}>
                   Close
@@ -480,6 +466,98 @@ export function ProfilesPage() {
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  )
+}
+
+interface ProfileTableProps {
+  profiles: Profile[]
+  emptyMessage: string
+  onRowClick: (profile: Profile) => void
+  onEdit: (e: React.MouseEvent, profile: Profile) => void
+  onDelete: (e: React.MouseEvent, id: number) => void
+}
+
+function ProfileTable({ profiles, emptyMessage, onRowClick, onEdit, onDelete }: ProfileTableProps) {
+  return (
+    <div className="bg-card rounded-lg border shadow-sm">
+      {profiles.length === 0 ? (
+        <div className="p-6 text-center text-muted-foreground text-sm">{emptyMessage}</div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Address</TableHead>
+              <TableHead>Contacts</TableHead>
+              <TableHead>Phone</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {profiles.map((profile) => {
+              const phone = getPrimaryPhone(profile)
+              return (
+                <TableRow
+                  key={profile.id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => onRowClick(profile)}
+                >
+                  <TableCell className="font-medium">{profile.name}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <div className="text-sm">{profile.address || EMPTY_VALUE}</div>
+                    {profile.postal_code && (
+                      <div className="text-xs">{profile.postal_code}</div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <div className="text-sm">
+                      {profile.contacts.length} contact{profile.contacts.length !== 1 ? 's' : ''}
+                    </div>
+                    {profile.contacts.length > 0 && (
+                      <div className="text-xs text-muted-foreground">
+                        {profile.contacts[0].name}
+                        {profile.contacts.length > 1 && ` +${profile.contacts.length - 1} more`}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {phone ? (
+                      <a
+                        href={`tel:${phone}`}
+                        className="text-blue-600 hover:underline flex items-center gap-1 text-sm"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Phone className="h-3 w-3" />
+                        {phone}
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">{EMPTY_VALUE}</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right space-x-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => onEdit(e, profile)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => onDelete(e, profile.id)}
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      )}
     </div>
   )
 }
