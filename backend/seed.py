@@ -75,16 +75,24 @@ def seed_system_items(db: Session) -> None:
     Seed system miscellaneous items and company settings if they don't exist.
     Called at application startup.
     """
-    for item_data in SYSTEM_MISC_ITEMS:
-        # Check if item already exists by description
-        existing = db.query(Miscellaneous).filter(
-            Miscellaneous.description == item_data["description"],
-            Miscellaneous.is_system_item == True
-        ).first()
+    # Fast path: if the count matches what we expect to seed, nothing to do.
+    # Avoids N filter().first() queries on every cold start (× every worker).
+    expected_count = len(SYSTEM_MISC_ITEMS)
+    actual_count = db.query(Miscellaneous).filter(
+        Miscellaneous.is_system_item == True
+    ).count()
 
-        if not existing:
-            db_item = Miscellaneous(**item_data)
-            db.add(db_item)
+    if actual_count < expected_count:
+        # Some (or all) system items are missing — fetch existing descriptions
+        # in a single query, then only insert what's not already there.
+        existing_descriptions = {
+            row[0] for row in db.query(Miscellaneous.description).filter(
+                Miscellaneous.is_system_item == True
+            ).all()
+        }
+        for item_data in SYSTEM_MISC_ITEMS:
+            if item_data["description"] not in existing_descriptions:
+                db.add(Miscellaneous(**item_data))
 
     # Seed company settings (singleton)
     existing_settings = db.query(CompanySettings).first()

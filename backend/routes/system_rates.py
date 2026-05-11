@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -10,6 +10,8 @@ from schemas import (
 )
 
 router = APIRouter(prefix="/system-rates", tags=["system-rates"])
+
+_CACHE_CONTROL = "private, max-age=60"
 
 
 def _sync_misc_shadow(db: Session, system_rate: SystemRate) -> None:
@@ -36,7 +38,7 @@ def _sync_misc_shadow(db: Session, system_rate: SystemRate) -> None:
 # ===== Parking =====
 
 @router.get("/parking", response_model=SystemRateSchema)
-def get_parking_rate(db: Session = Depends(get_db)):
+def get_parking_rate(response: Response, db: Session = Depends(get_db)):
     """Get the parking system rate."""
     rate = db.query(SystemRate).filter(
         SystemRate.rate_type == "parking",
@@ -44,6 +46,7 @@ def get_parking_rate(db: Session = Depends(get_db)):
     ).first()
     if not rate:
         raise HTTPException(status_code=404, detail="Parking rate not found")
+    response.headers["Cache-Control"] = _CACHE_CONTROL
     return rate
 
 
@@ -73,8 +76,9 @@ def update_parking_rate(data: SystemRateUpdate, db: Session = Depends(get_db)):
 # ===== Travel Distance =====
 
 @router.get("/travel-distance", response_model=List[SystemRateSchema])
-def get_travel_distance_tiers(db: Session = Depends(get_db)):
+def get_travel_distance_tiers(response: Response, db: Session = Depends(get_db)):
     """Get all active travel distance tiers, ordered by sort_order."""
+    response.headers["Cache-Control"] = _CACHE_CONTROL
     return db.query(SystemRate).filter(
         SystemRate.rate_type == "travel_distance",
         SystemRate.is_active == True,
@@ -146,11 +150,12 @@ def delete_travel_distance_tier(rate_id: int, db: Session = Depends(get_db)):
 # ===== PMS Default =====
 
 @router.get("/pms-default")
-def get_pms_default(db: Session = Depends(get_db)):
+def get_pms_default(response: Response, db: Session = Depends(get_db)):
     """Get the default PMS percentage."""
     settings = db.query(CompanySettings).first()
     if not settings:
         raise HTTPException(status_code=404, detail="Company settings not found")
+    response.headers["Cache-Control"] = _CACHE_CONTROL
     return {"default_pms_percent": settings.default_pms_percent}
 
 

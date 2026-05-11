@@ -45,7 +45,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-test.txt
 
-      - name: Validate app startup (runs migrations + imports)
+      - name: Apply migrations (app no longer migrates on boot by default)
+        run: alembic upgrade head
+
+      - name: Validate app startup (imports + seed)
         run: python -c "from main import app; print('App startup OK')"
 
       - name: Run tests

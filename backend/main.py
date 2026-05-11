@@ -16,35 +16,37 @@ from seed import seed_system_items
 
 
 def run_migrations():
-    """Run Alembic migrations on startup.
+    """Run Alembic migrations on startup, gated by ALEMBIC_AUTO_UPGRADE=1.
 
-    Replaces Railway's unreliable releaseCommand. The web process has
-    guaranteed database access, so running migrations here is reliable.
-    Safe for single-instance test environments (no worker race condition).
+    Gating rationale: with multiple Gunicorn workers, this runs once per
+    worker on cold start — which loads alembic, inspects the schema, and
+    optionally runs `upgrade head`. For RAM and cold-start cost, we skip
+    all of that unless the operator opts in by setting ALEMBIC_AUTO_UPGRADE=1.
+    Schema changes should be triggered explicitly (set the env var for the
+    schema-change deploy, or run `railway run alembic upgrade head` manually).
 
-    Handles legacy databases that predate the migration system by
-    auto-stamping to the latest revision when tables exist but
-    alembic_version does not.
+    Legacy-stamp self-healing is preserved when the gate is open: if app
+    tables exist but alembic_version doesn't, we stamp instead of upgrading.
     """
-    from sqlalchemy import text, inspect
+    if os.getenv("ALEMBIC_AUTO_UPGRADE") != "1":
+        print("[STARTUP] Skipping migrations (set ALEMBIC_AUTO_UPGRADE=1 to enable)")
+        return
+
+    from sqlalchemy import inspect
     from alembic.config import Config
     from alembic import command
 
     alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "alembic.ini"))
 
-    # Detect legacy database: tables exist but no alembic_version tracking
     inspector = inspect(engine)
     tables = inspector.get_table_names()
     has_app_tables = "quotes" in tables or "profiles" in tables
     has_alembic = "alembic_version" in tables
 
     if has_app_tables and not has_alembic:
-        # Legacy deploy: stamp to latest revision so Alembic knows the
-        # current state, then only future migrations will run.
         command.stamp(alembic_cfg, "head")
         print("[STARTUP] Legacy database detected — stamped alembic_version to head")
     else:
-        # Normal path: run any pending migrations
         command.upgrade(alembic_cfg, "head")
         print("[STARTUP] Alembic migrations applied")
 
