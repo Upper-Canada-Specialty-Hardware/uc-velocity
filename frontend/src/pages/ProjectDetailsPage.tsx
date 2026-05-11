@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { StatusBadge } from "@/components/ui/status-badge"
+import { formatDate } from "@/lib/format"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -496,7 +497,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
               {project.ucsh_project_number && (
                 <span>UCSH: {project.ucsh_project_number}</span>
               )}
-              <span>Created: {new Date(project.created_on).toLocaleDateString()}</span>
+              <span>Created: {formatDate(project.created_on)}</span>
             </div>
             <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
               <span className="flex items-center gap-1">
@@ -517,9 +518,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
               )}
             </div>
           </div>
-          <Badge className="bg-green-500/10 text-green-600 border-green-500/20">
-            {project.status}
-          </Badge>
+          <StatusBadge status={project.status} />
         </div>
       </div>
 
@@ -829,7 +828,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
               {project.quotes.map((q) => (
                 <CommandItem
                   key={`q-${q.id}`}
-                  value={`quote ${q.quote_number} ${q.status} ${new Date(q.created_at).toLocaleDateString()}`}
+                  value={`quote ${q.quote_number} ${q.status} ${formatDate(q.created_at)}`}
                   onSelect={() => {
                     setCmdOpen(false)
                     openDoc("quote", q.id)
@@ -837,7 +836,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                 >
                   <FileText className="h-4 w-4" />
                   <span className="flex-1">{q.quote_number}</span>
-                  <Badge variant="secondary" className="text-[10px]">{q.status}</Badge>
+                  <StatusBadge status={q.status} className="text-[10px]" />
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -873,7 +872,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                 >
                   <Receipt className="h-4 w-4" />
                   <span className="flex-1">Invoice {inv.id} - {inv.quoteNumber}</span>
-                  <Badge variant="secondary" className="text-[10px]">{inv.status}</Badge>
+                  <StatusBadge status={inv.status} className="text-[10px]" />
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -917,20 +916,10 @@ function QuoteRow({ quote, isSelected, isHighlighted, onSelect, onDelete }: Quot
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium flex items-center gap-2">
           <span className="truncate">{quote.quote_number}</span>
-          <Badge
-            variant="secondary"
-            className={`text-[10px] px-1.5 py-0 ${
-              quote.status === "Draft" ? "bg-gray-100 text-gray-600" :
-              quote.status === "Work Order" ? "bg-blue-100 text-blue-600" :
-              quote.status === "Invoiced" ? "bg-amber-100 text-amber-600" :
-              "bg-green-100 text-green-600"
-            }`}
-          >
-            {quote.status}
-          </Badge>
+          <StatusBadge status={quote.status} className="text-[10px] px-1.5 py-0" />
         </div>
         <div className="text-xs text-muted-foreground">
-          {new Date(quote.created_at).toLocaleDateString()}
+          {formatDate(quote.created_at)}
         </div>
       </div>
       <Button
@@ -1003,21 +992,10 @@ function InvoiceRow({ invoice, isSelected, isHighlighted, onSelect }: InvoiceRow
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium flex items-center gap-2">
           <span className="truncate">Invoice {invoice.id} - {invoice.quoteNumber}</span>
-          <Badge
-            variant={
-              invoice.status === "Paid"
-                ? "default"
-                : invoice.status === "Voided"
-                ? "destructive"
-                : "secondary"
-            }
-            className="text-[10px] px-1.5 py-0"
-          >
-            {invoice.status}
-          </Badge>
+          <StatusBadge status={invoice.status} className="text-[10px] px-1.5 py-0" />
         </div>
         <div className="text-xs text-muted-foreground">
-          {new Date(invoice.created_at).toLocaleDateString()}
+          {formatDate(invoice.created_at)}
         </div>
       </div>
     </div>

@@ -56,6 +56,8 @@ import type {
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
 import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown } from "lucide-react"
+import { StatusBadge } from "@/components/ui/status-badge"
+import { formatDate } from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
 import { QuoteAuditTrail } from "./QuoteAuditTrail"
 import { PartForm } from "@/components/forms/PartForm"
@@ -2683,21 +2685,11 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
         <div>
           <h2 className="text-xl font-semibold">{quote.quote_number}</h2>
           <p className="text-sm text-muted-foreground">
-            Created: {new Date(quote.created_at).toLocaleDateString()}
+            Created: {formatDate(quote.created_at)}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Badge
-            variant={quote.status === "Closed" ? "default" : "secondary"}
-            className={
-              quote.status === "Draft" ? "bg-gray-100 text-gray-700 border-gray-300" :
-              quote.status === "Work Order" ? "bg-blue-100 text-blue-700 border-blue-300" :
-              quote.status === "Invoiced" ? "bg-amber-100 text-amber-700 border-amber-300" :
-              "bg-green-100 text-green-700 border-green-300"
-            }
-          >
-            {quote.status}
-          </Badge>
+          <StatusBadge status={quote.status} />
         </div>
       </div>
 

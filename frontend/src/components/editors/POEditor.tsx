@@ -60,6 +60,8 @@ import {
   Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy,
   X, GitCommit, Eye, AlertTriangle, Check, Calendar, Loader2, Hash, Printer
 } from "lucide-react"
+import { StatusBadge } from "@/components/ui/status-badge"
+import { formatDate } from "@/lib/format"
 import { PartForm } from "@/components/forms/PartForm"
 import { POAuditTrail } from "./POAuditTrail"
 
@@ -1218,7 +1220,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
             <span>Vendor: {po.vendor.name}</span>
           </div>
           <p className="text-sm text-muted-foreground">
-            Created: {new Date(po.created_at).toLocaleDateString()}
+            Created: {formatDate(po.created_at)}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1235,9 +1237,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
               </SelectContent>
             </Select>
           ) : (
-            <Badge variant="outline" className={`px-3 py-1 ${getStatusBadgeColor(po.status)}`}>
-              {po.status}
-            </Badge>
+            <StatusBadge status={po.status} className="px-3 py-1" />
           )}
         </div>
       </div>
@@ -1404,7 +1404,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                 <div className="flex items-center gap-2">
                   {po.expected_delivery_date ? (
                     <span className="text-sm font-medium">
-                      {new Date(po.expected_delivery_date).toLocaleDateString()}
+                      {formatDate(po.expected_delivery_date)}
                     </span>
                   ) : (
                     <span className="text-sm text-muted-foreground" title="Click pencil to set">—</span>

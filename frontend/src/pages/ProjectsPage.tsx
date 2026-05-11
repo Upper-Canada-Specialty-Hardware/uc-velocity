@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { StatusBadge } from "@/components/ui/status-badge"
+import { formatDate, EMPTY_VALUE } from "@/lib/format"
 import {
   Dialog,
   DialogContent,
@@ -156,19 +157,6 @@ export function ProjectsPage({
     setDialogOpen(open)
   }
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "active":
-        return <Badge className="bg-green-500/10 text-green-600 border-green-500/20">Active</Badge>
-      case "completed":
-        return <Badge variant="secondary">Completed</Badge>
-      case "on_hold":
-        return <Badge variant="outline">On Hold</Badge>
-      default:
-        return <Badge variant="outline">{status}</Badge>
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -211,10 +199,10 @@ export function ProjectsPage({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>UCA #</TableHead>
-                <TableHead>UCSH #</TableHead>
                 <TableHead>Project Name</TableHead>
                 <TableHead>Customer</TableHead>
+                <TableHead>UCA #</TableHead>
+                <TableHead>UCSH #</TableHead>
                 <TableHead>Project Lead</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Created On</TableHead>
@@ -230,8 +218,6 @@ export function ProjectsPage({
                       className="cursor-pointer hover:bg-muted/50"
                       onClick={() => onSelectProject(project.id)}
                     >
-                      <TableCell className="font-mono text-sm">{project.uca_project_number}</TableCell>
-                      <TableCell className="text-muted-foreground">{project.ucsh_project_number || "-"}</TableCell>
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2">
                           <FolderOpen className="h-4 w-4 text-muted-foreground" />
@@ -239,10 +225,12 @@ export function ProjectsPage({
                         </div>
                       </TableCell>
                       <TableCell>{project.customer_name}</TableCell>
-                      <TableCell className="text-muted-foreground">{project.project_lead || "-"}</TableCell>
-                      <TableCell>{getStatusBadge(project.status)}</TableCell>
+                      <TableCell className="font-mono text-sm">{project.uca_project_number}</TableCell>
+                      <TableCell className="text-muted-foreground">{project.ucsh_project_number || EMPTY_VALUE}</TableCell>
+                      <TableCell className="text-muted-foreground">{project.project_lead || EMPTY_VALUE}</TableCell>
+                      <TableCell><StatusBadge status={project.status} /></TableCell>
                       <TableCell className="text-muted-foreground">
-                        {new Date(project.created_on).toLocaleDateString()}
+                        {formatDate(project.created_on)}
                       </TableCell>
                       <TableCell className="text-right space-x-1">
                         <Button

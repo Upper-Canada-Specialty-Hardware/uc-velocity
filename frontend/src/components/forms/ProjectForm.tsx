@@ -13,6 +13,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select"
 import type { SearchableSelectOption } from "@/components/ui/searchable-select"
 import { api } from "@/api/client"
 import type { Profile, Project, ProjectCreate, Contact } from "@/types"
+import { formatDate } from "@/lib/format"
 import { ProfileForm } from "./ProfileForm"
 import { ContactForm } from "./ContactForm"
 
@@ -215,7 +216,7 @@ export function ProjectForm({ project, onSuccess, onCancel }: ProjectFormProps) 
           <div className="space-y-2">
             <Label>Created On</Label>
             <Input
-              value={new Date(project.created_on).toLocaleDateString()}
+              value={formatDate(project.created_on)}
               disabled
               className="bg-muted"
             />

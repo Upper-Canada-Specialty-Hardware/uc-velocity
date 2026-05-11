@@ -10,6 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { AlertTriangle, History, FileX2 } from "lucide-react"
 import type { RevertPreview, PORevertPreview } from "@/types"
+import { formatDate } from "@/lib/format"
 
 type RevertPreviewUnion = RevertPreview | PORevertPreview
 
@@ -102,7 +103,7 @@ export function RevertConfirmDialog({
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-muted-foreground">
-                            {new Date(invoice.created_at).toLocaleDateString()}
+                            {formatDate(invoice.created_at)}
                           </span>
                           {getInvoiceStatusBadge(invoice.status)}
                         </div>
@@ -139,7 +140,7 @@ export function RevertConfirmDialog({
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-muted-foreground">
-                            {new Date(receiving.received_date).toLocaleDateString()}
+                            {formatDate(receiving.received_date)}
                           </span>
                           {receiving.voided_at ? (
                             <Badge variant="outline" className="text-muted-foreground">Voided</Badge>
