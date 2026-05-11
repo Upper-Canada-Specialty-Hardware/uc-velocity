@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react"
+import { Fragment, useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -22,7 +22,7 @@ import { ProjectForm } from "@/components/forms/ProjectForm"
 import type { ProjectFormInput } from "@/components/forms/ProjectForm"
 import { api } from "@/api/client"
 import type { ProjectListView, ProjectSearchResult } from "@/types"
-import { Plus, Trash2, Pencil, FolderOpen, Search, FileText, ShoppingCart } from "lucide-react"
+import { Plus, Trash2, Pencil, FolderOpen, Search, FileText, ShoppingCart, Loader2, ChevronUp, ChevronDown, ArrowUpDown } from "lucide-react"
 
 interface ProjectsPageProps {
   onSelectProject: (projectId: number) => void
@@ -59,13 +59,52 @@ export function ProjectsPage({
   const [baseProjects, setBaseProjects] = useState<ProjectSearchResult[]>([])
   const [searchResults, setSearchResults] = useState<ProjectSearchResult[] | null>(null)
   const [loading, setLoading] = useState(true)
+  const [searchLoading, setSearchLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [debouncedTerm, setDebouncedTerm] = useState(searchTerm)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<ProjectFormInput | null>(null)
 
-  // When a search is active, show search results; otherwise show the full list.
-  const displayProjects = searchResults ?? baseProjects
+  // UX-4 filter controls
+  const [showArchived, setShowArchived] = useState(false)
+  type SortColumn = "name" | "customer_name" | "uca_project_number" | "ucsh_project_number" | "project_lead" | "status" | "created_on"
+  const [sortBy, setSortBy] = useState<SortColumn>("uca_project_number")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
+
+  // Apply archived filter + sort to the raw results before render.
+  const rawProjects = searchResults ?? baseProjects
+  const archivedCount = useMemo(
+    () => rawProjects.filter((p) => p.status.toLowerCase() === "archived").length,
+    [rawProjects]
+  )
+  const displayProjects = useMemo(() => {
+    const filtered = showArchived
+      ? rawProjects
+      : rawProjects.filter((p) => p.status.toLowerCase() !== "archived")
+    const sorted = [...filtered].sort((a, b) => {
+      const av = (a[sortBy] ?? "") as string
+      const bv = (b[sortBy] ?? "") as string
+      const cmp = av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" })
+      return sortDir === "asc" ? cmp : -cmp
+    })
+    return sorted
+  }, [rawProjects, showArchived, sortBy, sortDir])
+
+  const toggleSort = (col: SortColumn) => {
+    if (sortBy === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"))
+    } else {
+      setSortBy(col)
+      setSortDir(col === "uca_project_number" ? "desc" : "asc")
+    }
+  }
+
+  const renderSortIcon = (col: SortColumn) => {
+    if (sortBy !== col) return <ArrowUpDown className="h-3 w-3 opacity-40" />
+    return sortDir === "asc"
+      ? <ChevronUp className="h-3 w-3" />
+      : <ChevronDown className="h-3 w-3" />
+  }
 
   const fetchBaseList = async () => {
     setLoading(true)
@@ -90,22 +129,37 @@ export function ProjectsPage({
     return () => clearTimeout(handle)
   }, [searchTerm])
 
+  // Reflect the debounce-to-fetch gap with a spinner inside the search input.
+  useEffect(() => {
+    if (searchTerm.trim() && searchTerm !== debouncedTerm) {
+      setSearchLoading(true)
+    }
+  }, [searchTerm, debouncedTerm])
+
   // Run cross-entity search when the debounced term changes. Use a cancelled flag
   // so a stale response from an earlier query can't overwrite a newer one.
   useEffect(() => {
     const term = debouncedTerm.trim()
     if (!term) {
       setSearchResults(null)
+      setSearchLoading(false)
       return
     }
     let cancelled = false
+    setSearchLoading(true)
     api.projects
       .search(term)
       .then((data) => {
-        if (!cancelled) setSearchResults(data)
+        if (!cancelled) {
+          setSearchResults(data)
+          setSearchLoading(false)
+        }
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Search failed")
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Search failed")
+          setSearchLoading(false)
+        }
       })
     return () => {
       cancelled = true
@@ -176,14 +230,27 @@ export function ProjectsPage({
         </div>
       )}
 
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search projects, POs, quotes, vendors..."
-          value={searchTerm}
-          onChange={(e) => onSearchTermChange(e.target.value)}
-          className="pl-9"
-        />
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative max-w-md flex-1 min-w-[260px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search projects, POs, quotes, vendors..."
+            value={searchTerm}
+            onChange={(e) => onSearchTermChange(e.target.value)}
+            className="pl-9 pr-9"
+          />
+          {searchLoading && (
+            <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" />
+          )}
+        </div>
+        <Button
+          variant={showArchived ? "secondary" : "outline"}
+          size="sm"
+          onClick={() => setShowArchived((v) => !v)}
+          className="gap-2"
+        >
+          {showArchived ? "Hide archived" : `Show archived (${archivedCount})`}
+        </Button>
       </div>
 
       <div className="bg-card rounded-lg border shadow-sm">
@@ -199,13 +266,41 @@ export function ProjectsPage({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Project Name</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead>UCA #</TableHead>
-                <TableHead>UCSH #</TableHead>
-                <TableHead>Project Lead</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created On</TableHead>
+                <TableHead>
+                  <button type="button" onClick={() => toggleSort("name")} className="inline-flex items-center gap-1 hover:text-foreground">
+                    Project Name {renderSortIcon("name")}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button type="button" onClick={() => toggleSort("customer_name")} className="inline-flex items-center gap-1 hover:text-foreground">
+                    Customer {renderSortIcon("customer_name")}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button type="button" onClick={() => toggleSort("uca_project_number")} className="inline-flex items-center gap-1 hover:text-foreground">
+                    UCA # {renderSortIcon("uca_project_number")}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button type="button" onClick={() => toggleSort("ucsh_project_number")} className="inline-flex items-center gap-1 hover:text-foreground">
+                    UCSH # {renderSortIcon("ucsh_project_number")}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button type="button" onClick={() => toggleSort("project_lead")} className="inline-flex items-center gap-1 hover:text-foreground">
+                    Project Lead {renderSortIcon("project_lead")}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button type="button" onClick={() => toggleSort("status")} className="inline-flex items-center gap-1 hover:text-foreground">
+                    Status {renderSortIcon("status")}
+                  </button>
+                </TableHead>
+                <TableHead>
+                  <button type="button" onClick={() => toggleSort("created_on")} className="inline-flex items-center gap-1 hover:text-foreground">
+                    Created On {renderSortIcon("created_on")}
+                  </button>
+                </TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
