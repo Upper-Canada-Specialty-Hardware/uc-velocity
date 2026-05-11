@@ -63,12 +63,14 @@ export const api = {
   // ===== Parts =====
   parts: {
     // Paginated list for list views. Returns {items, total, limit, offset}.
-    list: (params: ListParams = {}) =>
+    // Pass `vendor_id` to filter server-side to parts linked to that vendor.
+    list: (params: ListParams & { vendor_id?: number } = {}) =>
       request<Paginated<Part>>(`/parts/${buildQuery(params)}`),
     // Convenience: unbounded fetch (limit=0) returning just items.
     // Used by autocomplete/dropdown loaders that need every row.
-    getAll: () =>
-      request<Paginated<Part>>('/parts/?limit=0').then(r => r.items),
+    // Pass `{ vendor_id }` to filter server-side.
+    getAll: (params: { vendor_id?: number } = {}) =>
+      request<Paginated<Part>>(`/parts/${buildQuery({ ...params, limit: 0 })}`).then(r => r.items),
     get: (id: number) => request<Part>(`/parts/${id}`),
     create: (data: PartCreate) =>
       request<Part>('/parts/', { method: 'POST', body: JSON.stringify(data) }),

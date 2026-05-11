@@ -293,9 +293,14 @@ export interface ProjectUpdate {
   project_lead?: string | null;
 }
 
+// Lighter shapes returned by GET /projects/{id} — no nested line items.
+// Open a specific quote/PO via its own endpoint to load its line items.
+export type QuoteSummary = Omit<Quote, 'line_items' | 'cost_code'>;
+export type POSummary = Omit<PurchaseOrder, 'line_items' | 'cost_code'>;
+
 export interface ProjectFull extends Project {
-  quotes: Quote[];
-  purchase_orders: PurchaseOrder[];
+  quotes: QuoteSummary[];
+  purchase_orders: POSummary[];
 }
 
 // ===== Projects List View (lightweight, aggregated) =====
