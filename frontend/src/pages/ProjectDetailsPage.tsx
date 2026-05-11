@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -100,7 +101,6 @@ type RecentDoc = {
   ts: number
 }
 
-const TAB_STORAGE_KEY = (projectId: number) => `ucv:projectTab:${projectId}`
 const RECENT_DOCS_KEY = (projectId: number) => `ucv:recentDocs:${projectId}`
 
 function tabForType(t: DocumentType): TabKey {
@@ -109,15 +109,8 @@ function tabForType(t: DocumentType): TabKey {
   return "invoices"
 }
 
-function loadActiveTab(projectId: number, initialDoc: ProjectDetailsPageProps["initialDoc"]): TabKey {
-  if (initialDoc) return tabForType(initialDoc.type)
-  try {
-    const raw = localStorage.getItem(TAB_STORAGE_KEY(projectId))
-    if (raw === "quotes" || raw === "pos" || raw === "invoices") return raw
-  } catch {
-    // ignore
-  }
-  return "quotes"
+function isTabKey(value: string | null): value is TabKey {
+  return value === "quotes" || value === "pos" || value === "invoices"
 }
 
 function loadRecentDocs(projectId: number): RecentDoc[] {
@@ -133,17 +126,22 @@ function loadRecentDocs(projectId: number): RecentDoc[] {
 }
 
 export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDetailsPageProps) {
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [project, setProject] = useState<ProjectFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // Seed once from initialDoc on mount so deep-links from search open the right doc.
-  // Further navigation inside the page should not be overridden by prop changes.
   const [selectedDoc, setSelectedDoc] = useState<SelectedDocument>(() =>
     initialDoc ? { type: initialDoc.type, id: initialDoc.id } : null
   )
 
-  // Sidebar nav state
-  const [activeTab, setActiveTab] = useState<TabKey>(() => loadActiveTab(projectId, initialDoc))
+  // Sidebar nav state — tab lives in the URL search param ?tab= so it survives
+  // refresh and is part of every shareable link.
+  const urlTab = searchParams.get("tab")
+  const initialTab: TabKey = isTabKey(urlTab)
+    ? urlTab
+    : initialDoc ? tabForType(initialDoc.type) : "quotes"
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab)
   const [filter, setFilter] = useState("")
   const [debouncedFilter, setDebouncedFilter] = useState("")
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -254,14 +252,24 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
     setHighlightedIndex(0)
   }, [activeTab, debouncedFilter])
 
-  // Persist active tab per project
+  // Sync active tab to the URL search param (?tab=) so it survives refresh
+  // and forms part of every shareable link.
   useEffect(() => {
-    try {
-      localStorage.setItem(TAB_STORAGE_KEY(projectId), activeTab)
-    } catch {
-      // ignore quota / disabled storage
+    const current = searchParams.get("tab")
+    if (current !== activeTab) {
+      const next = new URLSearchParams(searchParams)
+      next.set("tab", activeTab)
+      setSearchParams(next, { replace: true })
     }
-  }, [projectId, activeTab])
+  }, [activeTab, searchParams, setSearchParams])
+
+  // When the URL changes (browser back/forward, deep-link), reflect the
+  // incoming initialDoc into local selection so the editor opens the new doc.
+  useEffect(() => {
+    if (initialDoc) {
+      setSelectedDoc({ type: initialDoc.type, id: initialDoc.id })
+    }
+  }, [initialDoc?.type, initialDoc?.id])
 
   // Global Cmd/Ctrl+K opens command palette
   useEffect(() => {
@@ -312,13 +320,17 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
     })
   }, [selectedDoc, project, invoices, projectId])
 
-  // Open a doc through the unsaved-changes guard; ensures the right tab is active.
+  // Open a doc through the unsaved-changes guard; ensures the right tab is active
+  // and the URL reflects the selected doc so back/forward and bookmarks work.
   const openDoc = useCallback((type: DocumentType, id: number) => {
     guardedNavigate(() => {
-      setActiveTab(tabForType(type))
+      const tab = tabForType(type)
+      setActiveTab(tab)
       setSelectedDoc({ type, id })
+      const seg = type === "quote" ? "quotes" : type === "po" ? "pos" : "invoices"
+      navigate(`/projects/${projectId}/${seg}/${id}?tab=${tab}`)
     })
-  }, [guardedNavigate])
+  }, [guardedNavigate, navigate, projectId])
 
   const handleCreateQuote = async () => {
     try {
@@ -327,6 +339,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       await fetchProject()
       setActiveTab("quotes")
       setSelectedDoc({ type: "quote", id: quote.id })
+      navigate(`/projects/${projectId}/quotes/${quote.id}?tab=quotes`)
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to create quote")
     }
@@ -344,6 +357,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       await fetchProject()
       setActiveTab("pos")
       setSelectedDoc({ type: "po", id: po.id })
+      navigate(`/projects/${projectId}/pos/${po.id}?tab=pos`)
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to create purchase order")
     }
@@ -371,6 +385,8 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       }
       if (selectedDoc?.type === type && selectedDoc.id === id) {
         setSelectedDoc(null)
+        // Drop the doc segment from the URL — keep the active tab in the query string.
+        navigate(`/projects/${projectId}?tab=${activeTab}`)
       }
       fetchProject()
     } catch (err) {
