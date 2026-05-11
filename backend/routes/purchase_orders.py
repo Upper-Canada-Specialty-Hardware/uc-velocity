@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from typing import List, Optional
@@ -10,6 +10,7 @@ from models import (
     POReceiving, POReceivingLineItem, POSnapshot, POLineItemSnapshot, POStatus, CostCode
 )
 from schemas import (
+    Paginated,
     PurchaseOrderCreate, PurchaseOrderUpdate, PurchaseOrder as PurchaseOrderSchema,
     POLineItemCreate, POLineItem as POLineItemSchema,
     POReceiving as POReceivingSchema, POReceivingCreate, POReceivingLineItemCreate,
@@ -17,6 +18,9 @@ from schemas import (
     POSnapshot as POSnapshotSchema, POLineItemSnapshot as POLineItemSnapshotSchema,
     PORevertPreview, POCommitEditsRequest, POCommitEditsResponse, StagedPOLineItemChange
 )
+
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 10000
 
 
 def create_po_snapshot(
@@ -270,22 +274,33 @@ def recompute_line_item_aggregates(db: Session, line_item: POLineItem) -> None:
 router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
 
 
-@router.get("/", response_model=List[PurchaseOrderSchema])
-def get_all_purchase_orders(skip: int = 0, limit: int = None, db: Session = Depends(get_db)):  # limit=None until pagination is implemented
-    """Get all purchase orders."""
-    pos = (
-        db.query(PurchaseOrder)
-        .options(
-            joinedload(PurchaseOrder.vendor),
-            joinedload(PurchaseOrder.line_items),
-            joinedload(PurchaseOrder.project),
-            joinedload(PurchaseOrder.cost_code)
-        )
-        .offset(skip)
-        .limit(limit)
-        .all()
+@router.get("/", response_model=Paginated[PurchaseOrderSchema])
+def get_all_purchase_orders(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(DEFAULT_LIMIT, ge=0, le=MAX_LIMIT),
+    skip: int = Query(0, ge=0, deprecated=True, description="Deprecated alias for offset"),
+    db: Session = Depends(get_db),
+):
+    """Paginated list of purchase orders.
+
+    Pass `limit=0` to fetch every row.
+    """
+    effective_offset = offset or skip
+    base = db.query(PurchaseOrder).options(
+        joinedload(PurchaseOrder.vendor),
+        joinedload(PurchaseOrder.line_items),
+        joinedload(PurchaseOrder.project),
+        joinedload(PurchaseOrder.cost_code),
     )
-    return [populate_po_number(po, po.project.uca_project_number) for po in pos]
+    total = base.with_entities(PurchaseOrder.id).count()
+    q = base.order_by(PurchaseOrder.id).offset(effective_offset)
+    if limit > 0:
+        q = q.limit(limit)
+    pos = q.all()
+    items = [populate_po_number(po, po.project.uca_project_number) for po in pos]
+    return Paginated[PurchaseOrderSchema](
+        items=items, total=total, limit=limit, offset=effective_offset
+    )
 
 
 @router.get("/{po_id}", response_model=PurchaseOrderSchema)

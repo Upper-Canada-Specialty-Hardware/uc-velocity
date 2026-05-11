@@ -96,7 +96,7 @@ class Part(Base):
     cost = Column(Float, nullable=False)
     markup_percent = Column(Float, default=0.0)
     category_id = Column(Integer, ForeignKey('categories.id'))
-    vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=True)
+    vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=True, index=True)
     list_price = Column(Float, nullable=True)
     discount_percent = Column(Float, nullable=True)  # Per-part discount override (nullable)
 
@@ -150,7 +150,7 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    customer_id = Column(Integer, ForeignKey('profiles.id'), nullable=False)
+    customer_id = Column(Integer, ForeignKey('profiles.id'), nullable=False, index=True)
     created_on = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="active")
     ucsh_project_number = Column(String, nullable=True)
@@ -170,7 +170,7 @@ class Quote(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False, index=True)
     quote_sequence = Column(Integer, nullable=False)  # Per-project sequence number (1, 2, 3...)
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="Draft")  # "Draft", "Work Order", "Invoiced", "Closed" — computed by system
@@ -195,7 +195,7 @@ class QuoteLineItem(Base):
     __tablename__ = "quote_line_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    quote_id = Column(Integer, ForeignKey('quotes.id'), nullable=False)
+    quote_id = Column(Integer, ForeignKey('quotes.id'), nullable=False, index=True)
     item_type = Column(String, nullable=False)  # "labor", "part", "misc"
     labor_id = Column(Integer, ForeignKey('labor.id'), nullable=True)
     part_id = Column(Integer, ForeignKey('parts.id'), nullable=True)
@@ -225,8 +225,8 @@ class PurchaseOrder(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False)
-    vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=False)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False, index=True)
+    vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     po_sequence = Column(Integer, nullable=False)
     current_version = Column(Integer, default=0)
@@ -249,7 +249,7 @@ class POLineItem(Base):
     __tablename__ = "po_line_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    purchase_order_id = Column(Integer, ForeignKey('purchase_orders.id'), nullable=False)
+    purchase_order_id = Column(Integer, ForeignKey('purchase_orders.id'), nullable=False, index=True)
     item_type = Column(String, nullable=False)  # "part" or "misc" (NO labor for POs)
     part_id = Column(Integer, ForeignKey('parts.id'), nullable=True)
     description = Column(String)  # For misc items or override

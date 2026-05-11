@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from typing import List, Optional
@@ -11,6 +11,7 @@ from models import (
 from datetime import datetime
 
 from schemas import (
+    Paginated,
     QuoteCreate, QuoteUpdate, Quote as QuoteSchema,
     QuoteLineItemCreate, QuoteLineItemUpdate, QuoteLineItem as QuoteLineItemSchema,
     QuoteSnapshot as QuoteSnapshotSchema,
@@ -18,6 +19,9 @@ from schemas import (
     RevertPreview, MarkupControlToggleRequest, MarkupControlToggleResponse,
     CommitEditsRequest, CommitEditsResponse
 )
+
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 10000
 
 
 def create_snapshot(
@@ -276,22 +280,32 @@ def populate_quote_number(quote: Quote, uca_project_number: str) -> QuoteSchema:
 router = APIRouter(prefix="/quotes", tags=["quotes"])
 
 
-@router.get("/", response_model=List[QuoteSchema])
-def get_all_quotes(skip: int = 0, limit: int = None, db: Session = Depends(get_db)):  # limit=None until pagination is implemented
-    """Get all quotes."""
-    quotes = (
-        db.query(Quote)
-        .options(
-            joinedload(Quote.project),  # Need project for uca_project_number
-            joinedload(Quote.line_items),
-            joinedload(Quote.cost_code)
-        )
-        .offset(skip)
-        .limit(limit)
-        .all()
+@router.get("/", response_model=Paginated[QuoteSchema])
+def get_all_quotes(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(DEFAULT_LIMIT, ge=0, le=MAX_LIMIT),
+    skip: int = Query(0, ge=0, deprecated=True, description="Deprecated alias for offset"),
+    db: Session = Depends(get_db),
+):
+    """Paginated list of quotes.
+
+    Pass `limit=0` to fetch every row.
+    """
+    effective_offset = offset or skip
+    base = db.query(Quote).options(
+        joinedload(Quote.project),
+        joinedload(Quote.line_items),
+        joinedload(Quote.cost_code),
     )
-    # Return with computed quote_numbers
-    return [populate_quote_number(q, q.project.uca_project_number) for q in quotes]
+    total = base.with_entities(Quote.id).count()
+    q = base.order_by(Quote.id).offset(effective_offset)
+    if limit > 0:
+        q = q.limit(limit)
+    quotes = q.all()
+    items = [populate_quote_number(quote, quote.project.uca_project_number) for quote in quotes]
+    return Paginated[QuoteSchema](
+        items=items, total=total, limit=limit, offset=effective_offset
+    )
 
 
 @router.get("/{quote_id}", response_model=QuoteSchema)
