@@ -16,8 +16,15 @@ import type { Profile, Project, ProjectCreate, Contact } from "@/types"
 import { ProfileForm } from "./ProfileForm"
 import { ContactForm } from "./ContactForm"
 
+// Only the fields the form actually reads — lets us accept both a full Project
+// and the lighter ProjectListView shape (which omits the nested customer profile).
+export type ProjectFormInput = Pick<
+  Project,
+  "id" | "name" | "customer_id" | "status" | "ucsh_project_number" | "project_lead" | "uca_project_number" | "created_on"
+>
+
 interface ProjectFormProps {
-  project?: Project // If provided, we're editing; otherwise creating
+  project?: ProjectFormInput // If provided, we're editing; otherwise creating
   onSuccess?: () => void
   onCancel?: () => void
 }

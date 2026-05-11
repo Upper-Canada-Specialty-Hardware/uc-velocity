@@ -5,7 +5,7 @@ import type {
   CostCode, CostCodeCreate, CostCodeUpdate,
   Profile, ProfileCreate, ProfileUpdate, ProfileType,
   Contact, ContactCreate, ContactUpdate,
-  Project, ProjectCreate, ProjectFull,
+  Project, ProjectCreate, ProjectFull, ProjectListView, ProjectSearchResult,
   Quote, QuoteCreate, QuoteUpdate, QuoteLineItem, QuoteLineItemCreate, QuoteLineItemUpdate,
   PurchaseOrder, PurchaseOrderCreate, PurchaseOrderUpdate, POLineItem, POLineItemCreate,
   POReceiving, POReceivingCreate, POSnapshot, PORevertPreview,
@@ -97,6 +97,9 @@ export const api = {
   // ===== Projects =====
   projects: {
     getAll: () => request<Project[]>('/projects/'),
+    getListView: () => request<ProjectListView[]>('/projects/list-view'),
+    search: (q: string) =>
+      request<ProjectSearchResult[]>(`/projects/search?q=${encodeURIComponent(q)}`),
     get: (id: number) => request<ProjectFull>(`/projects/${id}`),
     create: (data: ProjectCreate) =>
       request<Project>('/projects/', { method: 'POST', body: JSON.stringify(data) }),

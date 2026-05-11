@@ -738,6 +738,39 @@ class ProjectFull(Project):
         from_attributes = True
 
 
+# ===== Project List View (lightweight, aggregated) =====
+class ProjectListView(BaseModel):
+    id: int
+    name: str
+    uca_project_number: str
+    ucsh_project_number: Optional[str] = None
+    customer_id: int
+    customer_name: str
+    project_lead: Optional[str] = None
+    status: str
+    created_on: datetime
+    quote_count: int = 0
+    po_count: int = 0
+    latest_quote_number: Optional[str] = None
+    latest_po_number: Optional[str] = None
+
+
+class MatchedQuoteRef(BaseModel):
+    id: int
+    quote_number: str
+
+
+class MatchedPORef(BaseModel):
+    id: int
+    po_number: str
+    vendor_name: str
+
+
+class ProjectSearchResult(ProjectListView):
+    matched_quotes: List[MatchedQuoteRef] = []
+    matched_pos: List[MatchedPORef] = []
+
+
 # ===== Invoice Line Item Schemas =====
 class InvoiceLineItemBase(BaseModel):
     quote_line_item_id: Optional[int] = None
