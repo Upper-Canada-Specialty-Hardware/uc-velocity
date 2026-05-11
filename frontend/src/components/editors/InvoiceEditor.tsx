@@ -20,8 +20,6 @@ import { Button } from "@/components/ui/button"
 import { api } from "@/api/client"
 import type { Invoice, Project, CompanySettings } from "@/types"
 import { Receipt, Package, Wrench, FileText, AlertTriangle, Printer, Loader2 } from "lucide-react"
-import { pdf } from '@react-pdf/renderer'
-import { InvoicePDF } from '@/components/pdf/InvoicePDF'
 
 interface InvoiceEditorProps {
   invoiceId: number
@@ -101,9 +99,11 @@ export function InvoiceEditor({ invoiceId, onUpdate }: InvoiceEditorProps) {
     if (!invoice) return
     setIsPrinting(true)
     try {
-      const [quote, companySettings] = await Promise.all([
+      const [quote, companySettings, { pdf }, { InvoicePDF }] = await Promise.all([
         api.quotes.get(invoice.quote_id),
         api.companySettings.get(),
+        import('@react-pdf/renderer'),
+        import('@/components/pdf/InvoicePDF'),
       ])
       const project = await api.projects.get(quote.project_id) as unknown as Project
       const blob = await pdf(

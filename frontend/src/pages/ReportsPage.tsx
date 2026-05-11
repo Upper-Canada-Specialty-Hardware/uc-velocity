@@ -4,9 +4,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { api } from '@/api/client'
-import { pdf } from '@react-pdf/renderer'
-import { InvoiceSummaryPDF } from '@/components/pdf/InvoiceSummaryPDF'
-import { generateBacklogExcel } from '@/lib/excel'
 import { formatCurrency } from '@/lib/pricing'
 import type { InvoiceSummaryItem, CompanySettings, BacklogQuoteItem } from '@/types'
 import { FileText, Download, Loader2, ChevronRight, ChevronDown, FileSpreadsheet } from 'lucide-react'
@@ -56,6 +53,10 @@ export function ReportsPage() {
 
     setLoading(true)
     try {
+      const [{ pdf }, { InvoiceSummaryPDF }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/components/pdf/InvoiceSummaryPDF'),
+      ])
       const blob = await pdf(
         <InvoiceSummaryPDF
           invoices={invoices}
@@ -82,6 +83,10 @@ export function ReportsPage() {
 
     setLoading(true)
     try {
+      const [{ pdf }, { InvoiceSummaryPDF }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/components/pdf/InvoiceSummaryPDF'),
+      ])
       const blob = await pdf(
         <InvoiceSummaryPDF
           invoices={invoices}
@@ -116,8 +121,9 @@ export function ReportsPage() {
     }
   }
 
-  const handleBacklogDownload = () => {
+  const handleBacklogDownload = async () => {
     if (!backlogData) return
+    const { generateBacklogExcel } = await import('@/lib/excel')
     generateBacklogExcel(backlogData)
   }
 
