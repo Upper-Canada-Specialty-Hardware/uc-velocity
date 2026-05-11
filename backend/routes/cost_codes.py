@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -10,19 +10,23 @@ from schemas import (
 
 router = APIRouter(prefix="/cost-codes", tags=["cost-codes"])
 
+_CACHE_CONTROL = "private, max-age=60"
+
 
 @router.get("/", response_model=List[CostCodeSchema])
-def get_all_cost_codes(db: Session = Depends(get_db)):
+def get_all_cost_codes(response: Response, db: Session = Depends(get_db)):
     """Get all cost codes, ordered by code."""
+    response.headers["Cache-Control"] = _CACHE_CONTROL
     return db.query(CostCode).order_by(CostCode.code).all()
 
 
 @router.get("/{cost_code_id}", response_model=CostCodeSchema)
-def get_cost_code(cost_code_id: int, db: Session = Depends(get_db)):
+def get_cost_code(cost_code_id: int, response: Response, db: Session = Depends(get_db)):
     """Get a single cost code."""
     cc = db.query(CostCode).filter(CostCode.id == cost_code_id).first()
     if not cc:
         raise HTTPException(status_code=404, detail="Cost code not found")
+    response.headers["Cache-Control"] = _CACHE_CONTROL
     return cc
 
 

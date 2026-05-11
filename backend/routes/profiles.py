@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 
@@ -11,9 +11,12 @@ from schemas import (
 
 router = APIRouter(prefix="/profiles", tags=["profiles"])
 
+_CACHE_CONTROL = "private, max-age=60"
+
 
 @router.get("/", response_model=List[ProfileSchema])
 def get_all_profiles(
+    response: Response,
     skip: int = 0,
     limit: int = None,  # No default limit until pagination is implemented
     profile_type: Optional[str] = Query(None, description="Filter by profile type (customer or vendor)"),
@@ -26,17 +29,19 @@ def get_all_profiles(
     if profile_type:
         query = query.filter(Profile.type == ModelProfileType(profile_type))
     profiles = query.offset(skip).limit(limit).all()
+    response.headers["Cache-Control"] = _CACHE_CONTROL
     return profiles
 
 
 @router.get("/{profile_id}", response_model=ProfileSchema)
-def get_profile(profile_id: int, db: Session = Depends(get_db)):
+def get_profile(profile_id: int, response: Response, db: Session = Depends(get_db)):
     """Get a single profile by ID with nested contacts."""
     profile = db.query(Profile).options(
         joinedload(Profile.contacts).joinedload(Contact.phone_numbers)
     ).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    response.headers["Cache-Control"] = _CACHE_CONTROL
     return profile
 
 
