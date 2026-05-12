@@ -19,6 +19,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { ProjectsPage } from "@/pages/ProjectsPage"
 import { api } from "@/api/client"
 import { useIsAdmin } from "@/hooks/use-is-admin"
+import { VirtualizedTable, headerCellClass, cellClass } from "@/components/ui/virtualized-table"
 
 // Lazy-loaded pages: keep ProjectsPage eager (default landing), defer the rest.
 const ProfilesPage = lazy(() =>
@@ -363,9 +364,9 @@ function App() {
 
               {/* Parts Tab */}
               <TabsContent value="parts">
-                <div className="bg-card rounded-lg border shadow-sm">
+                <div className="bg-card rounded-lg border shadow-sm overflow-hidden">
                   <div className="p-4 border-b flex justify-between items-center">
-                    <h2 className="text-lg font-semibold">Parts Inventory</h2>
+                    <h2 className="text-lg font-semibold">Parts Inventory ({filteredParts.length.toLocaleString()})</h2>
                     <Button onClick={handleAddPart} className="gap-2">
                       <Plus className="h-4 w-4" />
                       Add Part
@@ -374,84 +375,58 @@ function App() {
 
                   {loading ? (
                     <div className="p-8 text-center text-muted-foreground">Loading...</div>
-                  ) : filteredParts.length === 0 ? (
-                    <div className="p-8 text-center text-muted-foreground">
-                      {inventorySearchTerm
+                  ) : (
+                    <VirtualizedTable
+                      items={filteredParts}
+                      rowHeight={52}
+                      height="calc(100vh - 360px)"
+                      gridCols="grid-cols-[1.4fr_3fr_1fr_1fr_1fr_minmax(110px,auto)]"
+                      header={
+                        <>
+                          <div className={headerCellClass}>Part Number</div>
+                          <div className={headerCellClass}>Description</div>
+                          <div className={`${headerCellClass} text-right`}>Cost</div>
+                          <div className={`${headerCellClass} text-right`}>Markup</div>
+                          <div className={`${headerCellClass} text-right`}>Price</div>
+                          <div className={`${headerCellClass} text-right`}>Actions</div>
+                        </>
+                      }
+                      getKey={(p) => p.id}
+                      emptyMessage={inventorySearchTerm
                         ? "No parts matching your search."
                         : "No parts found. Add your first part to get started."}
-                    </div>
-                  ) : (
-                    <table className="w-full">
-                      <thead className="bg-muted/50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">
-                            Part Number
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">
-                            Description
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Cost
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Markup
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Price
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {filteredParts.map((part) => (
-                          <tr key={part.id} className="hover:bg-muted/50">
-                            <td className="px-4 py-3 text-sm font-medium">
-                              {part.part_number}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-muted-foreground">
-                              {part.description}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-muted-foreground text-right">
-                              ${part.cost.toFixed(2)}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-muted-foreground text-right">
-                              {part.markup_percent ?? 0}%
-                            </td>
-                            <td className="px-4 py-3 text-sm font-medium text-right">
-                              ${(part.cost * (1 + (part.markup_percent ?? 0) / 100)).toFixed(2)}
-                            </td>
-                            <td className="px-4 py-3 text-right space-x-1">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleEditPart(part)}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDeletePart(part.id)}
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                      renderRow={(part) => (
+                        <>
+                          <div className={`${cellClass} font-medium`}>{part.part_number}</div>
+                          <div className={`${cellClass} text-muted-foreground truncate`}>{part.description}</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>${part.cost.toFixed(2)}</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>{part.markup_percent ?? 0}%</div>
+                          <div className={`${cellClass} font-medium justify-end`}>${(part.cost * (1 + (part.markup_percent ?? 0) / 100)).toFixed(2)}</div>
+                          <div className={`${cellClass} justify-end gap-1`}>
+                            <Button variant="ghost" size="sm" onClick={() => handleEditPart(part)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeletePart(part.id)}
+                              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    />
                   )}
                 </div>
               </TabsContent>
 
               {/* Labor Tab */}
               <TabsContent value="labor">
-                <div className="bg-card rounded-lg border shadow-sm">
+                <div className="bg-card rounded-lg border shadow-sm overflow-hidden">
                   <div className="p-4 border-b flex justify-between items-center">
-                    <h2 className="text-lg font-semibold">Labour Items</h2>
+                    <h2 className="text-lg font-semibold">Labour Items ({filteredLaborItems.length.toLocaleString()})</h2>
                     <Button onClick={handleAddLabor} className="gap-2">
                       <Plus className="h-4 w-4" />
                       Add Labour
@@ -460,84 +435,58 @@ function App() {
 
                   {loading ? (
                     <div className="p-8 text-center text-muted-foreground">Loading...</div>
-                  ) : filteredLaborItems.length === 0 ? (
-                    <div className="p-8 text-center text-muted-foreground">
-                      {inventorySearchTerm
+                  ) : (
+                    <VirtualizedTable
+                      items={filteredLaborItems}
+                      rowHeight={52}
+                      height="calc(100vh - 360px)"
+                      gridCols="grid-cols-[3fr_1fr_1fr_1fr_1fr_minmax(110px,auto)]"
+                      header={
+                        <>
+                          <div className={headerCellClass}>Labour Description</div>
+                          <div className={`${headerCellClass} text-right`}>Hours</div>
+                          <div className={`${headerCellClass} text-right`}>Rate</div>
+                          <div className={`${headerCellClass} text-right`}>Markup</div>
+                          <div className={`${headerCellClass} text-right`}>Total Cost</div>
+                          <div className={`${headerCellClass} text-right`}>Actions</div>
+                        </>
+                      }
+                      getKey={(l) => l.id}
+                      emptyMessage={inventorySearchTerm
                         ? "No labour items matching your search."
                         : "No labour items found. Add your first labour item to get started."}
-                    </div>
-                  ) : (
-                    <table className="w-full">
-                      <thead className="bg-muted/50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">
-                            Labour Description
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Hours
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Rate
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Markup
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Total Cost
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {filteredLaborItems.map((labor) => (
-                          <tr key={labor.id} className="hover:bg-muted/50">
-                            <td className="px-4 py-3 text-sm font-medium">
-                              {labor.description}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-muted-foreground text-right">
-                              {labor.hours}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-muted-foreground text-right">
-                              ${labor.rate.toFixed(2)}/hr
-                            </td>
-                            <td className="px-4 py-3 text-sm text-muted-foreground text-right">
-                              {labor.markup_percent}%
-                            </td>
-                            <td className="px-4 py-3 text-sm font-medium text-right">
-                              ${(labor.hours * labor.rate * (1 + labor.markup_percent / 100)).toFixed(2)}
-                            </td>
-                            <td className="px-4 py-3 text-right space-x-1">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleEditLabor(labor)}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDeleteLabor(labor.id)}
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                      renderRow={(labor) => (
+                        <>
+                          <div className={`${cellClass} font-medium truncate`}>{labor.description}</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.hours}</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>${labor.rate.toFixed(2)}/hr</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.markup_percent}%</div>
+                          <div className={`${cellClass} font-medium justify-end`}>${(labor.hours * labor.rate * (1 + labor.markup_percent / 100)).toFixed(2)}</div>
+                          <div className={`${cellClass} justify-end gap-1`}>
+                            <Button variant="ghost" size="sm" onClick={() => handleEditLabor(labor)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteLabor(labor.id)}
+                              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    />
                   )}
                 </div>
               </TabsContent>
 
               {/* Miscellaneous Tab */}
               <TabsContent value="misc">
-                <div className="bg-card rounded-lg border shadow-sm">
+                <div className="bg-card rounded-lg border shadow-sm overflow-hidden">
                   <div className="p-4 border-b flex justify-between items-center">
-                    <h2 className="text-lg font-semibold">Miscellaneous Items</h2>
+                    <h2 className="text-lg font-semibold">Miscellaneous Items ({filteredMiscItems.length.toLocaleString()})</h2>
                     <Button onClick={handleAddMisc} className="gap-2">
                       <Plus className="h-4 w-4" />
                       Add Misc
@@ -546,70 +495,48 @@ function App() {
 
                   {loading ? (
                     <div className="p-8 text-center text-muted-foreground">Loading...</div>
-                  ) : filteredMiscItems.length === 0 ? (
-                    <div className="p-8 text-center text-muted-foreground">
-                      {inventorySearchTerm
+                  ) : (
+                    <VirtualizedTable
+                      items={filteredMiscItems}
+                      rowHeight={52}
+                      height="calc(100vh - 360px)"
+                      gridCols="grid-cols-[3fr_1fr_1fr_1fr_minmax(110px,auto)]"
+                      header={
+                        <>
+                          <div className={headerCellClass}>Misc Description</div>
+                          <div className={`${headerCellClass} text-right`}>Unit Price</div>
+                          <div className={`${headerCellClass} text-right`}>Markup</div>
+                          <div className={`${headerCellClass} text-right`}>Total Cost</div>
+                          <div className={`${headerCellClass} text-right`}>Actions</div>
+                        </>
+                      }
+                      getKey={(m) => m.id}
+                      emptyMessage={inventorySearchTerm
                         ? "No miscellaneous items matching your search."
                         : "No miscellaneous items found. Add your first miscellaneous item to get started."}
-                    </div>
-                  ) : (
-                    <table className="w-full">
-                      <thead className="bg-muted/50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">
-                            Misc Description
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Unit Price
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Markup
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Total Cost
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {filteredMiscItems.map((misc) => (
-                          <tr key={misc.id} className="hover:bg-muted/50">
-                            <td className="px-4 py-3 text-sm font-medium">
-                              {misc.description}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-muted-foreground text-right">
-                              ${misc.unit_price.toFixed(2)}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-muted-foreground text-right">
-                              {misc.markup_percent}%
-                            </td>
-                            <td className="px-4 py-3 text-sm font-medium text-right">
-                              ${(misc.unit_price * (1 + misc.markup_percent / 100)).toFixed(2)}
-                            </td>
-                            <td className="px-4 py-3 text-right space-x-1">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleEditMisc(misc)}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDeleteMisc(misc.id)}
-                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                title="Delete"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                      renderRow={(misc) => (
+                        <>
+                          <div className={`${cellClass} font-medium truncate`}>{misc.description}</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>${misc.unit_price.toFixed(2)}</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>{misc.markup_percent}%</div>
+                          <div className={`${cellClass} font-medium justify-end`}>${(misc.unit_price * (1 + misc.markup_percent / 100)).toFixed(2)}</div>
+                          <div className={`${cellClass} justify-end gap-1`}>
+                            <Button variant="ghost" size="sm" onClick={() => handleEditMisc(misc)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteMisc(misc.id)}
+                              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    />
                   )}
                 </div>
               </TabsContent>
