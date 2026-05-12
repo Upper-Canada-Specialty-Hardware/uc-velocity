@@ -15,7 +15,7 @@ import type {
   MarkupControlToggleRequest, MarkupControlToggleResponse,
   CommitEditsRequest, CommitEditsResponse,
   CompanySettings, CompanySettingsUpdate, InvoiceSummaryItem,
-  BacklogQuoteItem, PricebookImportResult, MigrationResult,
+  BacklogQuoteItem, InventoryHealthReport, PricebookImportResult, MigrationResult,
   SystemRate, SystemRateCreate, SystemRateUpdate
 } from '@/types';
 
@@ -315,6 +315,7 @@ export const api = {
   // ===== Reports =====
   reports: {
     getBacklogQuotes: () => request<BacklogQuoteItem[]>('/reports/backlog-quotes'),
+    getInventoryHealth: () => request<InventoryHealthReport>('/reports/inventory-health'),
   },
 
   // ===== Legacy Migration =====
