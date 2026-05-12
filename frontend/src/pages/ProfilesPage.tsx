@@ -27,6 +27,7 @@ import {
   Plus, Trash2, Pencil, Users, Building, ExternalLink, Phone, Mail, MapPin, Upload, Search,
 } from "lucide-react"
 import { EMPTY_VALUE } from "@/lib/format"
+import { VirtualizedTable, headerCellClass, cellClass } from "@/components/ui/virtualized-table"
 
 type ProfileTab = "customers" | "vendors"
 
@@ -480,84 +481,90 @@ interface ProfileTableProps {
 
 function ProfileTable({ profiles, emptyMessage, onRowClick, onEdit, onDelete }: ProfileTableProps) {
   return (
-    <div className="bg-card rounded-lg border shadow-sm">
-      {profiles.length === 0 ? (
-        <div className="p-6 text-center text-muted-foreground text-sm">{emptyMessage}</div>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Address</TableHead>
-              <TableHead>Contacts</TableHead>
-              <TableHead>Phone</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {profiles.map((profile) => {
-              const phone = getPrimaryPhone(profile)
-              return (
-                <TableRow
-                  key={profile.id}
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => onRowClick(profile)}
+    <VirtualizedTable
+      items={profiles}
+      rowHeight={68}
+      height="calc(100vh - 320px)"
+      gridCols="grid-cols-[2fr_2.5fr_1.5fr_1.5fr_minmax(110px,auto)]"
+      header={
+        <>
+          <div className={headerCellClass}>Name</div>
+          <div className={headerCellClass}>Address</div>
+          <div className={headerCellClass}>Contacts</div>
+          <div className={headerCellClass}>Phone</div>
+          <div className={`${headerCellClass} text-right`}>Actions</div>
+        </>
+      }
+      getKey={(p) => p.id}
+      emptyMessage={emptyMessage}
+      rowClassName="cursor-pointer"
+      renderRow={(profile) => {
+        const phone = getPrimaryPhone(profile)
+        return (
+          <>
+            <div
+              className={`${cellClass} font-medium`}
+              onClick={() => onRowClick(profile)}
+            >
+              {profile.name}
+            </div>
+            <div
+              className={`${cellClass} text-muted-foreground flex-col items-start justify-center`}
+              onClick={() => onRowClick(profile)}
+            >
+              <div className="text-sm truncate w-full">{profile.address || EMPTY_VALUE}</div>
+              {profile.postal_code && (
+                <div className="text-xs">{profile.postal_code}</div>
+              )}
+            </div>
+            <div
+              className={`${cellClass} flex-col items-start justify-center`}
+              onClick={() => onRowClick(profile)}
+            >
+              <div className="text-sm">
+                {profile.contacts.length} contact{profile.contacts.length !== 1 ? 's' : ''}
+              </div>
+              {profile.contacts.length > 0 && (
+                <div className="text-xs text-muted-foreground truncate w-full">
+                  {profile.contacts[0].name}
+                  {profile.contacts.length > 1 && ` +${profile.contacts.length - 1} more`}
+                </div>
+              )}
+            </div>
+            <div className={cellClass}>
+              {phone ? (
+                <a
+                  href={`tel:${phone}`}
+                  className="text-blue-600 hover:underline flex items-center gap-1 text-sm"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <TableCell className="font-medium">{profile.name}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    <div className="text-sm">{profile.address || EMPTY_VALUE}</div>
-                    {profile.postal_code && (
-                      <div className="text-xs">{profile.postal_code}</div>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <div className="text-sm">
-                      {profile.contacts.length} contact{profile.contacts.length !== 1 ? 's' : ''}
-                    </div>
-                    {profile.contacts.length > 0 && (
-                      <div className="text-xs text-muted-foreground">
-                        {profile.contacts[0].name}
-                        {profile.contacts.length > 1 && ` +${profile.contacts.length - 1} more`}
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {phone ? (
-                      <a
-                        href={`tel:${phone}`}
-                        className="text-blue-600 hover:underline flex items-center gap-1 text-sm"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <Phone className="h-3 w-3" />
-                        {phone}
-                      </a>
-                    ) : (
-                      <span className="text-muted-foreground">{EMPTY_VALUE}</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right space-x-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => onEdit(e, profile)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => onDelete(e, profile.id)}
-                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
-      )}
-    </div>
+                  <Phone className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{phone}</span>
+                </a>
+              ) : (
+                <span className="text-muted-foreground" onClick={() => onRowClick(profile)}>{EMPTY_VALUE}</span>
+              )}
+            </div>
+            <div className={`${cellClass} justify-end gap-1`}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => onEdit(e, profile)}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => onDelete(e, profile.id)}
+                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          </>
+        )
+      }}
+    />
   )
 }
