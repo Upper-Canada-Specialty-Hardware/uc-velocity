@@ -3,8 +3,13 @@ from sqlalchemy.orm import Session, joinedload
 from typing import List
 
 from database import get_db
-from models import Quote, QuoteLineItem, Project, Profile
-from schemas import BacklogQuoteItem, BacklogLineItem
+from models import Quote, QuoteLineItem, Project, Profile, Part
+from schemas import (
+    BacklogQuoteItem,
+    BacklogLineItem,
+    InventoryHealthIssue,
+    InventoryHealthReport,
+)
 from routes.quotes import compute_quote_status, format_quote_number, get_line_item_description
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -109,3 +114,53 @@ def get_backlog_quotes(db: Session = Depends(get_db)):
     # Sort by quote number for consistent output
     result.sort(key=lambda q: q.quote_number)
     return result
+
+
+@router.get("/inventory-health", response_model=InventoryHealthReport)
+def get_inventory_health(db: Session = Depends(get_db)):
+    """List parts with obvious data-quality issues.
+
+    Quality signals currently flagged:
+    - zero_cost: part.cost rounds to 0 (a leftover from CSV migration placeholders)
+    - description_matches_part_number: description text equals the part number, with nothing else
+    - description_has_escaped_quotes: description contains four consecutive double-quote characters
+      (an over-escaped CSV artifact)
+
+    The report is read-only and additive: it never mutates parts. Use it to
+    surface candidates for cleanup; the actual cleanup is a separate, gated step.
+    """
+    parts = db.query(Part).all()
+    items: List[InventoryHealthIssue] = []
+
+    for part in parts:
+        issues: List[str] = []
+
+        if (part.cost or 0) < 0.005:
+            issues.append("zero_cost")
+
+        desc = (part.description or "").strip()
+        if desc and desc == (part.part_number or "").strip():
+            issues.append("description_matches_part_number")
+
+        # Spot the CSV-escape artifact: 4+ consecutive double-quote chars,
+        # produced when a description with embedded `"` got re-escaped during import.
+        if '""""' in desc:
+            issues.append("description_has_escaped_quotes")
+
+        if issues:
+            items.append(InventoryHealthIssue(
+                part_id=part.id,
+                part_number=part.part_number,
+                description=part.description or "",
+                cost=part.cost or 0.0,
+                issues=issues,
+            ))
+
+    # Most-flagged first, then by part number for stable ordering.
+    items.sort(key=lambda it: (-len(it.issues), it.part_number))
+
+    return InventoryHealthReport(
+        total_parts=len(parts),
+        flagged=len(items),
+        items=items,
+    )

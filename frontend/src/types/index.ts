@@ -105,6 +105,26 @@ export interface BacklogQuoteItem {
   line_items: BacklogLineItem[];
 }
 
+// ===== Inventory Health (UX-7) =====
+export type InventoryHealthIssueCode =
+  | "zero_cost"
+  | "description_matches_part_number"
+  | "description_has_escaped_quotes";
+
+export interface InventoryHealthIssue {
+  part_id: number;
+  part_number: string;
+  description: string;
+  cost: number;
+  issues: InventoryHealthIssueCode[];
+}
+
+export interface InventoryHealthReport {
+  total_parts: number;
+  flagged: number;
+  items: InventoryHealthIssue[];
+}
+
 // ===== Cost Codes =====
 export interface CostCode {
   id: number;
@@ -400,6 +420,7 @@ export interface Quote {
   misc_markup_percent?: number | null;  // Section-level markup for misc
   cost_code_id?: number | null;
   cost_code?: CostCode | null;
+  legacy_imported?: boolean;  // True when the row came in from the original UC Vision CSV migration
   line_items: QuoteLineItem[];
 }
 
@@ -456,6 +477,7 @@ export interface PurchaseOrder {
   expected_delivery_date?: string | null;
   cost_code_id?: number | null;
   cost_code?: CostCode | null;
+  legacy_imported?: boolean;  // True when the row came in from the original UC Vision CSV migration
   vendor: Profile;
   line_items: POLineItem[];
 }

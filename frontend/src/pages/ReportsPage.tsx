@@ -6,8 +6,8 @@ import { Badge } from '@/components/ui/badge'
 import { api } from '@/api/client'
 import { formatCurrency } from '@/lib/pricing'
 import { formatDate } from '@/lib/format'
-import type { InvoiceSummaryItem, CompanySettings, BacklogQuoteItem } from '@/types'
-import { FileText, Download, Loader2, ChevronRight, ChevronDown, FileSpreadsheet } from 'lucide-react'
+import type { InvoiceSummaryItem, CompanySettings, BacklogQuoteItem, InventoryHealthReport, InventoryHealthIssueCode } from '@/types'
+import { FileText, Download, Loader2, ChevronRight, ChevronDown, FileSpreadsheet, ShieldAlert } from 'lucide-react'
 
 export function ReportsPage() {
   // Invoice Summary state
@@ -23,6 +23,25 @@ export function ReportsPage() {
   const [backlogError, setBacklogError] = useState<string | null>(null)
   const [backlogData, setBacklogData] = useState<BacklogQuoteItem[] | null>(null)
   const [expandedQuotes, setExpandedQuotes] = useState<Set<number>>(new Set())
+
+  // Inventory Health state (UX-7)
+  const [healthLoading, setHealthLoading] = useState(false)
+  const [healthError, setHealthError] = useState<string | null>(null)
+  const [healthData, setHealthData] = useState<InventoryHealthReport | null>(null)
+
+  const handleInventoryHealthGenerate = async () => {
+    setHealthLoading(true)
+    setHealthError(null)
+    setHealthData(null)
+    try {
+      const data = await api.reports.getInventoryHealth()
+      setHealthData(data)
+    } catch (err) {
+      setHealthError(err instanceof Error ? err.message : 'Failed to load inventory health')
+    } finally {
+      setHealthLoading(false)
+    }
+  }
 
   // ===== Invoice Summary handlers =====
   const handleGenerate = async () => {
@@ -350,8 +369,88 @@ export function ReportsPage() {
           )}
         </div>
       </div>
+
+      {/* Inventory Health Report (UX-7) */}
+      <div className="bg-card rounded-lg border shadow-sm">
+        <div className="p-4 border-b">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <ShieldAlert className="h-5 w-5" />
+            Inventory Health Report
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Parts flagged with data-quality issues — zero cost, description equal to part number,
+            or CSV-escape artifacts. Surfaces cleanup candidates; never mutates data.
+          </p>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <Button onClick={handleInventoryHealthGenerate} disabled={healthLoading}>
+            {healthLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            Generate
+          </Button>
+
+          {healthError && (
+            <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">
+              {healthError}
+            </div>
+          )}
+
+          {healthData !== null && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">{healthData.flagged.toLocaleString()}</span> of{' '}
+                <span className="font-medium text-foreground">{healthData.total_parts.toLocaleString()}</span>{' '}
+                parts flagged ({healthData.total_parts > 0
+                  ? ((healthData.flagged / healthData.total_parts) * 100).toFixed(1)
+                  : '0.0'}%).
+              </p>
+
+              {healthData.items.length > 0 && (
+                <div className="border rounded-md overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-muted-foreground">Part Number</th>
+                        <th className="px-3 py-2 text-left font-medium text-muted-foreground">Description</th>
+                        <th className="px-3 py-2 text-right font-medium text-muted-foreground">Cost</th>
+                        <th className="px-3 py-2 text-left font-medium text-muted-foreground">Issues</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {healthData.items.map((it) => (
+                        <tr key={it.part_id} className="hover:bg-muted/50">
+                          <td className="px-3 py-2 font-mono text-xs">{it.part_number}</td>
+                          <td className="px-3 py-2 max-w-md truncate" title={it.description}>{it.description || '—'}</td>
+                          <td className="px-3 py-2 text-right">${it.cost.toFixed(2)}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-1">
+                              {it.issues.map((code) => (
+                                <Badge key={code} variant="outline" className="text-[10px]">
+                                  {issueLabel(code)}
+                                </Badge>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
+}
+
+function issueLabel(code: InventoryHealthIssueCode): string {
+  switch (code) {
+    case "zero_cost": return "Zero cost"
+    case "description_matches_part_number": return "Description = part number"
+    case "description_has_escaped_quotes": return "Escaped quotes"
+  }
 }
 
 function BacklogQuoteRow({

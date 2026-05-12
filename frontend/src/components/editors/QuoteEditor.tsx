@@ -2689,6 +2689,15 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {quote.legacy_imported && (
+            <Badge
+              variant="outline"
+              className="bg-slate-500/10 text-slate-700 border-slate-500/30 dark:text-slate-300"
+              title="This quote was brought in from the original UC Vision CSV migration."
+            >
+              Imported
+            </Badge>
+          )}
           <StatusBadge status={quote.status} />
         </div>
       </div>

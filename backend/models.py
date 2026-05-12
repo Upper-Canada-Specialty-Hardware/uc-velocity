@@ -182,6 +182,7 @@ class Quote(Base):
     labor_markup_percent = Column(Float, nullable=True)  # Section-level markup for labor
     misc_markup_percent = Column(Float, nullable=True)  # Section-level markup for misc
     cost_code_id = Column(Integer, ForeignKey('cost_codes.id'), nullable=True)
+    legacy_imported = Column(Boolean, nullable=False, server_default='false')
 
     # Relationships
     project = relationship("Project", back_populates="quotes")
@@ -235,6 +236,7 @@ class PurchaseOrder(Base):
     expected_delivery_date = Column(DateTime, nullable=True)
     status = Column(Enum(POStatus), default=POStatus.draft)
     cost_code_id = Column(Integer, ForeignKey('cost_codes.id'), nullable=True)
+    legacy_imported = Column(Boolean, nullable=False, server_default='false')
 
     # Relationships
     project = relationship("Project", back_populates="purchase_orders")

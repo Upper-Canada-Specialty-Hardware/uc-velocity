@@ -1239,6 +1239,15 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
           ) : (
             <StatusBadge status={po.status} className="px-3 py-1" />
           )}
+          {po.legacy_imported && (
+            <Badge
+              variant="outline"
+              className="bg-slate-500/10 text-slate-700 border-slate-500/30 dark:text-slate-300"
+              title="This PO was brought in from the original UC Vision CSV migration."
+            >
+              Imported
+            </Badge>
+          )}
         </div>
       </div>
 

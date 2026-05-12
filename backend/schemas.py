@@ -125,6 +125,22 @@ class BacklogQuoteItem(BaseModel):
     line_items: List[BacklogLineItem] = []
 
 
+# ===== Inventory Health (UX-7) =====
+class InventoryHealthIssue(BaseModel):
+    """A single quality issue against an inventory part."""
+    part_id: int
+    part_number: str
+    description: str
+    cost: float
+    issues: List[str]  # e.g. ["zero_cost", "description_matches_part_number"]
+
+
+class InventoryHealthReport(BaseModel):
+    total_parts: int
+    flagged: int
+    items: List[InventoryHealthIssue]
+
+
 class PhoneType(str, Enum):
     work = "work"
     mobile = "mobile"
@@ -508,6 +524,7 @@ class Quote(QuoteBase):
     current_version: int = 0
     cost_code_id: Optional[int] = None
     cost_code: Optional[CostCode] = None
+    legacy_imported: bool = False
     line_items: List[QuoteLineItem] = []
 
     class Config:
@@ -579,6 +596,7 @@ class PurchaseOrder(PurchaseOrderBase):
     po_number: Optional[str] = None
     cost_code_id: Optional[int] = None
     cost_code: Optional[CostCode] = None
+    legacy_imported: bool = False
     vendor: Profile
     line_items: List[POLineItem] = []
 
