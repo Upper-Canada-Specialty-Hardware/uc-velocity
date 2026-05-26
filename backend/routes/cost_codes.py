@@ -40,8 +40,6 @@ def create_cost_code(data: CostCodeCreate, db: Session = Depends(get_db)):
     cc = CostCode(
         code=data.code,
         description=data.description,
-        gp_cost_code_properties=data.gp_cost_code_properties,
-        uch_dept_properties=data.uch_dept_properties,
     )
     db.add(cc)
     db.commit()
@@ -65,10 +63,6 @@ def update_cost_code(cost_code_id: int, data: CostCodeUpdate, db: Session = Depe
 
     if data.description is not None:
         cc.description = data.description
-    if data.gp_cost_code_properties is not None:
-        cc.gp_cost_code_properties = data.gp_cost_code_properties
-    if data.uch_dept_properties is not None:
-        cc.uch_dept_properties = data.uch_dept_properties
 
     db.commit()
     db.refresh(cc)

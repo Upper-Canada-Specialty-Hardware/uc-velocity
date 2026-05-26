@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input"
 import { api } from "@/api/client"
 import type { Profile, Part, PricebookImportResult } from "@/types"
 import {
-  Plus, Trash2, Pencil, Users, Building, ExternalLink, Phone, Mail, MapPin, Upload, Search,
+  Plus, Trash2, Pencil, Users, Building, Phone, Mail, MapPin, Upload, Search,
 } from "lucide-react"
 import { EMPTY_VALUE } from "@/lib/format"
 import { VirtualizedTable, headerCellClass, cellClass } from "@/components/ui/virtualized-table"
@@ -301,21 +301,6 @@ export function ProfilesPage() {
                   </p>
                   <p className="font-medium">{viewingProfile.address || EMPTY_VALUE}</p>
                 </div>
-                {viewingProfile.website && (
-                  <div>
-                    <p className="text-sm text-muted-foreground flex items-center gap-1">
-                      <ExternalLink className="h-3 w-3" /> Website
-                    </p>
-                    <a
-                      href={viewingProfile.website}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline font-medium"
-                    >
-                      {viewingProfile.website}
-                    </a>
-                  </div>
-                )}
               </div>
 
               <Separator />

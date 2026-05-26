@@ -157,8 +157,6 @@ class POStatus(str, Enum):
 class CostCodeBase(BaseModel):
     code: str
     description: str
-    gp_cost_code_properties: Optional[str] = None
-    uch_dept_properties: Optional[str] = None
 
 
 class CostCodeCreate(CostCodeBase):
@@ -168,8 +166,6 @@ class CostCodeCreate(CostCodeBase):
 class CostCodeUpdate(BaseModel):
     code: Optional[str] = None
     description: Optional[str] = None
-    gp_cost_code_properties: Optional[str] = None
-    uch_dept_properties: Optional[str] = None
 
 
 class CostCode(CostCodeBase):
@@ -368,7 +364,6 @@ class ProfileBase(BaseModel):
     pst: str
     address: str
     postal_code: str
-    website: Optional[str] = None
     default_discount_percent: Optional[float] = None
 
 
@@ -388,7 +383,6 @@ class ProfileUpdate(BaseModel):
     pst: Optional[str] = None
     address: Optional[str] = None
     postal_code: Optional[str] = None
-    website: Optional[str] = None
     default_discount_percent: Optional[float] = None
 
 

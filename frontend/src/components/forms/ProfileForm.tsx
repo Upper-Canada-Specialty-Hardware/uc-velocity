@@ -52,7 +52,6 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
   const [pst, setPst] = useState("")
   const [address, setAddress] = useState("")
   const [postalCode, setPostalCode] = useState("")
-  const [website, setWebsite] = useState("")
   const [defaultDiscountPercent, setDefaultDiscountPercent] = useState("")
 
   // Contacts state
@@ -80,7 +79,6 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
       setPst(profile.pst)
       setAddress(profile.address)
       setPostalCode(profile.postal_code)
-      setWebsite(profile.website || "")
       setDefaultDiscountPercent(profile.default_discount_percent?.toString() || "")
       setContacts(profile.contacts.map(c => ({
         id: c.id,
@@ -183,7 +181,6 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
           pst: pst.trim(),
           address: address.trim(),
           postal_code: postalCode.trim(),
-          website: website.trim() || undefined,
           default_discount_percent: defaultDiscountPercent ? parseFloat(defaultDiscountPercent) : undefined,
         })
 
@@ -224,7 +221,6 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
           pst: pst.trim(),
           address: address.trim(),
           postal_code: postalCode.trim(),
-          website: website.trim() || undefined,
           default_discount_percent: defaultDiscountPercent ? parseFloat(defaultDiscountPercent) : undefined,
           contacts: contacts.map(buildContactCreate)
         }
@@ -307,17 +303,6 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
             onChange={(e) => setPostalCode(e.target.value)}
             placeholder="e.g., V6B 1A1"
             required
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="website">Link to Website</Label>
-          <Input
-            id="website"
-            type="url"
-            value={website}
-            onChange={(e) => setWebsite(e.target.value)}
-            placeholder="e.g., https://www.example.com"
           />
         </div>
 
