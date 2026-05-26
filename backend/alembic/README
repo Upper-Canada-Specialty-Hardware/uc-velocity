@@ -21,5 +21,11 @@ Show migration history:
 
 ## Production
 
-Migrations run automatically on Railway deploy via the releaseCommand
-in railway.toml. No manual intervention needed.
+Migrations run automatically on Railway deploy via the preDeployCommand
+in backend/railway.toml. The preDeployCommand executes in a one-off container
+before any Gunicorn worker boots - if `alembic upgrade head` fails, the deploy
+fails before serving traffic. No manual intervention needed.
+
+For local development, run `alembic upgrade head` yourself, or set
+ALEMBIC_AUTO_UPGRADE=1 in backend/.env to have main.py migrate on each
+uvicorn --reload boot.

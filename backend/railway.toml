@@ -16,6 +16,11 @@
 builder = "nixpacks"
 
 [deploy]
+# Run pending Alembic migrations exactly once per deploy, before any worker
+# accepts traffic. If this exits non-zero the deploy fails before workers boot,
+# so a schema/code drift can never silently ship. This replaces the previous
+# per-worker ALEMBIC_AUTO_UPGRADE=1 dance, which was fail-open and easy to forget.
+preDeployCommand = "python -m alembic upgrade head"
 startCommand = "gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 300"
 healthcheckPath = "/health"
 healthcheckTimeout = 100
