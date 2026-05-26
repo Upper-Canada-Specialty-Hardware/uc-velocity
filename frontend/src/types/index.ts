@@ -130,22 +130,16 @@ export interface CostCode {
   id: number;
   code: string;
   description: string;
-  gp_cost_code_properties?: string | null;
-  uch_dept_properties?: string | null;
 }
 
 export interface CostCodeCreate {
   code: string;
   description: string;
-  gp_cost_code_properties?: string | null;
-  uch_dept_properties?: string | null;
 }
 
 export interface CostCodeUpdate {
   code?: string;
   description?: string;
-  gp_cost_code_properties?: string | null;
-  uch_dept_properties?: string | null;
 }
 
 // ===== Labor =====
@@ -258,7 +252,6 @@ export interface Profile {
   pst: string;
   address: string;
   postal_code: string;
-  website?: string;
   default_discount_percent?: number;
   contacts: Contact[];
 }
@@ -269,7 +262,6 @@ export interface ProfileCreate {
   pst: string;
   address: string;
   postal_code: string;
-  website?: string;
   default_discount_percent?: number;
   contacts: ContactCreate[];
 }
@@ -280,7 +272,6 @@ export interface ProfileUpdate {
   pst?: string;
   address?: string;
   postal_code?: string;
-  website?: string;
   default_discount_percent?: number;
 }
 

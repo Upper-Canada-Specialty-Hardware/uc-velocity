@@ -360,15 +360,12 @@ async def import_legacy_data(
                 ]
                 address = ", ".join(p for p in addr_parts if p)
 
-                website = safe_str(row.get("chrWebPage", "")) or None
-
                 profile = Profile(
                     name=name,
                     type=ProfileType.vendor,
                     pst=safe_str(row.get("chrProvincialTax", "")),
                     address=address,
                     postal_code=safe_str(row.get("chrPostalCode", "")),
-                    website=website,
                 )
                 db.add(profile)
                 batch.append((legacy_id, profile))

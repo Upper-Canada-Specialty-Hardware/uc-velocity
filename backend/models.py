@@ -52,7 +52,6 @@ class Profile(Base):
     pst = Column(String, nullable=False)  # Provincial Tax Number
     address = Column(String, nullable=False)
     postal_code = Column(String, nullable=False)
-    website = Column(String, nullable=True)  # Optional URL to official website
     default_discount_percent = Column(Float, nullable=True)  # Default vendor discount %
 
     # Relationships
@@ -141,8 +140,6 @@ class CostCode(Base):
     id = Column(Integer, primary_key=True, index=True)
     code = Column(String, unique=True, nullable=False)
     description = Column(String, nullable=False)
-    gp_cost_code_properties = Column(String, nullable=True)
-    uch_dept_properties = Column(String, nullable=True)
 
 
 class Project(Base):

@@ -30,8 +30,6 @@ import { Loader2, Save, Pencil, Trash2, Plus, X, Check, Upload } from 'lucide-re
 interface CostCodeEditState {
   code: string
   description: string
-  gp_cost_code_properties: string
-  uch_dept_properties: string
 }
 
 export function SettingsPage() {
@@ -55,7 +53,7 @@ export function SettingsPage() {
   const [editingCostCodeId, setEditingCostCodeId] = useState<number | null>(null)
   const [editingCostCode, setEditingCostCode] = useState<CostCodeEditState | null>(null)
   const [addingCostCode, setAddingCostCode] = useState(false)
-  const [newCostCode, setNewCostCode] = useState<CostCodeEditState>({ code: '', description: '', gp_cost_code_properties: '', uch_dept_properties: '' })
+  const [newCostCode, setNewCostCode] = useState<CostCodeEditState>({ code: '', description: '' })
   const [costCodeSaving, setCostCodeSaving] = useState(false)
   const [costCodeError, setCostCodeError] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<CostCode | null>(null)
@@ -348,8 +346,6 @@ export function SettingsPage() {
     setEditingCostCode({
       code: cc.code,
       description: cc.description,
-      gp_cost_code_properties: cc.gp_cost_code_properties || '',
-      uch_dept_properties: cc.uch_dept_properties || '',
     })
     setCostCodeError(null)
   }
@@ -372,8 +368,6 @@ export function SettingsPage() {
       await api.costCodes.update(editingCostCodeId, {
         code: editingCostCode.code.trim(),
         description: editingCostCode.description.trim(),
-        gp_cost_code_properties: editingCostCode.gp_cost_code_properties.trim() || undefined,
-        uch_dept_properties: editingCostCode.uch_dept_properties.trim() || undefined,
       })
       setEditingCostCodeId(null)
       setEditingCostCode(null)
@@ -387,13 +381,13 @@ export function SettingsPage() {
 
   const startAddCostCode = () => {
     setAddingCostCode(true)
-    setNewCostCode({ code: '', description: '', gp_cost_code_properties: '', uch_dept_properties: '' })
+    setNewCostCode({ code: '', description: '' })
     setCostCodeError(null)
   }
 
   const cancelAddCostCode = () => {
     setAddingCostCode(false)
-    setNewCostCode({ code: '', description: '', gp_cost_code_properties: '', uch_dept_properties: '' })
+    setNewCostCode({ code: '', description: '' })
   }
 
   const saveNewCostCode = async () => {
@@ -408,12 +402,10 @@ export function SettingsPage() {
       const data: CostCodeCreate = {
         code: newCostCode.code.trim(),
         description: newCostCode.description.trim(),
-        gp_cost_code_properties: newCostCode.gp_cost_code_properties.trim() || undefined,
-        uch_dept_properties: newCostCode.uch_dept_properties.trim() || undefined,
       }
       await api.costCodes.create(data)
       setAddingCostCode(false)
-      setNewCostCode({ code: '', description: '', gp_cost_code_properties: '', uch_dept_properties: '' })
+      setNewCostCode({ code: '', description: '' })
       fetchCostCodes()
     } catch (err) {
       setCostCodeError(err instanceof Error ? err.message : 'Failed to create cost code')
@@ -921,8 +913,6 @@ export function SettingsPage() {
                   <TableRow>
                     <TableHead className="w-[120px]">Code</TableHead>
                     <TableHead>Description</TableHead>
-                    <TableHead className="w-[180px]">GP Properties</TableHead>
-                    <TableHead className="w-[180px]">UCH Dept Properties</TableHead>
                     <TableHead className="w-[100px] text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -945,22 +935,6 @@ export function SettingsPage() {
                               className="h-8"
                             />
                           </TableCell>
-                          <TableCell>
-                            <Input
-                              value={editingCostCode.gp_cost_code_properties}
-                              onChange={(e) => setEditingCostCode({ ...editingCostCode, gp_cost_code_properties: e.target.value })}
-                              className="h-8"
-                              placeholder="Optional"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              value={editingCostCode.uch_dept_properties}
-                              onChange={(e) => setEditingCostCode({ ...editingCostCode, uch_dept_properties: e.target.value })}
-                              className="h-8"
-                              placeholder="Optional"
-                            />
-                          </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
                               <Button size="icon" variant="ghost" className="h-7 w-7" onClick={saveEditCostCode} disabled={costCodeSaving}>
@@ -976,8 +950,6 @@ export function SettingsPage() {
                         <>
                           <TableCell className="font-mono text-sm">{cc.code}</TableCell>
                           <TableCell>{cc.description}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{cc.gp_cost_code_properties || '—'}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{cc.uch_dept_properties || '—'}</TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
                               <Button
@@ -1025,22 +997,6 @@ export function SettingsPage() {
                           placeholder="Description"
                         />
                       </TableCell>
-                      <TableCell>
-                        <Input
-                          value={newCostCode.gp_cost_code_properties}
-                          onChange={(e) => setNewCostCode({ ...newCostCode, gp_cost_code_properties: e.target.value })}
-                          className="h-8"
-                          placeholder="Optional"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          value={newCostCode.uch_dept_properties}
-                          onChange={(e) => setNewCostCode({ ...newCostCode, uch_dept_properties: e.target.value })}
-                          className="h-8"
-                          placeholder="Optional"
-                        />
-                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={saveNewCostCode} disabled={costCodeSaving}>
@@ -1056,7 +1012,7 @@ export function SettingsPage() {
 
                   {costCodes.length === 0 && !addingCostCode && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                      <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
                         No cost codes found. Click "Add New" to create one.
                       </TableCell>
                     </TableRow>
