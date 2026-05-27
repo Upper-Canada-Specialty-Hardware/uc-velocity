@@ -139,7 +139,7 @@ export function SearchableMultiSelect<T>({
               value={searchQuery}
               onValueChange={setSearchQuery}
             />
-            <CommandList>
+            <CommandList onWheel={(e) => e.stopPropagation()}>
               {filteredOptions.length === 0 && (
                 <CommandEmpty>{emptyMessage}</CommandEmpty>
               )}
