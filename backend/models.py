@@ -174,6 +174,7 @@ class Quote(Base):
     current_version = Column(Integer, default=0)  # Current snapshot version
     client_po_number = Column(String, nullable=True)  # Client's PO number (required for invoicing)
     work_description = Column(String, nullable=True)  # Optional work description
+    hardware_schedule_version = Column(String, nullable=True)  # Optional hardware schedule version identifier
     markup_control_enabled = Column(Boolean, default=False)  # Markup Discount Control toggle
     parts_markup_percent = Column(Float, nullable=True)  # Section-level markup for parts
     labor_markup_percent = Column(Float, nullable=True)  # Section-level markup for labor

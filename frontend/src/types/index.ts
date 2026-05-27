@@ -405,6 +405,7 @@ export interface Quote {
   current_version: number;
   client_po_number?: string | null;
   work_description?: string | null;
+  hardware_schedule_version?: string | null;
   markup_control_enabled: boolean;  // Markup Control toggle
   parts_markup_percent?: number | null;  // Section-level markup for parts
   labor_markup_percent?: number | null;  // Section-level markup for labor
@@ -419,12 +420,14 @@ export interface QuoteCreate {
   project_id: number;
   client_po_number?: string;
   work_description?: string;
+  hardware_schedule_version?: string;
   cost_code_id?: number;
 }
 
 export interface QuoteUpdate {
   client_po_number?: string | null;
   work_description?: string | null;
+  hardware_schedule_version?: string | null;
   cost_code_id?: number | null;
 }
 
