@@ -176,6 +176,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
 
   // Print PDF state
   const [isPrinting, setIsPrinting] = useState(false)
+  const [printDialogOpen, setPrintDialogOpen] = useState(false)
 
   // Company settings (for HST rate display)
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null)
@@ -1943,8 +1944,9 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     }
   }
 
-  const handlePrintQuote = async () => {
+  const runPrintQuote = async (includeBreakdown: boolean) => {
     if (!quote) return
+    setPrintDialogOpen(false)
     setIsPrinting(true)
     try {
       const [project, companySettings, { pdf }, { QuotePDF }] = await Promise.all([
@@ -1954,7 +1956,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
         import('@/components/pdf/QuotePDF'),
       ])
       const blob = await pdf(
-        <QuotePDF quote={quote} project={project} companySettings={companySettings} />
+        <QuotePDF
+          quote={quote}
+          project={project}
+          companySettings={companySettings}
+          includeBreakdown={includeBreakdown}
+        />
       ).toBlob()
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank')
@@ -3172,7 +3179,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handlePrintQuote}
+                onClick={() => setPrintDialogOpen(true)}
                 disabled={isPrinting}
                 className="shadow-md gap-2 bg-background"
               >
@@ -3478,6 +3485,48 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
             </Button>
             <Button onClick={handleConfirmAutoAddLabor}>
               Add Part + Labour
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Print Options Dialog */}
+      <Dialog open={printDialogOpen} onOpenChange={setPrintDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Printer className="h-4 w-4" />
+              Print Quote
+            </DialogTitle>
+            <DialogDescription>
+              Choose how line items appear in the printout.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <button
+              type="button"
+              onClick={() => runPrintQuote(true)}
+              className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
+            >
+              <div className="font-medium">Include line-item breakdown</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Show each item's description, quantity, unit price, and per-item total, along with section subtotals.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => runPrintQuote(false)}
+              className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
+            >
+              <div className="font-medium">Section totals only</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Hide per-item rows and show only the Parts, Labour, and Miscellaneous subtotals.
+              </div>
+            </button>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrintDialogOpen(false)}>
+              Cancel
             </Button>
           </DialogFooter>
         </DialogContent>

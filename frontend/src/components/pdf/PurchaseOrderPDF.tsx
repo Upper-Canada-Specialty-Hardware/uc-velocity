@@ -9,14 +9,17 @@ interface PurchaseOrderPDFProps {
   po: PurchaseOrder
   project: Project
   companySettings: CompanySettings
+  includeBreakdown?: boolean
 }
 
 function LineItemTable({
   title,
   items,
+  showLineDetails,
 }: {
   title: string
   items: POLineItem[]
+  showLineDetails: boolean
 }) {
   if (items.length === 0) return null
 
@@ -29,33 +32,37 @@ function LineItemTable({
     <>
       <Text style={styles.sectionTitle}>{title}</Text>
 
-      {/* Table header */}
-      <View style={styles.tableHeader}>
-        <Text style={[styles.colHeaderText, styles.colDescription]}>Description</Text>
-        <Text style={[styles.colHeaderText, styles.colQty]}>Qty</Text>
-        <Text style={[styles.colHeaderText, styles.colUnitPrice]}>Unit Price</Text>
-        <Text style={[styles.colHeaderText, styles.colTotal]}>Total</Text>
-      </View>
-
-      {/* Table rows */}
-      {items.map((item, idx) => {
-        const description = getItemDescription(item)
-        const unitPrice = item.unit_price ?? 0
-        const total = unitPrice * item.quantity
-
-        return (
-          <View
-            key={item.id}
-            style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowAlt : {}]}
-            wrap={false}
-          >
-            <Text style={styles.colDescription}>{description}</Text>
-            <Text style={styles.colQty}>{item.quantity}</Text>
-            <Text style={styles.colUnitPrice}>{formatCurrency(unitPrice)}</Text>
-            <Text style={styles.colTotal}>{formatCurrency(total)}</Text>
+      {showLineDetails && (
+        <>
+          {/* Table header */}
+          <View style={styles.tableHeader}>
+            <Text style={[styles.colHeaderText, styles.colDescription]}>Description</Text>
+            <Text style={[styles.colHeaderText, styles.colQty]}>Qty</Text>
+            <Text style={[styles.colHeaderText, styles.colUnitPrice]}>Unit Price</Text>
+            <Text style={[styles.colHeaderText, styles.colTotal]}>Total</Text>
           </View>
-        )
-      })}
+
+          {/* Table rows */}
+          {items.map((item, idx) => {
+            const description = getItemDescription(item)
+            const unitPrice = item.unit_price ?? 0
+            const total = unitPrice * item.quantity
+
+            return (
+              <View
+                key={item.id}
+                style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowAlt : {}]}
+                wrap={false}
+              >
+                <Text style={styles.colDescription}>{description}</Text>
+                <Text style={styles.colQty}>{item.quantity}</Text>
+                <Text style={styles.colUnitPrice}>{formatCurrency(unitPrice)}</Text>
+                <Text style={styles.colTotal}>{formatCurrency(total)}</Text>
+              </View>
+            )
+          })}
+        </>
+      )}
 
       {/* Section subtotal */}
       <View style={styles.tableFooterRow}>
@@ -74,7 +81,7 @@ function getItemDescription(item: POLineItem): string {
   return item.description || 'Unknown item'
 }
 
-export function PurchaseOrderPDF({ po, project, companySettings }: PurchaseOrderPDFProps) {
+export function PurchaseOrderPDF({ po, project, companySettings, includeBreakdown = true }: PurchaseOrderPDFProps) {
   const partItems = po.line_items.filter(i => i.item_type === 'part')
   const miscItems = po.line_items.filter(i => i.item_type === 'misc')
 
@@ -166,8 +173,8 @@ export function PurchaseOrderPDF({ po, project, companySettings }: PurchaseOrder
         )}
 
         {/* Line Items by Section */}
-        <LineItemTable title="Parts" items={partItems} />
-        <LineItemTable title="Miscellaneous" items={miscItems} />
+        <LineItemTable title="Parts" items={partItems} showLineDetails={includeBreakdown} />
+        <LineItemTable title="Miscellaneous" items={miscItems} showLineDetails={includeBreakdown} />
 
         {/* Totals */}
         <View style={styles.totalsBlock}>

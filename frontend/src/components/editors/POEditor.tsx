@@ -138,6 +138,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
 
   // Print PDF state
   const [isPrinting, setIsPrinting] = useState(false)
+  const [printDialogOpen, setPrintDialogOpen] = useState(false)
 
   // ===== Cost Codes =====
   const [costCodes, setCostCodes] = useState<CostCode[]>([])
@@ -651,8 +652,9 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
 
   // ===== Print PO Handler =====
 
-  const handlePrintPO = async () => {
+  const runPrintPO = async (includeBreakdown: boolean) => {
     if (!po) return
+    setPrintDialogOpen(false)
     setIsPrinting(true)
     try {
       const [project, companySettings, { pdf }, { PurchaseOrderPDF }] = await Promise.all([
@@ -662,7 +664,12 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
         import('@/components/pdf/PurchaseOrderPDF'),
       ])
       const blob = await pdf(
-        <PurchaseOrderPDF po={po} project={project} companySettings={companySettings} />
+        <PurchaseOrderPDF
+          po={po}
+          project={project}
+          companySettings={companySettings}
+          includeBreakdown={includeBreakdown}
+        />
       ).toBlob()
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank')
@@ -1694,7 +1701,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handlePrintPO}
+                onClick={() => setPrintDialogOpen(true)}
                 disabled={isPrinting}
                 className="shadow-md gap-2 bg-background"
               >
@@ -2140,6 +2147,48 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Print Options Dialog */}
+      <Dialog open={printDialogOpen} onOpenChange={setPrintDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Printer className="h-4 w-4" />
+              Print Purchase Order
+            </DialogTitle>
+            <DialogDescription>
+              Choose how line items appear in the printout.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <button
+              type="button"
+              onClick={() => runPrintPO(true)}
+              className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
+            >
+              <div className="font-medium">Include line-item breakdown</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Show each item's description, quantity, unit price, and per-item total, along with section subtotals.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => runPrintPO(false)}
+              className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
+            >
+              <div className="font-medium">Section totals only</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Hide per-item rows and show only the Parts and Miscellaneous subtotals.
+              </div>
+            </button>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrintDialogOpen(false)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Clone Confirmation Dialog */}
       <AlertDialog open={cloneConfirmOpen} onOpenChange={setCloneConfirmOpen}>
