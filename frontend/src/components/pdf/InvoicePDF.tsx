@@ -130,12 +130,10 @@ export function InvoicePDF({ invoice, quote, project, companySettings }: Invoice
               <Text style={styles.metaLabel}>Invoice Date:</Text>
               <Text style={styles.metaValue}>{invoiceDate}</Text>
             </View>
-            {quote.client_po_number && (
-              <View style={styles.metaRow}>
-                <Text style={styles.metaLabel}>Client PO #:</Text>
-                <Text style={styles.metaValue}>{quote.client_po_number}</Text>
-              </View>
-            )}
+            <View style={styles.metaRow}>
+              <Text style={styles.metaLabel}>Client PO #:</Text>
+              <Text style={styles.metaValue}>{quote.client_po_number || '—'}</Text>
+            </View>
           </View>
         </PDFHeader>
 
@@ -172,7 +170,7 @@ export function InvoicePDF({ invoice, quote, project, companySettings }: Invoice
           </View>
           {hstRate > 0 && (
             <View style={styles.totalsRow}>
-              <Text style={styles.totalsLabel}>HST ({hstRate}%):</Text>
+              <Text style={styles.totalsLabel}>HST (Extra):</Text>
               <Text style={styles.totalsValue}>{formatCurrency(hstAmount)}</Text>
             </View>
           )}

@@ -32,9 +32,16 @@ export const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 10,
   },
+  logoBox: {
+    width: 120,
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  },
   logo: {
-    width: 60,
-    height: 60,
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
   },
   companyInfo: {
     fontSize: 7,
