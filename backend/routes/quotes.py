@@ -383,6 +383,9 @@ def update_quote(quote_id: int, quote_data: QuoteUpdate, db: Session = Depends(g
     if quote_data.work_description is not None:
         db_quote.work_description = quote_data.work_description.strip() or None
 
+    if quote_data.hardware_schedule_version is not None:
+        db_quote.hardware_schedule_version = quote_data.hardware_schedule_version.strip() or None
+
     if quote_data.cost_code_id is not None:
         db_quote.cost_code_id = quote_data.cost_code_id
 

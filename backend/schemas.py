@@ -491,6 +491,7 @@ class QuoteBase(BaseModel):
     status: str = "Draft"  # "Draft", "Work Order", "Invoiced", "Closed" — computed by system
     client_po_number: Optional[str] = None
     work_description: Optional[str] = None
+    hardware_schedule_version: Optional[str] = None
     markup_control_enabled: bool = False  # Markup Discount Control toggle
     parts_markup_percent: Optional[float] = None  # Section-level markup for parts
     labor_markup_percent: Optional[float] = None  # Section-level markup for labor
@@ -501,12 +502,14 @@ class QuoteCreate(BaseModel):
     project_id: int
     client_po_number: Optional[str] = None
     work_description: Optional[str] = None
+    hardware_schedule_version: Optional[str] = None
     cost_code_id: Optional[int] = None
 
 
 class QuoteUpdate(BaseModel):
     client_po_number: Optional[str] = None
     work_description: Optional[str] = None
+    hardware_schedule_version: Optional[str] = None
     cost_code_id: Optional[int] = None
 
 

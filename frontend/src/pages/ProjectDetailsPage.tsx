@@ -399,7 +399,8 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       const hay = [
         q.quote_number,
         q.status,
-        new Date(q.created_at).toLocaleDateString(),
+        q.client_po_number ?? "",
+        q.hardware_schedule_version ?? "",
       ].join(" ").toLowerCase()
       return hay.includes(n)
     })
@@ -841,7 +842,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
               {project.quotes.map((q) => (
                 <CommandItem
                   key={`q-${q.id}`}
-                  value={`quote ${q.quote_number} ${q.status} ${formatDate(q.created_at)}`}
+                  value={`quote ${q.quote_number} ${q.status} ${q.client_po_number ?? ""} ${q.hardware_schedule_version ?? ""}`}
                   onSelect={() => {
                     setCmdOpen(false)
                     openDoc("quote", q.id)
@@ -931,8 +932,11 @@ function QuoteRow({ quote, isSelected, isHighlighted, onSelect, onDelete }: Quot
           <span className="truncate">{quote.quote_number}</span>
           <StatusBadge status={quote.status} className="text-[10px] px-1.5 py-0" />
         </div>
-        <div className="text-xs text-muted-foreground">
-          {formatDate(quote.created_at)}
+        <div className="text-xs text-muted-foreground truncate">
+          PO# {quote.client_po_number || "—"}
+        </div>
+        <div className="text-xs text-muted-foreground truncate">
+          HW Schedule {quote.hardware_schedule_version || "—"}
         </div>
       </div>
       <Button

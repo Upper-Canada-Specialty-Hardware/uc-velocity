@@ -142,6 +142,11 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   const [isEditingWorkDescription, setIsEditingWorkDescription] = useState(false)
   const [savingWorkDescription, setSavingWorkDescription] = useState(false)
 
+  // Hardware Schedule Version editing
+  const [hardwareScheduleVersion, setHardwareScheduleVersion] = useState("")
+  const [isEditingHardwareScheduleVersion, setIsEditingHardwareScheduleVersion] = useState(false)
+  const [savingHardwareScheduleVersion, setSavingHardwareScheduleVersion] = useState(false)
+
   // PMS (Project Management Services) dialog states
   const [pmsDialogOpen, setPmsDialogOpen] = useState(false)
   const [pmsType, setPmsType] = useState<"percent" | "dollar">("dollar")
@@ -244,6 +249,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       setQuote(data)
       setClientPoNumber(data.client_po_number || "")
       setWorkDescription(data.work_description || "")
+      setHardwareScheduleVersion(data.hardware_schedule_version || "")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch quote")
     } finally {
@@ -724,6 +730,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           setQuote(freshQuote)
           setClientPoNumber(freshQuote.client_po_number || "")
           setWorkDescription(freshQuote.work_description || "")
+          setHardwareScheduleVersion(freshQuote.hardware_schedule_version || "")
           setEditModeStartVersion(freshQuote.current_version)
           setQuoteChangedDialogOpen(true)
           setIsCommitting(false)
@@ -828,6 +835,20 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       alert(err instanceof Error ? err.message : "Failed to update Work Description")
     } finally {
       setSavingWorkDescription(false)
+    }
+  }
+
+  const handleSaveHardwareScheduleVersion = async () => {
+    setSavingHardwareScheduleVersion(true)
+    try {
+      await api.quotes.update(quoteId, { hardware_schedule_version: hardwareScheduleVersion.trim() || null })
+      setIsEditingHardwareScheduleVersion(false)
+      fetchQuote()
+      onUpdate?.()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update Hardware Schedule Version")
+    } finally {
+      setSavingHardwareScheduleVersion(false)
     }
   }
 
@@ -1780,6 +1801,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           setQuote(freshQuote)
           setClientPoNumber(freshQuote.client_po_number || "")
           setWorkDescription(freshQuote.work_description || "")
+          setHardwareScheduleVersion(freshQuote.hardware_schedule_version || "")
           setInitialQuoteVersion(freshQuote.current_version)
           setQuoteChangedDialogOpen(true)
           setIsCreatingInvoice(false)
@@ -2898,6 +2920,59 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
                 <Button size="sm" variant="ghost" onClick={() => setIsEditingWorkDescription(true)}>
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Hardware Schedule Version */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            Hardware Schedule Version
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isEditingHardwareScheduleVersion ? (
+            <div className="space-y-2">
+              <Input
+                value={hardwareScheduleVersion}
+                onChange={(e) => setHardwareScheduleVersion(e.target.value)}
+                placeholder="e.g. Rev A"
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleSaveHardwareScheduleVersion}
+                  disabled={savingHardwareScheduleVersion}
+                >
+                  {savingHardwareScheduleVersion ? "Saving..." : "Save"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setHardwareScheduleVersion(quote.hardware_schedule_version || "")
+                    setIsEditingHardwareScheduleVersion(false)
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2">
+              {quote.hardware_schedule_version ? (
+                <p className="whitespace-pre-wrap">{quote.hardware_schedule_version}</p>
+              ) : (
+                <span className="text-muted-foreground" title={editorMode === "edit" ? "Click pencil to set" : undefined}>—</span>
+              )}
+              {editorMode === "edit" && (
+                <Button size="sm" variant="ghost" onClick={() => setIsEditingHardwareScheduleVersion(true)}>
                   <Pencil className="h-4 w-4" />
                 </Button>
               )}
