@@ -55,7 +55,7 @@ import type {
   StagedFulfillment, InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
-import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown } from "lucide-react"
+import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDate } from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
@@ -91,6 +91,9 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // Add dialog states
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [addDialogType, setAddDialogType] = useState<LineItemType>("part")
+  // Dialog mode: "select" shows picker + details panel; "edit-inventory" shows the
+  // inventory edit form so the user can update the master record without leaving the quote.
+  const [addDialogMode, setAddDialogMode] = useState<"select" | "edit-inventory">("select")
 
   // Edit dialog states
   const [editDialogOpen, setEditDialogOpen] = useState(false)
@@ -308,7 +311,48 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     setSelectedLaborId("")
     setSelectedMiscId("")
     setQuantity("1")
+    setAddDialogMode("select")
     setAddDialogOpen(true)
+  }
+
+  // Derived selections — re-read from inventory arrays so that inline edits to the
+  // master record automatically refresh the details panel and the staged-add preview
+  // (option a re-snapshot for stale state).
+  const selectedPart =
+    addDialogType === "part" && selectedPartId
+      ? parts.find((p) => p.id === parseInt(selectedPartId)) ?? null
+      : null
+  const selectedLabor =
+    addDialogType === "labor" && selectedLaborId
+      ? laborItems.find((l) => l.id === parseInt(selectedLaborId)) ?? null
+      : null
+  const selectedMisc =
+    addDialogType === "misc" && selectedMiscId
+      ? miscItems.find((m) => m.id === parseInt(selectedMiscId)) ?? null
+      : null
+
+  const handlePartUpdateSuccess = (updated?: Part) => {
+    if (updated) {
+      setParts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+      toast({ description: `Part "${updated.part_number}" updated` })
+    }
+    setAddDialogMode("select")
+  }
+
+  const handleLaborUpdateSuccess = (updated?: Labor) => {
+    if (updated) {
+      setLaborItems((prev) => prev.map((l) => (l.id === updated.id ? updated : l)))
+      toast({ description: `Labour "${updated.description}" updated` })
+    }
+    setAddDialogMode("select")
+  }
+
+  const handleMiscUpdateSuccess = (updated?: Miscellaneous) => {
+    if (updated) {
+      setMiscItems((prev) => prev.map((m) => (m.id === updated.id ? updated : m)))
+      toast({ description: `Misc "${updated.description}" updated` })
+    }
+    setAddDialogMode("select")
   }
 
   const openEditDialog = (item: QuoteLineItem) => {
@@ -3366,123 +3410,295 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       </div>
 
       {/* Add Line Item Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-        <DialogContent className="max-w-2xl">
+      <Dialog
+        open={addDialogOpen}
+        onOpenChange={(open) => {
+          setAddDialogOpen(open)
+          if (!open) setAddDialogMode("select")
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              {getTypeIcon(addDialogType)}
-              Add {addDialogType === "labor" ? "Labour" : addDialogType.charAt(0).toUpperCase() + addDialogType.slice(1)}
+              {addDialogMode === "edit-inventory" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setAddDialogMode("select")}
+                    className="p-1 -ml-1 rounded hover:bg-muted"
+                    title="Back to selection"
+                    aria-label="Back to selection"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </button>
+                  <Pencil className="h-5 w-5" />
+                  Edit {addDialogType === "labor" ? "Labour" : addDialogType.charAt(0).toUpperCase() + addDialogType.slice(1)} Details
+                </>
+              ) : (
+                <>
+                  {getTypeIcon(addDialogType)}
+                  Add {addDialogType === "labor" ? "Labour" : addDialogType.charAt(0).toUpperCase() + addDialogType.slice(1)}
+                </>
+              )}
             </DialogTitle>
             <DialogDescription>
-              Add a {addDialogType === "labor" ? "labour" : addDialogType} line item to this quote.
+              {addDialogMode === "edit-inventory"
+                ? "Updates apply to the inventory master record. Future selections will use these values; previously committed line items are unaffected."
+                : `Add a ${addDialogType === "labor" ? "labour" : addDialogType} line item to this quote.`}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 pt-4">
-            {addDialogType === "labor" && (
-              <div className="space-y-2">
-                <Label>Labour Item</Label>
-                <SearchableSelect<Labor>
-                  options={laborItems.map((labor): SearchableSelectOption => ({
-                    value: labor.id.toString(),
-                    label: labor.description,
-                    description: `$${labor.rate}/hr x ${labor.hours}hrs`,
-                  }))}
-                  value={selectedLaborId}
-                  onChange={setSelectedLaborId}
-                  placeholder="Select labour"
-                  searchPlaceholder="Search labour items..."
-                  emptyMessage="No labour items found."
-                  allowCreate={true}
-                  createLabel="Create New Labour"
-                  createDialogTitle="Create New Labour Item"
-                  createForm={<LaborForm />}
-                  onCreateSuccess={(newLabor) => {
-                    setLaborItems([...laborItems, newLabor])
-                    setSelectedLaborId(newLabor.id.toString())
-                  }}
-                />
-              </div>
-            )}
-
-            {addDialogType === "part" && (
-              <div className="space-y-2">
-                <Label>Part</Label>
-                <SearchableSelect<Part>
-                  options={parts.map((part): SearchableSelectOption => ({
-                    value: part.id.toString(),
-                    label: `${part.part_number} - ${part.description}`,
-                    description: `$${(part.cost * (1 + (part.markup_percent ?? 0) / 100)).toFixed(2)}${part.labor_items && part.labor_items.length > 0 ? ` (${part.labor_items.length} linked labour)` : ''}`,
-                  }))}
-                  value={selectedPartId}
-                  onChange={setSelectedPartId}
-                  placeholder="Select part"
-                  searchPlaceholder="Search parts..."
-                  emptyMessage="No parts found."
-                  allowCreate={true}
-                  createLabel="Create New Part"
-                  createDialogTitle="Create New Part"
-                  createForm={<PartForm />}
-                  onCreateSuccess={(newPart) => {
-                    setParts([...parts, newPart])
-                    setSelectedPartId(newPart.id.toString())
-                  }}
-                />
-              </div>
-            )}
-
-            {addDialogType === "misc" && (
-              <div className="space-y-2">
-                <Label>Miscellaneous Item</Label>
-                <SearchableSelect<Miscellaneous>
-                  options={miscItems
-                    .filter(misc => !misc.is_system_item) // Exclude system items (Parking, Travel Distance)
-                    .map((misc): SearchableSelectOption => ({
-                      value: misc.id.toString(),
-                      label: misc.description,
-                      description: `$${(misc.unit_price * (1 + misc.markup_percent / 100)).toFixed(2)}`,
+          {addDialogMode === "select" && (
+            <div className="space-y-4 pt-4">
+              {addDialogType === "labor" && (
+                <div className="space-y-2">
+                  <Label>Labour Item</Label>
+                  <SearchableSelect<Labor>
+                    options={laborItems.map((labor): SearchableSelectOption => ({
+                      value: labor.id.toString(),
+                      label: labor.description,
+                      description: `$${labor.rate}/hr x ${labor.hours}hrs`,
                     }))}
-                  value={selectedMiscId}
-                  onChange={setSelectedMiscId}
-                  placeholder="Select misc item"
-                  searchPlaceholder="Search misc items..."
-                  emptyMessage="No miscellaneous items found."
-                  allowCreate={true}
-                  createLabel="Create New Misc Item"
-                  createDialogTitle="Create New Miscellaneous Item"
-                  createForm={<MiscForm />}
-                  onCreateSuccess={(newMisc) => {
-                    setMiscItems([...miscItems, newMisc])
-                    setSelectedMiscId(newMisc.id.toString())
-                  }}
+                    value={selectedLaborId}
+                    onChange={setSelectedLaborId}
+                    placeholder="Select labour"
+                    searchPlaceholder="Search labour items..."
+                    emptyMessage="No labour items found."
+                    allowCreate={true}
+                    createLabel="Create New Labour"
+                    createDialogTitle="Create New Labour Item"
+                    createForm={<LaborForm />}
+                    onCreateSuccess={(newLabor) => {
+                      setLaborItems([...laborItems, newLabor])
+                      setSelectedLaborId(newLabor.id.toString())
+                    }}
+                  />
+                </div>
+              )}
+
+              {addDialogType === "part" && (
+                <div className="space-y-2">
+                  <Label>Part</Label>
+                  <SearchableSelect<Part>
+                    options={parts.map((part): SearchableSelectOption => ({
+                      value: part.id.toString(),
+                      label: `${part.part_number} - ${part.description}`,
+                      description: `$${(part.cost * (1 + (part.markup_percent ?? 0) / 100)).toFixed(2)}${part.labor_items && part.labor_items.length > 0 ? ` (${part.labor_items.length} linked labour)` : ''}`,
+                    }))}
+                    value={selectedPartId}
+                    onChange={setSelectedPartId}
+                    placeholder="Select part"
+                    searchPlaceholder="Search parts..."
+                    emptyMessage="No parts found."
+                    allowCreate={true}
+                    createLabel="Create New Part"
+                    createDialogTitle="Create New Part"
+                    createForm={<PartForm />}
+                    onCreateSuccess={(newPart) => {
+                      setParts([...parts, newPart])
+                      setSelectedPartId(newPart.id.toString())
+                    }}
+                  />
+                </div>
+              )}
+
+              {addDialogType === "misc" && (
+                <div className="space-y-2">
+                  <Label>Miscellaneous Item</Label>
+                  <SearchableSelect<Miscellaneous>
+                    options={miscItems
+                      .filter(misc => !misc.is_system_item) // Exclude system items (Parking, Travel Distance)
+                      .map((misc): SearchableSelectOption => ({
+                        value: misc.id.toString(),
+                        label: misc.description,
+                        description: `$${(misc.unit_price * (1 + misc.markup_percent / 100)).toFixed(2)}`,
+                      }))}
+                    value={selectedMiscId}
+                    onChange={setSelectedMiscId}
+                    placeholder="Select misc item"
+                    searchPlaceholder="Search misc items..."
+                    emptyMessage="No miscellaneous items found."
+                    allowCreate={true}
+                    createLabel="Create New Misc Item"
+                    createDialogTitle="Create New Miscellaneous Item"
+                    createForm={<MiscForm />}
+                    onCreateSuccess={(newMisc) => {
+                      setMiscItems([...miscItems, newMisc])
+                      setSelectedMiscId(newMisc.id.toString())
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Inventory details panel — shown after an item is selected. */}
+              {(selectedPart || selectedLabor || selectedMisc) && (
+                <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold flex items-center gap-2">
+                      <Info className="h-4 w-4" />
+                      Inventory Details
+                    </h4>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setAddDialogMode("edit-inventory")}
+                      className="h-7 gap-2"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit details
+                    </Button>
+                  </div>
+
+                  {selectedPart && (
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                      <div>
+                        <dt className="text-muted-foreground">Part Number</dt>
+                        <dd className="font-medium">{selectedPart.part_number}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Description</dt>
+                        <dd className="font-medium">{selectedPart.description}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Base Cost</dt>
+                        <dd className="font-medium">${selectedPart.cost.toFixed(2)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Markup</dt>
+                        <dd className="font-medium">{(selectedPart.markup_percent ?? 0).toFixed(2)}%</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Unit Price</dt>
+                        <dd className="font-medium">${(selectedPart.cost * (1 + (selectedPart.markup_percent ?? 0) / 100)).toFixed(2)}</dd>
+                      </div>
+                      {selectedPart.list_price != null && (
+                        <div>
+                          <dt className="text-muted-foreground">List Price</dt>
+                          <dd className="font-medium">${selectedPart.list_price.toFixed(2)}</dd>
+                        </div>
+                      )}
+                      {selectedPart.discount_percent != null && (
+                        <div>
+                          <dt className="text-muted-foreground">Discount</dt>
+                          <dd className="font-medium">{selectedPart.discount_percent.toFixed(2)}%</dd>
+                        </div>
+                      )}
+                      {selectedPart.labor_items && selectedPart.labor_items.length > 0 && (
+                        <div className="col-span-2">
+                          <dt className="text-muted-foreground">Linked Labour</dt>
+                          <dd className="mt-1 space-y-0.5 text-xs font-medium">
+                            {selectedPart.labor_items.map((l) => (
+                              <div key={l.id}>• {l.description} ({l.hours}hr × ${l.rate}/hr)</div>
+                            ))}
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                  )}
+
+                  {selectedLabor && (
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                      <div className="col-span-2">
+                        <dt className="text-muted-foreground">Description</dt>
+                        <dd className="font-medium">{selectedLabor.description}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Rate</dt>
+                        <dd className="font-medium">${selectedLabor.rate.toFixed(2)}/hr</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Hours</dt>
+                        <dd className="font-medium">{selectedLabor.hours}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Base Cost</dt>
+                        <dd className="font-medium">${(selectedLabor.rate * selectedLabor.hours).toFixed(2)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Markup</dt>
+                        <dd className="font-medium">{selectedLabor.markup_percent.toFixed(2)}%</dd>
+                      </div>
+                      <div className="col-span-2">
+                        <dt className="text-muted-foreground">Unit Price</dt>
+                        <dd className="font-medium">${(selectedLabor.rate * selectedLabor.hours * (1 + selectedLabor.markup_percent / 100)).toFixed(2)}</dd>
+                      </div>
+                    </dl>
+                  )}
+
+                  {selectedMisc && (
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                      <div className="col-span-2">
+                        <dt className="text-muted-foreground">Description</dt>
+                        <dd className="font-medium">{selectedMisc.description}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Base Unit Price</dt>
+                        <dd className="font-medium">${selectedMisc.unit_price.toFixed(2)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Markup</dt>
+                        <dd className="font-medium">{selectedMisc.markup_percent.toFixed(2)}%</dd>
+                      </div>
+                      <div className="col-span-2">
+                        <dt className="text-muted-foreground">Unit Price</dt>
+                        <dd className="font-medium">${(selectedMisc.unit_price * (1 + selectedMisc.markup_percent / 100)).toFixed(2)}</dd>
+                      </div>
+                    </dl>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <Label>Quantity</Label>
+                <Input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
                 />
               </div>
-            )}
 
-            <div className="space-y-2">
-              <Label>Quantity</Label>
-              <Input
-                type="number"
-                step="1"
-                min="1"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-              />
+              <Button
+                onClick={handleAddLineItem}
+                className="w-full"
+                disabled={
+                  (addDialogType === "labor" && (!selectedLaborId || laborItems.length === 0)) ||
+                  (addDialogType === "part" && (!selectedPartId || parts.length === 0)) ||
+                  (addDialogType === "misc" && (!selectedMiscId || miscItems.length === 0))
+                }
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Line Item
+              </Button>
             </div>
+          )}
 
-            <Button
-              onClick={handleAddLineItem}
-              className="w-full"
-              disabled={
-                (addDialogType === "labor" && (!selectedLaborId || laborItems.length === 0)) ||
-                (addDialogType === "part" && (!selectedPartId || parts.length === 0)) ||
-                (addDialogType === "misc" && (!selectedMiscId || miscItems.length === 0))
-              }
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Add Line Item
-            </Button>
-          </div>
+          {addDialogMode === "edit-inventory" && (
+            <div className="pt-4">
+              {addDialogType === "part" && selectedPart && (
+                <PartForm
+                  part={selectedPart}
+                  onSuccess={handlePartUpdateSuccess}
+                  onCancel={() => setAddDialogMode("select")}
+                />
+              )}
+              {addDialogType === "labor" && selectedLabor && (
+                <LaborForm
+                  labor={selectedLabor}
+                  onSuccess={handleLaborUpdateSuccess}
+                  onCancel={() => setAddDialogMode("select")}
+                />
+              )}
+              {addDialogType === "misc" && selectedMisc && (
+                <MiscForm
+                  misc={selectedMisc}
+                  onSuccess={handleMiscUpdateSuccess}
+                  onCancel={() => setAddDialogMode("select")}
+                />
+              )}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
