@@ -122,12 +122,10 @@ export function QuotePDF({ quote, project, companySettings }: QuotePDFProps) {
               <Text style={styles.metaLabel}>Quotation #:</Text>
               <Text style={styles.metaValue}>{quote.quote_number}</Text>
             </View>
-            {quote.client_po_number && (
-              <View style={styles.metaRow}>
-                <Text style={styles.metaLabel}>Client PO #:</Text>
-                <Text style={styles.metaValue}>{quote.client_po_number}</Text>
-              </View>
-            )}
+            <View style={styles.metaRow}>
+              <Text style={styles.metaLabel}>Client PO #:</Text>
+              <Text style={styles.metaValue}>{quote.client_po_number || '—'}</Text>
+            </View>
             <View style={styles.metaRow}>
               <Text style={styles.metaLabel}>Date:</Text>
               <Text style={styles.metaValue}>{formattedDate}</Text>
@@ -180,7 +178,7 @@ export function QuotePDF({ quote, project, companySettings }: QuotePDFProps) {
           </View>
           {hstRate > 0 && (
             <View style={styles.totalsRow}>
-              <Text style={styles.totalsLabel}>HST ({hstRate}%):</Text>
+              <Text style={styles.totalsLabel}>HST (Extra):</Text>
               <Text style={styles.totalsValue}>{formatCurrency(hstAmount)}</Text>
             </View>
           )}
