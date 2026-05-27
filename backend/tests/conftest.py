@@ -14,4 +14,4 @@ def _pg_reachable():
 # This prevents the ImportError from `from main import app` when
 # there's no local Postgres — while CI (which has Postgres) is unaffected.
 if not _pg_reachable():
-    collect_ignore = ["test_smoke.py", "test_backlog_report.py"]
+    collect_ignore = ["test_smoke.py", "test_backlog_report.py", "test_invoice_summary.py"]

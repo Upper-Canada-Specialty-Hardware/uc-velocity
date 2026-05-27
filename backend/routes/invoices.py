@@ -24,6 +24,7 @@ router = APIRouter(prefix="/invoices", tags=["invoices"])
 def list_invoices(
     start_date: date = Query(..., description="Start date (inclusive)"),
     end_date: date = Query(..., description="End date (inclusive)"),
+    project_id: Optional[int] = Query(None, description="Optional: filter to a single project"),
     db: Session = Depends(get_db)
 ):
     """List invoices within a date range with project/customer info for the summary report."""
@@ -32,7 +33,7 @@ def list_invoices(
     hst_rate = settings.hst_rate if settings and settings.hst_rate is not None else 13.0
 
     # Query invoices with joined quote -> project -> customer
-    invoices = (
+    query = (
         db.query(Invoice)
         .join(Quote, Invoice.quote_id == Quote.id)
         .join(Project, Quote.project_id == Project.id)
@@ -46,9 +47,10 @@ def list_invoices(
             Invoice.created_at <= datetime.combine(end_date, datetime.max.time()),
             Invoice.status != "Voided",
         )
-        .order_by(Invoice.created_at)
-        .all()
     )
+    if project_id is not None:
+        query = query.filter(Project.id == project_id)
+    invoices = query.order_by(Invoice.created_at).all()
 
     results = []
     for inv in invoices:

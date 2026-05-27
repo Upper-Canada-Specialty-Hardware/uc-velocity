@@ -227,8 +227,11 @@ export const api = {
     get: (id: number) => request<Invoice>(`/invoices/${id}`),
     updateStatus: (id: number, data: InvoiceStatusUpdate) =>
       request<Invoice>(`/invoices/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-    getSummary: (startDate: string, endDate: string) =>
-      request<InvoiceSummaryItem[]>(`/invoices/?start_date=${startDate}&end_date=${endDate}`),
+    getSummary: (startDate: string, endDate: string, projectId?: number) => {
+      const qs = new URLSearchParams({ start_date: startDate, end_date: endDate })
+      if (projectId !== undefined) qs.set('project_id', String(projectId))
+      return request<InvoiceSummaryItem[]>(`/invoices/?${qs.toString()}`)
+    },
   },
 
   // ===== Company Settings =====
