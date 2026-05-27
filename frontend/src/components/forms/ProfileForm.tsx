@@ -36,7 +36,7 @@ interface ContactFormData {
 interface ProfileFormProps {
   profile?: Profile // If provided, we're editing; otherwise creating
   defaultType?: ProfileType
-  onSuccess?: () => void
+  onSuccess?: (profile?: Profile) => void
   onCancel?: () => void
 }
 
@@ -224,7 +224,9 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
           default_discount_percent: defaultDiscountPercent ? parseFloat(defaultDiscountPercent) : undefined,
           contacts: contacts.map(buildContactCreate)
         }
-        await api.profiles.create(profileData)
+        const created = await api.profiles.create(profileData)
+        onSuccess?.(created)
+        return
       }
       onSuccess?.()
     } catch (err) {

@@ -23,13 +23,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { SearchableSelect } from "@/components/ui/searchable-select"
+import type { SearchableSelectOption } from "@/components/ui/searchable-select"
+import { ProfileForm } from "@/components/forms/ProfileForm"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -754,29 +750,30 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
           <div className="space-y-4 pt-4">
             <div className="space-y-2">
               <Label>Vendor</Label>
-              {vendors.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No vendors found. Please create a vendor first.
-                </p>
-              ) : (
-                <Select value={selectedVendorId} onValueChange={setSelectedVendorId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a vendor" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {vendors.map((vendor) => (
-                      <SelectItem key={vendor.id} value={vendor.id.toString()}>
-                        {vendor.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
+              <SearchableSelect<Profile>
+                options={vendors.map((vendor): SearchableSelectOption => ({
+                  value: vendor.id.toString(),
+                  label: vendor.name,
+                }))}
+                value={selectedVendorId}
+                onChange={setSelectedVendorId}
+                placeholder="Select a vendor"
+                searchPlaceholder="Search vendors..."
+                emptyMessage="No vendors found."
+                allowCreate={true}
+                createLabel="Create New Vendor"
+                createDialogTitle="Create New Vendor"
+                createForm={<ProfileForm defaultType="vendor" />}
+                onCreateSuccess={(newVendor) => {
+                  setVendors([...vendors, newVendor])
+                  setSelectedVendorId(newVendor.id.toString())
+                }}
+              />
             </div>
             <Button
               onClick={handleCreatePO}
               className="w-full"
-              disabled={!selectedVendorId || vendors.length === 0}
+              disabled={!selectedVendorId}
             >
               Create Purchase Order
             </Button>
