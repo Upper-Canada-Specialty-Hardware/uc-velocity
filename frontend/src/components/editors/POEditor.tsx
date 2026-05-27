@@ -53,12 +53,13 @@ import { api } from "@/api/client"
 import type {
   PurchaseOrder, POLineItem, POLineItemCreate, POLineItemType, POStatus, Part, CostCode,
   POEditorMode, StagedPOEdit, StagedPOAdd,
-  StagedPOLineItemChange, POCommitEditsRequest, POReceivingCreate, POReceivingLineItemCreate,
+  StagedPOLineItemChange, POCommitEditsRequest, POReceiving, POReceivingCreate, POReceivingLineItemCreate,
   CompanySettings, Project
 } from "@/types"
 import {
   Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy,
-  X, GitCommit, Eye, AlertTriangle, Check, Calendar, Loader2, Hash, Printer
+  X, GitCommit, Eye, AlertTriangle, Check, Calendar, Loader2, Hash, Printer,
+  History, ChevronDown, ChevronRight, Receipt
 } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDate } from "@/lib/format"
@@ -148,8 +149,14 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     actual_unit_price?: number;
   }>>(new Map())
   const [receivedDate, setReceivedDate] = useState<string>(new Date().toISOString().split('T')[0])
+  const [receivingNotes, setReceivingNotes] = useState<string>("")
   const [receivingDialogOpen, setReceivingDialogOpen] = useState(false)
   const [isSubmittingReceiving, setIsSubmittingReceiving] = useState(false)
+
+  // ===== Receiving History State =====
+  const [receivings, setReceivings] = useState<POReceiving[]>([])
+  const [expandedReceivings, setExpandedReceivings] = useState<Set<number>>(new Set())
+  const [isPrintingReceived, setIsPrintingReceived] = useState(false)
 
   // ===== Computed Values =====
   const hasBeenReceived = po?.line_items.some(item => item.qty_received > 0) ?? false
@@ -196,9 +203,19 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     }
   }
 
+  const fetchReceivings = async () => {
+    try {
+      const data = await api.purchaseOrders.getReceivings(poId)
+      setReceivings(data)
+    } catch (err) {
+      console.error("Failed to fetch receivings", err)
+    }
+  }
+
   useEffect(() => {
     fetchPO()
     fetchParts()
+    fetchReceivings()
     api.companySettings.get().then(setCompanySettings).catch(() => {})
     api.costCodes.getAll().then(setCostCodes).catch(() => {})
   }, [poId])
@@ -656,12 +673,41 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     }
   }
 
+  const handlePrintReceivedPO = async () => {
+    if (!po) return
+    setIsPrintingReceived(true)
+    try {
+      const [project, companySettings, freshReceivings, { pdf }, { ReceivedPurchaseOrderPDF }] = await Promise.all([
+        api.projects.get(po.project_id) as Promise<Project>,
+        api.companySettings.get(),
+        api.purchaseOrders.getReceivings(po.id),
+        import('@react-pdf/renderer'),
+        import('@/components/pdf/ReceivedPurchaseOrderPDF'),
+      ])
+      const blob = await pdf(
+        <ReceivedPurchaseOrderPDF
+          po={po}
+          receivings={freshReceivings}
+          project={project}
+          companySettings={companySettings}
+        />
+      ).toBlob()
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to generate received PO PDF")
+    } finally {
+      setIsPrintingReceived(false)
+    }
+  }
+
   // ===== Receiving Mode Handlers =====
 
   const enterReceivingMode = () => {
     if (!canReceive) return
     setStagedReceivings(new Map())
     setReceivedDate(new Date().toISOString().split('T')[0])
+    setReceivingNotes("")
     setReceivingDialogOpen(true)
     setEditorMode("receiving")
   }
@@ -669,6 +715,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
   const exitReceivingMode = () => {
     setStagedReceivings(new Map())
     setReceivedDate(new Date().toISOString().split('T')[0])
+    setReceivingNotes("")
     setReceivingDialogOpen(false)
     setEditorMode("view")
   }
@@ -707,15 +754,18 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
 
     setIsSubmittingReceiving(true)
     try {
+      const trimmedNotes = receivingNotes.trim()
       const payload: POReceivingCreate = {
         received_date: `${receivedDate}T00:00:00`,
         line_items: receivingLineItems,
+        ...(trimmedNotes ? { notes: trimmedNotes } : {}),
       }
       await api.purchaseOrders.createReceiving(poId, payload)
 
       // Exit receiving mode and refresh
       exitReceivingMode()
       await fetchPO()
+      await fetchReceivings()
       onUpdate?.()
 
       // Check if all items are now received - auto-transition to "Received"
@@ -731,6 +781,13 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     } finally {
       setIsSubmittingReceiving(false)
     }
+  }
+
+  const toggleExpandReceiving = (id: number) => {
+    const next = new Set(expandedReceivings)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setExpandedReceivings(next)
   }
 
   // ===== Calculation Functions =====
@@ -1506,6 +1563,116 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
         </CardContent>
       </Card>
 
+      {/* Receiving History */}
+      {editorMode !== "edit" && receivings.length > 0 && (() => {
+        const activeReceivings = receivings.filter(r => !r.voided_at)
+        const sorted = [...receivings].sort(
+          (a, b) => new Date(b.received_date).getTime() - new Date(a.received_date).getTime()
+        )
+        return (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <History className="h-4 w-4" />
+                Receiving History
+                <Badge variant="secondary" className="ml-2">
+                  {activeReceivings.length} receipt{activeReceivings.length !== 1 ? "s" : ""}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {sorted.map((rcv) => {
+                  const isExpanded = expandedReceivings.has(rcv.id)
+                  const isVoided = !!rcv.voided_at
+                  const totalQty = rcv.line_items.reduce(
+                    (s, l) => s + (l.qty_received_this_receiving ?? 0), 0
+                  )
+                  const totalValue = rcv.line_items.reduce((s, l) => {
+                    const price = l.actual_unit_price ?? l.unit_price ?? 0
+                    const qty = l.qty_received_this_receiving ?? 0
+                    return s + price * qty
+                  }, 0)
+
+                  return (
+                    <div
+                      key={rcv.id}
+                      className={`border rounded-md ${isVoided ? "opacity-60" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className="w-full flex items-center justify-between p-3 hover:bg-muted/50 text-left"
+                        onClick={() => toggleExpandReceiving(rcv.id)}
+                      >
+                        <div className="flex items-center gap-3">
+                          {isExpanded
+                            ? <ChevronDown className="h-4 w-4 shrink-0" />
+                            : <ChevronRight className="h-4 w-4 shrink-0" />}
+                          <div>
+                            <div className={`font-medium ${isVoided ? "line-through" : ""}`}>
+                              {formatDate(rcv.received_date)}
+                              {isVoided && (
+                                <span className="ml-2 text-xs font-normal text-muted-foreground no-underline">
+                                  (voided)
+                                </span>
+                              )}
+                            </div>
+                            {rcv.notes && (
+                              <div className="text-xs text-muted-foreground mt-0.5 truncate max-w-md">
+                                {rcv.notes}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4 text-sm">
+                          <span className="text-muted-foreground">
+                            {totalQty} item{totalQty !== 1 ? "s" : ""}
+                          </span>
+                          <span className="font-medium">{formatCurrency(totalValue)}</span>
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t bg-muted/30 px-3 py-2">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Description</TableHead>
+                                <TableHead className="text-center">Qty Received</TableHead>
+                                <TableHead className="text-right">Actual Unit Price</TableHead>
+                                <TableHead className="text-right">Line Total</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {rcv.line_items.map((line) => {
+                                const match = po.line_items.find(li => li.id === line.po_line_item_id)
+                                const description = match
+                                  ? getLineItemDescription(match)
+                                  : (line.description || "Unknown item")
+                                const price = line.actual_unit_price ?? line.unit_price ?? 0
+                                const qty = line.qty_received_this_receiving ?? 0
+                                return (
+                                  <TableRow key={line.id}>
+                                    <TableCell>{description}</TableCell>
+                                    <TableCell className="text-center">{qty}</TableCell>
+                                    <TableCell className="text-right">{formatCurrency(price)}</TableCell>
+                                    <TableCell className="text-right">{formatCurrency(price * qty)}</TableCell>
+                                  </TableRow>
+                                )
+                              })}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )
+      })()}
+
       {/* Audit Trail */}
       {editorMode !== "edit" && (
         <POAuditTrail
@@ -1521,7 +1688,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
       {/* ===== Floating Action Buttons ===== */}
       <div className="fixed bottom-6 right-6 z-50">
         <div className="flex flex-col items-end gap-2">
-          {/* Secondary actions (Print / Clone) always reachable in view mode */}
+          {/* Secondary actions (Print / Print Received / Clone) always reachable in view mode */}
           {editorMode === "view" && (
             <div className="flex gap-2">
               <Button
@@ -1534,6 +1701,18 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                 {isPrinting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
                 {isPrinting ? "Generating..." : "Print"}
               </Button>
+              {hasBeenReceived && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePrintReceivedPO}
+                  disabled={isPrintingReceived}
+                  className="shadow-md gap-2 bg-background"
+                >
+                  {isPrintingReceived ? <Loader2 className="h-4 w-4 animate-spin" /> : <Receipt className="h-4 w-4" />}
+                  {isPrintingReceived ? "Generating..." : "Print Received"}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -2007,6 +2186,21 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                 value={receivedDate}
                 onChange={(e) => setReceivedDate(e.target.value)}
                 className="max-w-xs"
+              />
+            </div>
+
+            {/* Receiving Notes — optional context (packing slip #, condition, etc.) */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1">
+                <FileText className="h-3 w-3" />
+                Notes <span className="text-xs text-muted-foreground">(optional)</span>
+              </Label>
+              <Textarea
+                value={receivingNotes}
+                onChange={(e) => setReceivingNotes(e.target.value)}
+                placeholder="Packing slip #, condition on arrival, delivered by, etc."
+                rows={2}
+                disabled={isSubmittingReceiving}
               />
             </div>
 
