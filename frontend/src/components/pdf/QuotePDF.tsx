@@ -16,6 +16,7 @@ interface QuotePDFProps {
   quote: Quote
   project: Project
   companySettings: CompanySettings
+  includeBreakdown?: boolean
 }
 
 function LineItemTable({
@@ -23,11 +24,13 @@ function LineItemTable({
   items,
   nonPmsTotal,
   useEffective,
+  showLineDetails,
 }: {
   title: string
   items: QuoteLineItem[]
   nonPmsTotal: number
   useEffective?: boolean
+  showLineDetails: boolean
 }) {
   if (items.length === 0) return null
 
@@ -41,40 +44,44 @@ function LineItemTable({
     <>
       <Text style={styles.sectionTitle}>{title}</Text>
 
-      {/* Table header */}
-      <View style={styles.tableHeader}>
-        <Text style={[styles.colHeaderText, styles.colDescription]}>Description</Text>
-        <Text style={[styles.colHeaderText, styles.colQty]}>Qty</Text>
-        <Text style={[styles.colHeaderText, styles.colUnitPrice]}>Unit Price</Text>
-        <Text style={[styles.colHeaderText, styles.colTotal]}>Total</Text>
-      </View>
-
-      {/* Table rows */}
-      {items.map((item, idx) => {
-        const description = getItemDescription(item)
-        const unitPrice = useEffective && item.is_pms && item.pms_percent != null
-          ? nonPmsTotal * item.pms_percent / 100
-          : getLineItemUnitPrice(item)
-        const total = useEffective
-          ? getEffectiveLineItemTotal(item, nonPmsTotal)
-          : getLineItemTotal(item)
-
-        return (
-          <View
-            key={item.id}
-            style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowAlt : {}]}
-            wrap={false}
-          >
-            <Text style={styles.colDescription}>
-              {description}
-              {item.is_pms && item.pms_percent != null ? ` (PMS ${item.pms_percent}%)` : ''}
-            </Text>
-            <Text style={styles.colQty}>{item.quantity}</Text>
-            <Text style={styles.colUnitPrice}>{formatCurrency(unitPrice)}</Text>
-            <Text style={styles.colTotal}>{formatCurrency(total)}</Text>
+      {showLineDetails && (
+        <>
+          {/* Table header */}
+          <View style={styles.tableHeader}>
+            <Text style={[styles.colHeaderText, styles.colDescription]}>Description</Text>
+            <Text style={[styles.colHeaderText, styles.colQty]}>Qty</Text>
+            <Text style={[styles.colHeaderText, styles.colUnitPrice]}>Unit Price</Text>
+            <Text style={[styles.colHeaderText, styles.colTotal]}>Total</Text>
           </View>
-        )
-      })}
+
+          {/* Table rows */}
+          {items.map((item, idx) => {
+            const description = getItemDescription(item)
+            const unitPrice = useEffective && item.is_pms && item.pms_percent != null
+              ? nonPmsTotal * item.pms_percent / 100
+              : getLineItemUnitPrice(item)
+            const total = useEffective
+              ? getEffectiveLineItemTotal(item, nonPmsTotal)
+              : getLineItemTotal(item)
+
+            return (
+              <View
+                key={item.id}
+                style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowAlt : {}]}
+                wrap={false}
+              >
+                <Text style={styles.colDescription}>
+                  {description}
+                  {item.is_pms && item.pms_percent != null ? ` (PMS ${item.pms_percent}%)` : ''}
+                </Text>
+                <Text style={styles.colQty}>{item.quantity}</Text>
+                <Text style={styles.colUnitPrice}>{formatCurrency(unitPrice)}</Text>
+                <Text style={styles.colTotal}>{formatCurrency(total)}</Text>
+              </View>
+            )
+          })}
+        </>
+      )}
 
       {/* Section subtotal */}
       <View style={styles.tableFooterRow}>
@@ -95,7 +102,7 @@ function getItemDescription(item: QuoteLineItem): string {
   return item.description || 'Unknown item'
 }
 
-export function QuotePDF({ quote, project, companySettings }: QuotePDFProps) {
+export function QuotePDF({ quote, project, companySettings, includeBreakdown = true }: QuotePDFProps) {
   const partItems = quote.line_items.filter(i => i.item_type === 'part')
   const laborItems = quote.line_items.filter(i => i.item_type === 'labor')
   const miscItems = quote.line_items.filter(i => i.item_type === 'misc')
@@ -166,9 +173,9 @@ export function QuotePDF({ quote, project, companySettings }: QuotePDFProps) {
         )}
 
         {/* Line Items by Section */}
-        <LineItemTable title="Parts" items={partItems} nonPmsTotal={nonPmsTotal} />
-        <LineItemTable title="Labour" items={laborItems} nonPmsTotal={nonPmsTotal} useEffective />
-        <LineItemTable title="Miscellaneous" items={miscItems} nonPmsTotal={nonPmsTotal} />
+        <LineItemTable title="Parts" items={partItems} nonPmsTotal={nonPmsTotal} showLineDetails={includeBreakdown} />
+        <LineItemTable title="Labour" items={laborItems} nonPmsTotal={nonPmsTotal} useEffective showLineDetails={includeBreakdown} />
+        <LineItemTable title="Miscellaneous" items={miscItems} nonPmsTotal={nonPmsTotal} showLineDetails={includeBreakdown} />
 
         {/* Totals */}
         <View style={styles.totalsBlock}>
