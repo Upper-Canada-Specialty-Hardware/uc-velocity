@@ -2,12 +2,13 @@ import { Document, Page, View, Text } from '@react-pdf/renderer'
 import { styles } from './styles'
 import { PDFFooter } from './PDFFooter'
 import { formatCurrency } from '@/lib/pricing'
-import type { InvoiceSummaryItem, CompanySettings } from '@/types'
+import type { InvoiceSummaryItem, CompanySettings, ProjectListView } from '@/types'
 
 interface InvoiceSummaryPDFProps {
   invoices: InvoiceSummaryItem[]
   dateRange: { start: string; end: string }
   companySettings: CompanySettings
+  project?: ProjectListView | null
 }
 
 // Column widths for the summary table
@@ -22,7 +23,7 @@ const col = {
   total: { width: '11%', textAlign: 'right' as const },
 }
 
-export function InvoiceSummaryPDF({ invoices, dateRange, companySettings }: InvoiceSummaryPDFProps) {
+export function InvoiceSummaryPDF({ invoices, dateRange, companySettings, project }: InvoiceSummaryPDFProps) {
   const totals = invoices.reduce(
     (acc, inv) => ({
       netSales: acc.netSales + inv.net_sales,
@@ -45,7 +46,9 @@ export function InvoiceSummaryPDF({ invoices, dateRange, companySettings }: Invo
         {/* Title */}
         <Text style={styles.reportTitle}>WorkOrder Invoice Report</Text>
         <Text style={styles.reportSubtitle}>
-          {companySettings.name} — Invoice Report — {formatDate(dateRange.start)} to {formatDate(dateRange.end)}
+          {companySettings.name} — Invoice Report
+          {project ? ` — ${project.uca_project_number} ${project.name}` : ''}
+          {' — '}{formatDate(dateRange.start)} to {formatDate(dateRange.end)}
         </Text>
 
         <View style={styles.divider} />

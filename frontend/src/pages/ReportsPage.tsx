@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 import { api } from '@/api/client'
 import { formatCurrency } from '@/lib/pricing'
 import { formatDate } from '@/lib/format'
-import type { InvoiceSummaryItem, CompanySettings, BacklogQuoteItem, InventoryHealthReport, InventoryHealthIssueCode } from '@/types'
+import type { InvoiceSummaryItem, CompanySettings, BacklogQuoteItem, InventoryHealthReport, InventoryHealthIssueCode, ProjectListView } from '@/types'
 import { FileText, Download, Loader2, ChevronRight, ChevronDown, FileSpreadsheet, ShieldAlert } from 'lucide-react'
 
 export function ReportsPage() {
@@ -17,6 +18,33 @@ export function ReportsPage() {
   const [error, setError] = useState<string | null>(null)
   const [invoices, setInvoices] = useState<InvoiceSummaryItem[] | null>(null)
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null)
+
+  // Project picker for Invoice Summary ('' = All Projects)
+  const [projects, setProjects] = useState<ProjectListView[]>([])
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('')
+
+  useEffect(() => {
+    api.projects.getListView().then(setProjects).catch(() => {
+      // Picker stays empty; report still works in "All Projects" mode
+    })
+  }, [])
+
+  const projectOptions = useMemo(
+    () => [
+      { value: '', label: 'All Projects' },
+      ...projects.map((p) => ({
+        value: String(p.id),
+        label: `${p.uca_project_number} — ${p.name}`,
+        description: p.customer_name,
+      })),
+    ],
+    [projects],
+  )
+
+  const selectedProject = useMemo(
+    () => projects.find((p) => String(p.id) === selectedProjectId) ?? null,
+    [projects, selectedProjectId],
+  )
 
   // Backlog Quotes state
   const [backlogLoading, setBacklogLoading] = useState(false)
@@ -55,8 +83,9 @@ export function ReportsPage() {
     setInvoices(null)
 
     try {
+      const projectIdNum = selectedProjectId ? Number(selectedProjectId) : undefined
       const [data, settings] = await Promise.all([
-        api.invoices.getSummary(startDate, endDate),
+        api.invoices.getSummary(startDate, endDate, projectIdNum),
         api.companySettings.get(),
       ])
       setInvoices(data)
@@ -82,13 +111,15 @@ export function ReportsPage() {
           invoices={invoices}
           dateRange={{ start: startDate, end: endDate }}
           companySettings={companySettings}
+          project={selectedProject}
         />
       ).toBlob()
 
+      const projectTag = selectedProject ? `_${selectedProject.uca_project_number}` : ''
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `Invoice_Report_${startDate}_to_${endDate}.pdf`
+      link.download = `Invoice_Report${projectTag}_${startDate}_to_${endDate}.pdf`
       link.click()
       URL.revokeObjectURL(url)
     } catch (err) {
@@ -112,6 +143,7 @@ export function ReportsPage() {
           invoices={invoices}
           dateRange={{ start: startDate, end: endDate }}
           companySettings={companySettings}
+          project={selectedProject}
         />
       ).toBlob()
 
@@ -185,8 +217,20 @@ export function ReportsPage() {
         </div>
 
         <div className="p-4 space-y-4">
-          {/* Date range inputs */}
-          <div className="flex gap-4 items-end">
+          {/* Filters: project + date range */}
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="space-y-2">
+              <Label>Project</Label>
+              <SearchableSelect
+                options={projectOptions}
+                value={selectedProjectId}
+                onChange={setSelectedProjectId}
+                placeholder="All Projects"
+                searchPlaceholder="Search by UCA #, name, or customer..."
+                emptyMessage="No projects found."
+                className="w-72"
+              />
+            </div>
             <div className="space-y-2">
               <Label htmlFor="start-date">Start Date</Label>
               <Input
