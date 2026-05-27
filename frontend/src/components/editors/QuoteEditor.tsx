@@ -682,6 +682,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     setStagedAdds(prev => prev.filter(item => item.tempId !== tempId))
   }
 
+  const updateStagedAdd = (
+    tempId: number,
+    changes: Partial<Pick<StagedAdd, "quantity" | "base_cost" | "markup_percent" | "description">>
+  ) => {
+    setStagedAdds(prev => prev.map(a => a.tempId === tempId ? { ...a, ...changes } : a))
+  }
+
   const stageDelete = (lineItemId: number) => {
     setStagedDeletes(prev => new Set(prev).add(lineItemId))
     // Remove from staged edits if it was being edited
@@ -2498,7 +2505,23 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                       </div>
                     </TableCell>
                     {/* Qty Ordered */}
-                    <TableCell className="text-right text-green-700 dark:text-green-300 font-medium">{add.quantity}</TableCell>
+                    <TableCell className="text-right">
+                      {editorMode === "edit" ? (
+                        <Input
+                          type="number"
+                          step="1"
+                          min="1"
+                          className="w-20 h-7 text-right text-sm inline-block"
+                          value={add.quantity}
+                          onChange={(e) => {
+                            const val = e.target.value === "" ? 1 : parseInt(e.target.value, 10)
+                            if (!isNaN(val) && val >= 1) updateStagedAdd(add.tempId, { quantity: val })
+                          }}
+                        />
+                      ) : (
+                        <span className="text-green-700 dark:text-green-300 font-medium">{add.quantity}</span>
+                      )}
+                    </TableCell>
                     {/* Qty Pending */}
                     <TableCell className="text-right text-muted-foreground">-</TableCell>
                     {/* Qty to Fulfill - only in invoicing mode */}
@@ -2514,11 +2537,47 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                         <TableCell className="text-right text-muted-foreground">-</TableCell>
                       </>
                     )}
-                    {/* Unit Cost — for staged adds */}
-                    <TableCell className="text-right text-muted-foreground">${addBaseCost.toFixed(2)}</TableCell>
-                    {/* Markup % — for staged adds */}
+                    {/* Unit Cost — for staged adds; editable in edit mode unless PMS */}
+                    <TableCell className="text-right">
+                      {add.is_pms ? (
+                        <span className="text-muted-foreground">-</span>
+                      ) : editorMode === "edit" ? (
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="w-24 h-7 text-right text-sm inline-block"
+                          value={addBaseCost}
+                          onChange={(e) => {
+                            const val = e.target.value === "" ? 0 : parseFloat(e.target.value)
+                            if (!isNaN(val)) updateStagedAdd(add.tempId, { base_cost: val })
+                          }}
+                        />
+                      ) : (
+                        <span className="text-muted-foreground">${addBaseCost.toFixed(2)}</span>
+                      )}
+                    </TableCell>
+                    {/* Markup % — for staged adds; editable in edit mode unless PMS */}
                     {showMarkupCol && (
-                      <TableCell className="text-right text-green-700 dark:text-green-300">{addMarkup}%</TableCell>
+                      <TableCell className="text-right">
+                        {add.is_pms ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : editorMode === "edit" ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="w-20 h-7 text-right text-sm inline-block"
+                            value={addMarkup}
+                            onChange={(e) => {
+                              const val = e.target.value === "" ? 0 : parseFloat(e.target.value)
+                              if (!isNaN(val)) updateStagedAdd(add.tempId, { markup_percent: val })
+                            }}
+                          />
+                        ) : (
+                          <span className="text-green-700 dark:text-green-300">{addMarkup}%</span>
+                        )}
+                      </TableCell>
                     )}
                     {/* Unit Price */}
                     <TableCell className="text-right text-green-700 dark:text-green-300 font-medium">${unitPrice.toFixed(2)}</TableCell>
