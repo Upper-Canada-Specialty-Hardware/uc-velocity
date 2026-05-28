@@ -2176,9 +2176,9 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
               onClick={() => runPrintPO(false)}
               className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
             >
-              <div className="font-medium">Section totals only</div>
+              <div className="font-medium">Quantities only</div>
               <div className="text-sm text-muted-foreground mt-1">
-                Hide per-item rows and show only the Parts and Miscellaneous subtotals.
+                Show each item's description and quantity, but hide all unit prices, line totals, and section subtotals. Only the final Subtotal, HST, and Total are shown.
               </div>
             </button>
           </div>

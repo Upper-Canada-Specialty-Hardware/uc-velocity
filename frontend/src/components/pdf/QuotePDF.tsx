@@ -34,6 +34,30 @@ function LineItemTable({
 }) {
   if (items.length === 0) return null
 
+  // Quantities-only mode: list each item's description + qty, with no pricing
+  // and no section subtotal (only the final Subtotal/HST/Total appear at the bottom).
+  if (!showLineDetails) {
+    return (
+      <>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        <View style={styles.tableHeader}>
+          <Text style={[styles.colHeaderText, styles.colDescriptionWide]}>Description</Text>
+          <Text style={[styles.colHeaderText, styles.colQtyWide]}>Qty</Text>
+        </View>
+        {items.map((item, idx) => (
+          <View
+            key={item.id}
+            style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowAlt : {}]}
+            wrap={false}
+          >
+            <Text style={styles.colDescriptionWide}>{getItemDescription(item)}</Text>
+            <Text style={styles.colQtyWide}>{item.quantity}</Text>
+          </View>
+        ))}
+      </>
+    )
+  }
+
   const sectionTotal = items.reduce(
     (sum, item) =>
       sum + (useEffective ? getEffectiveLineItemTotal(item, nonPmsTotal) : getLineItemTotal(item)),
@@ -44,44 +68,40 @@ function LineItemTable({
     <>
       <Text style={styles.sectionTitle}>{title}</Text>
 
-      {showLineDetails && (
-        <>
-          {/* Table header */}
-          <View style={styles.tableHeader}>
-            <Text style={[styles.colHeaderText, styles.colDescription]}>Description</Text>
-            <Text style={[styles.colHeaderText, styles.colQty]}>Qty</Text>
-            <Text style={[styles.colHeaderText, styles.colUnitPrice]}>Unit Price</Text>
-            <Text style={[styles.colHeaderText, styles.colTotal]}>Total</Text>
+      {/* Table header */}
+      <View style={styles.tableHeader}>
+        <Text style={[styles.colHeaderText, styles.colDescription]}>Description</Text>
+        <Text style={[styles.colHeaderText, styles.colQty]}>Qty</Text>
+        <Text style={[styles.colHeaderText, styles.colUnitPrice]}>Unit Price</Text>
+        <Text style={[styles.colHeaderText, styles.colTotal]}>Total</Text>
+      </View>
+
+      {/* Table rows */}
+      {items.map((item, idx) => {
+        const description = getItemDescription(item)
+        const unitPrice = useEffective && item.is_pms && item.pms_percent != null
+          ? nonPmsTotal * item.pms_percent / 100
+          : getLineItemUnitPrice(item)
+        const total = useEffective
+          ? getEffectiveLineItemTotal(item, nonPmsTotal)
+          : getLineItemTotal(item)
+
+        return (
+          <View
+            key={item.id}
+            style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowAlt : {}]}
+            wrap={false}
+          >
+            <Text style={styles.colDescription}>
+              {description}
+              {item.is_pms && item.pms_percent != null ? ` (PMS ${item.pms_percent}%)` : ''}
+            </Text>
+            <Text style={styles.colQty}>{item.quantity}</Text>
+            <Text style={styles.colUnitPrice}>{formatCurrency(unitPrice)}</Text>
+            <Text style={styles.colTotal}>{formatCurrency(total)}</Text>
           </View>
-
-          {/* Table rows */}
-          {items.map((item, idx) => {
-            const description = getItemDescription(item)
-            const unitPrice = useEffective && item.is_pms && item.pms_percent != null
-              ? nonPmsTotal * item.pms_percent / 100
-              : getLineItemUnitPrice(item)
-            const total = useEffective
-              ? getEffectiveLineItemTotal(item, nonPmsTotal)
-              : getLineItemTotal(item)
-
-            return (
-              <View
-                key={item.id}
-                style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowAlt : {}]}
-                wrap={false}
-              >
-                <Text style={styles.colDescription}>
-                  {description}
-                  {item.is_pms && item.pms_percent != null ? ` (PMS ${item.pms_percent}%)` : ''}
-                </Text>
-                <Text style={styles.colQty}>{item.quantity}</Text>
-                <Text style={styles.colUnitPrice}>{formatCurrency(unitPrice)}</Text>
-                <Text style={styles.colTotal}>{formatCurrency(total)}</Text>
-              </View>
-            )
-          })}
-        </>
-      )}
+        )
+      })}
 
       {/* Section subtotal */}
       <View style={styles.tableFooterRow}>
