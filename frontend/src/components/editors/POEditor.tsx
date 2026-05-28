@@ -758,6 +758,22 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     setStagedReceivings(newMap)
   }
 
+  /** Stage the full pending quantity for every line item with items outstanding. */
+  const stageReceiveAll = () => {
+    if (!po) return
+    const newMap = new Map(stagedReceivings)
+    for (const item of po.line_items) {
+      if (item.qty_pending > 0) {
+        const existing = newMap.get(item.id)
+        newMap.set(item.id, {
+          qty_received: item.qty_pending,
+          actual_unit_price: existing?.actual_unit_price,
+        })
+      }
+    }
+    setStagedReceivings(newMap)
+  }
+
   /** Submit staged receiving quantities and actual prices to the backend. */
   const handleSubmitReceiving = async () => {
     if (!po) return
@@ -2375,7 +2391,20 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
               }
 
               return (
-                <Table>
+                <div className="space-y-2">
+                  <div className="flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={stageReceiveAll}
+                      disabled={isSubmittingReceiving}
+                      className="gap-2"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      Receive All Pending
+                    </Button>
+                  </div>
+                  <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Description</TableHead>
@@ -2463,6 +2492,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                     })}
                   </TableBody>
                 </Table>
+                </div>
               )
             })()}
           </div>
