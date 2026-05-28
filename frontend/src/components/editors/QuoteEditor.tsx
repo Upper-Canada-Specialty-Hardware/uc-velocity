@@ -50,7 +50,7 @@ import {
 import type { SearchableSelectOption } from "@/components/ui/searchable-select"
 import { api } from "@/api/client"
 import type {
-  Quote, QuoteLineItem, QuoteLineItemCreate, QuoteLineItemUpdate,
+  Quote, QuoteLineItem, QuoteLineItemCreate,
   LineItemType, Part, Labor, Miscellaneous, CostCode,
   StagedFulfillment, InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
   StagedLineItemChange, CommitEditsRequest
@@ -95,10 +95,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // inventory edit form so the user can update the master record without leaving the quote.
   const [addDialogMode, setAddDialogMode] = useState<"select" | "edit-inventory">("select")
 
-  // Edit dialog states
-  const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [editingLineItem, setEditingLineItem] = useState<QuoteLineItem | null>(null)
-
   // Auto-add labor dialog
   const [autoAddLaborDialogOpen, setAutoAddLaborDialogOpen] = useState(false)
   const [pendingPart, setPendingPart] = useState<Part | null>(null)
@@ -114,9 +110,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   const [selectedLaborId, setSelectedLaborId] = useState<string>("")
   const [selectedMiscId, setSelectedMiscId] = useState<string>("")
   const [quantity, setQuantity] = useState("1")
-
-  // Edit form fields
-  const [editQuantity, setEditQuantity] = useState("1")
 
   // Staged fulfillments (session only - not persisted until invoice created)
   const [stagedFulfillments, setStagedFulfillments] = useState<Map<number, number>>(new Map())
@@ -355,12 +348,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     setAddDialogMode("select")
   }
 
-  const openEditDialog = (item: QuoteLineItem) => {
-    setEditingLineItem(item)
-    setEditQuantity(item.quantity.toString())
-    setEditDialogOpen(true)
-  }
-
   const handleAddLineItem = async () => {
     const qty = parseFloat(quantity) || 1
 
@@ -568,44 +555,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       onUpdate?.()
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to add part")
-    }
-  }
-
-  const handleUpdateLineItem = async () => {
-    if (!editingLineItem) return
-
-    const newQuantity = parseFloat(editQuantity) || 1
-
-    // In edit mode, stage the edit instead of immediate API call
-    if (editorMode === "edit") {
-      const changes: Partial<Omit<StagedEdit, "originalItem">> = {}
-
-      if (newQuantity !== editingLineItem.quantity) {
-        changes.quantity = newQuantity
-      }
-
-      if (Object.keys(changes).length > 0) {
-        stageEdit(editingLineItem, changes)
-      }
-
-      setEditDialogOpen(false)
-      setEditingLineItem(null)
-      return
-    }
-
-    // Direct API call when not in edit mode
-    const updateData: QuoteLineItemUpdate = {
-      quantity: newQuantity,
-    }
-
-    try {
-      await api.quotes.updateLine(quoteId, editingLineItem.id, updateData)
-      setEditDialogOpen(false)
-      setEditingLineItem(null)
-      fetchQuote()
-      onUpdate?.()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update line item")
     }
   }
 
@@ -2246,9 +2195,22 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                       </div>
                     </TableCell>
 
-                    {/* Qty Ordered Column */}
+                    {/* Qty Ordered Column — inline-editable in edit mode (non-PMS) */}
                     <TableCell className="text-right">
-                      {editedItem?.quantity !== undefined && editedItem.quantity !== item.quantity ? (
+                      {editorMode === "edit" && !item.is_pms ? (
+                        <Input
+                          type="number"
+                          step="1"
+                          min="1"
+                          className="w-20 h-7 text-right text-sm inline-block"
+                          value={editedItem?.quantity ?? item.quantity}
+                          onChange={(e) => {
+                            const val = e.target.value === "" ? 1 : parseInt(e.target.value, 10)
+                            if (!isNaN(val) && val >= 1) stageEdit(item, { quantity: val })
+                          }}
+                          disabled={isDeleted || hasBeenInvoiced}
+                        />
+                      ) : editedItem?.quantity !== undefined && editedItem.quantity !== item.quantity ? (
                         <span className="font-bold text-blue-600 dark:text-blue-400">{editedItem.quantity}</span>
                       ) : (
                         item.quantity
@@ -2445,16 +2407,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                       {/* Edit Mode: Edit, Undo edit, Undo delete, Delete buttons */}
                       {editorMode === "edit" && (
                         <>
-                          {/* Edit button */}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => openEditDialog(item)}
-                            disabled={hasBeenInvoiced || isDeleted}
-                            title={hasBeenInvoiced ? "Quote is frozen" : isDeleted ? "Item marked for deletion" : "Edit"}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
                           {/* Undo staged edit */}
                           {isEdited && !isDeleted && (
                             <Button
@@ -3702,48 +3654,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
         </DialogContent>
       </Dialog>
 
-      {/* Edit Line Item Dialog */}
-      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Line Item</DialogTitle>
-            <DialogDescription>
-              Update the quantity for this line item.
-            </DialogDescription>
-          </DialogHeader>
-
-          {editingLineItem && (
-            <div className="space-y-4 pt-4">
-              <div className="bg-muted/50 p-3 rounded-md">
-                <p className="text-sm font-medium">{getDescriptionLabel(editingLineItem)}</p>
-                <p className="text-lg">{getLineItemDescription(editingLineItem)}</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Quantity</Label>
-                <Input
-                  type="number"
-                  step="1"
-                  min="1"
-                  value={editQuantity}
-                  onChange={(e) => setEditQuantity(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Unit Price</Label>
-                <div className="px-3 py-2 bg-muted/50 rounded-md text-muted-foreground">
-                  ${getLineItemUnitPrice(editingLineItem).toFixed(2)}
-                </div>
-              </div>
-
-              <Button onClick={handleUpdateLineItem} className="w-full">
-                Save Changes
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
 
       {/* Auto-Add Labor Confirmation Dialog */}
       <Dialog open={autoAddLaborDialogOpen} onOpenChange={setAutoAddLaborDialogOpen}>
