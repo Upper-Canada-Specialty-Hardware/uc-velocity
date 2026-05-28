@@ -4,6 +4,7 @@ from sqlalchemy import func
 from typing import List, Optional
 
 from database import get_db
+from auth import current_actor
 from models import (
     Quote, QuoteLineItem, Project, Labor, Part, Miscellaneous,
     QuoteSnapshot, QuoteLineItemSnapshot, Invoice, InvoiceLineItem, CostCode
@@ -48,13 +49,16 @@ def create_snapshot(
     new_version = quote.current_version + 1
     quote.current_version = new_version
 
-    # Create the snapshot
+    # Create the snapshot (record the acting user from the request context)
+    actor = current_actor.get()
     snapshot = QuoteSnapshot(
         quote_id=quote.id,
         version=new_version,
         action_type=action_type,
         action_description=action_description,
-        invoice_id=invoice_id
+        invoice_id=invoice_id,
+        actor_user_id=actor["user_id"] if actor else None,
+        actor_email=actor.get("email") if actor else None,
     )
     db.add(snapshot)
     db.flush()  # Get the snapshot ID

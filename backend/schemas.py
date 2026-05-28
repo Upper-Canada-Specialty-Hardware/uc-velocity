@@ -713,6 +713,8 @@ class POSnapshotBase(BaseModel):
 class POSnapshot(POSnapshotBase):
     id: int
     created_at: datetime
+    actor_user_id: Optional[str] = None
+    actor_email: Optional[str] = None
     line_item_states: List[POLineItemSnapshot] = []
 
     class Config:
@@ -953,6 +955,8 @@ class QuoteSnapshotBase(BaseModel):
 class QuoteSnapshot(QuoteSnapshotBase):
     id: int
     created_at: datetime
+    actor_user_id: Optional[str] = None
+    actor_email: Optional[str] = None
     line_item_states: List[QuoteLineItemSnapshot] = []
 
     class Config:

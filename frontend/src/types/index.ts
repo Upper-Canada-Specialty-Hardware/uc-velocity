@@ -558,6 +558,8 @@ export interface POSnapshot {
   action_type: POSnapshotActionType;
   action_description?: string;
   created_at: string;
+  actor_user_id?: string | null;
+  actor_email?: string | null;
   receiving_id?: number;
   line_items_states: POLineItemSnapshot[];
 }
@@ -716,6 +718,8 @@ export interface QuoteSnapshot {
   action_type: SnapshotActionType;
   action_description?: string;
   created_at: string;
+  actor_user_id?: string | null;
+  actor_email?: string | null;
   invoice_id?: number;
   line_item_states: QuoteLineItemSnapshot[];
 }

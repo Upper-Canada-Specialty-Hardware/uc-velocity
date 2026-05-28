@@ -312,6 +312,8 @@ class POSnapshot(Base):
     action_description = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     receiving_id = Column(Integer, ForeignKey('po_receivings.id'), nullable=True)
+    actor_user_id = Column(String, nullable=True)  # Clerk user id (sub) who performed the action
+    actor_email = Column(String, nullable=True)  # Resolved email, for display
 
     # Relationships
     purchase_order = relationship("PurchaseOrder", back_populates="snapshots")
@@ -395,6 +397,8 @@ class QuoteSnapshot(Base):
     action_description = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     invoice_id = Column(Integer)  # If action_type="invoice", link to Invoice
+    actor_user_id = Column(String, nullable=True)  # Clerk user id (sub) who performed the action
+    actor_email = Column(String, nullable=True)  # Resolved email, for display
 
     # Relationships
     quote = relationship("Quote", back_populates="snapshots")
