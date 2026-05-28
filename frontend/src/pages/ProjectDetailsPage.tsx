@@ -82,7 +82,7 @@ function EditorFallback() {
 interface ProjectDetailsPageProps {
   projectId: number
   onBack: () => void
-  initialDoc?: { type: "quote" | "po"; id: number } | null
+  initialDoc?: { type: "quote" | "po" | "invoice"; id: number } | null
 }
 
 type DocumentType = "quote" | "po" | "invoice"

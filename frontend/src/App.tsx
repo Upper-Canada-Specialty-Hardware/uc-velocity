@@ -68,7 +68,7 @@ type ParsedRoute =
   | {
       view: "project-details"
       projectId: number
-      initialDoc: { type: "quote" | "po"; id: number } | null
+      initialDoc: { type: "quote" | "po" | "invoice"; id: number } | null
     }
 
 function parseRoute(pathname: string): ParsedRoute {
@@ -83,13 +83,11 @@ function parseRoute(pathname: string): ParsedRoute {
     const projectId = parseInt(projMatch[1], 10)
     const docSeg = projMatch[2]
     const docId = projMatch[3] ? parseInt(projMatch[3], 10) : null
-    let initialDoc: { type: "quote" | "po"; id: number } | null = null
+    let initialDoc: { type: "quote" | "po" | "invoice"; id: number } | null = null
     if (docId !== null) {
       if (docSeg === "quotes") initialDoc = { type: "quote", id: docId }
       else if (docSeg === "pos") initialDoc = { type: "po", id: docId }
-      // /invoices/:id deep-links open the project details and the invoice subview;
-      // the editor handles invoice selection via its initialDoc-like flow.
-      else if (docSeg === "invoices") initialDoc = { type: "quote", id: docId } // editor surfaces invoice through quote anyway
+      else if (docSeg === "invoices") initialDoc = { type: "invoice", id: docId }
     }
     return { view: "project-details", projectId, initialDoc }
   }
