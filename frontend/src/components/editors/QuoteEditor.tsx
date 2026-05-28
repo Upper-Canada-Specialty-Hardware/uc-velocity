@@ -131,17 +131,14 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // Client PO Number editing
   const [clientPoNumber, setClientPoNumber] = useState("")
   const [isEditingClientPo, setIsEditingClientPo] = useState(false)
-  const [savingClientPo, setSavingClientPo] = useState(false)
 
   // Work Description editing
   const [workDescription, setWorkDescription] = useState("")
   const [isEditingWorkDescription, setIsEditingWorkDescription] = useState(false)
-  const [savingWorkDescription, setSavingWorkDescription] = useState(false)
 
   // Hardware Schedule Version editing
   const [hardwareScheduleVersion, setHardwareScheduleVersion] = useState("")
   const [isEditingHardwareScheduleVersion, setIsEditingHardwareScheduleVersion] = useState(false)
-  const [savingHardwareScheduleVersion, setSavingHardwareScheduleVersion] = useState(false)
 
   // PMS (Project Management Services) dialog states
   const [pmsDialogOpen, setPmsDialogOpen] = useState(false)
@@ -212,8 +209,17 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // Computed: Is quote frozen (has been invoiced)?
   const hasBeenInvoiced = quote?.line_items.some(item => item.qty_fulfilled > 0) ?? false
 
+  // Metadata (client PO / work description / hardware schedule) is staged in edit
+  // mode and persisted on Commit — never eager-saved by the per-field Save button.
+  const metadataDirty =
+    editorMode === "edit" && !!quote && (
+      clientPoNumber.trim() !== (quote.client_po_number || "") ||
+      workDescription.trim() !== (quote.work_description || "") ||
+      hardwareScheduleVersion.trim() !== (quote.hardware_schedule_version || "")
+    )
+
   // Computed: Are there any staged changes?
-  const hasStagedChanges = stagedEdits.size > 0 || stagedAdds.length > 0 || stagedDeletes.size > 0
+  const hasStagedChanges = stagedEdits.size > 0 || stagedAdds.length > 0 || stagedDeletes.size > 0 || metadataDirty
 
   // Computed: Total count of staged changes
   const stagedChangesCount = stagedEdits.size + stagedAdds.length + stagedDeletes.size
@@ -592,6 +598,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     setStagedAdds([])
     setStagedDeletes(new Set())
     setEditModeStartVersion(null)
+    // Revert any staged metadata edits back to the persisted values
+    setClientPoNumber(quote?.client_po_number || "")
+    setWorkDescription(quote?.work_description || "")
+    setHardwareScheduleVersion(quote?.hardware_schedule_version || "")
+    setIsEditingClientPo(false)
+    setIsEditingWorkDescription(false)
+    setIsEditingHardwareScheduleVersion(false)
     setEditorMode("view")
     setDiscardConfirmOpen(false)
   }
@@ -770,13 +783,29 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
         })
       }
 
-      const request: CommitEditsRequest = { changes }
-      await api.quotes.commitEdits(quoteId, request)
+      // Persist staged metadata edits (deferred from the per-field Save to Commit
+      // so editing a text field no longer eager-writes or leaves edit mode).
+      if (metadataDirty) {
+        await api.quotes.update(quoteId, {
+          client_po_number: clientPoNumber.trim() || null,
+          work_description: workDescription.trim() || null,
+          hardware_schedule_version: hardwareScheduleVersion.trim() || null,
+        })
+      }
+
+      // Commit line-item changes (skipped when only metadata changed)
+      if (changes.length > 0) {
+        const request: CommitEditsRequest = { changes }
+        await api.quotes.commitEdits(quoteId, request)
+      }
 
       // Clear staged changes and exit edit mode
       setStagedEdits(new Map())
       setStagedAdds([])
       setStagedDeletes(new Set())
+      setIsEditingClientPo(false)
+      setIsEditingWorkDescription(false)
+      setIsEditingHardwareScheduleVersion(false)
       setEditorMode("view")
 
       // Refresh quote data
@@ -803,47 +832,11 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // Check if controls should be enabled based on mode
   const canEdit = editorMode === "edit" && !hasBeenInvoiced
 
-  const handleSaveClientPoNumber = async () => {
-    setSavingClientPo(true)
-    try {
-      await api.quotes.update(quoteId, { client_po_number: clientPoNumber.trim() || null })
-      setIsEditingClientPo(false)
-      fetchQuote()
-      onUpdate?.()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update Client PO Number")
-    } finally {
-      setSavingClientPo(false)
-    }
-  }
-
-  const handleSaveWorkDescription = async () => {
-    setSavingWorkDescription(true)
-    try {
-      await api.quotes.update(quoteId, { work_description: workDescription.trim() || null })
-      setIsEditingWorkDescription(false)
-      fetchQuote()
-      onUpdate?.()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update Work Description")
-    } finally {
-      setSavingWorkDescription(false)
-    }
-  }
-
-  const handleSaveHardwareScheduleVersion = async () => {
-    setSavingHardwareScheduleVersion(true)
-    try {
-      await api.quotes.update(quoteId, { hardware_schedule_version: hardwareScheduleVersion.trim() || null })
-      setIsEditingHardwareScheduleVersion(false)
-      fetchQuote()
-      onUpdate?.()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update Hardware Schedule Version")
-    } finally {
-      setSavingHardwareScheduleVersion(false)
-    }
-  }
+  // These per-field "Save" buttons only close the inline editor; the value is held
+  // in local state and persisted together on Commit (see handleCommitChanges).
+  const handleSaveClientPoNumber = () => setIsEditingClientPo(false)
+  const handleSaveWorkDescription = () => setIsEditingWorkDescription(false)
+  const handleSaveHardwareScheduleVersion = () => setIsEditingHardwareScheduleVersion(false)
 
   const handleCostCodeChange = async (value: string) => {
     const costCodeId = parseInt(value)
@@ -2806,9 +2799,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               <Button
                 size="sm"
                 onClick={handleSaveClientPoNumber}
-                disabled={savingClientPo}
               >
-                {savingClientPo ? "Saving..." : "Save"}
+                Save
               </Button>
               <Button
                 size="sm"
@@ -2823,10 +2815,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              {quote.client_po_number ? (
-                <span className="font-medium">{quote.client_po_number}</span>
+              {clientPoNumber.trim() ? (
+                <span className="font-medium">{clientPoNumber}</span>
               ) : (
                 <span className="text-muted-foreground" title={editorMode === "edit" ? "Click pencil to set" : undefined}>—</span>
+              )}
+              {editorMode === "edit" && clientPoNumber.trim() !== (quote.client_po_number || "") && (
+                <Badge variant="outline" className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 border-blue-300">Pending</Badge>
               )}
               {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
@@ -2836,7 +2831,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               )}
             </div>
           )}
-          {!quote.client_po_number && (
+          {!clientPoNumber.trim() && (
             <p className="text-sm text-amber-600 mt-2">
               A Client PO Number is required before you can create an invoice.
             </p>
@@ -2890,9 +2885,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                 <Button
                   size="sm"
                   onClick={handleSaveWorkDescription}
-                  disabled={savingWorkDescription}
                 >
-                  {savingWorkDescription ? "Saving..." : "Save"}
+                  Save
                 </Button>
                 <Button
                   size="sm"
@@ -2908,10 +2902,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
             </div>
           ) : (
             <div className="flex items-start gap-2">
-              {quote.work_description ? (
-                <p className="whitespace-pre-wrap">{quote.work_description}</p>
+              {workDescription.trim() ? (
+                <p className="whitespace-pre-wrap">{workDescription}</p>
               ) : (
                 <span className="text-muted-foreground" title={editorMode === "edit" ? "Click pencil to set" : undefined}>—</span>
+              )}
+              {editorMode === "edit" && workDescription.trim() !== (quote.work_description || "") && (
+                <Badge variant="outline" className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 border-blue-300 self-start">Pending</Badge>
               )}
               {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
@@ -2944,9 +2941,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                 <Button
                   size="sm"
                   onClick={handleSaveHardwareScheduleVersion}
-                  disabled={savingHardwareScheduleVersion}
                 >
-                  {savingHardwareScheduleVersion ? "Saving..." : "Save"}
+                  Save
                 </Button>
                 <Button
                   size="sm"
@@ -2962,11 +2958,15 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
             </div>
           ) : (
             <div className="flex items-start gap-2">
-              {quote.hardware_schedule_version ? (
-                <p className="whitespace-pre-wrap">{quote.hardware_schedule_version}</p>
+              {hardwareScheduleVersion.trim() ? (
+                <p className="whitespace-pre-wrap">{hardwareScheduleVersion}</p>
               ) : (
                 <span className="text-muted-foreground" title={editorMode === "edit" ? "Click pencil to set" : undefined}>—</span>
               )}
+              {editorMode === "edit" && hardwareScheduleVersion.trim() !== (quote.hardware_schedule_version || "") && (
+                <Badge variant="outline" className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 border-blue-300 self-start">Pending</Badge>
+              )}
+              {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
                 <Button size="sm" variant="ghost" onClick={() => setIsEditingHardwareScheduleVersion(true)}>
                   <Pencil className="h-4 w-4" />
