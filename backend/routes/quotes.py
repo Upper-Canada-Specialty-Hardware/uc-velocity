@@ -277,6 +277,33 @@ def populate_quote_number(quote: Quote, uca_project_number: str) -> QuoteSchema:
     return response
 
 
+def format_invoice_number(invoice_sequence: int, uca_project_number: str, quote_sequence: int, quote_version: int) -> str:
+    """
+    Format the full invoice number string.
+
+    Pattern: {invoice_sequence}-{quote_number}, where quote_number is the quote's
+    number as it stood at invoice time: {UCA}-{quote_sequence:04d}-{quote_version}.
+    Example: 1-A2132-0001-3
+    """
+    return f"{invoice_sequence}-{uca_project_number}-{quote_sequence:04d}-{quote_version}"
+
+
+def populate_invoice_number(invoice: Invoice, db: Session) -> InvoiceSchema:
+    """Convert an Invoice ORM object to an InvoiceSchema with a computed invoice_number."""
+    response = InvoiceSchema.model_validate(invoice)
+    quote = invoice.quote or db.query(Quote).filter(Quote.id == invoice.quote_id).first()
+    if quote is not None:
+        project = quote.project or db.query(Project).filter(Project.id == quote.project_id).first()
+        if project is not None:
+            response.invoice_number = format_invoice_number(
+                invoice.invoice_sequence,
+                project.uca_project_number,
+                quote.quote_sequence,
+                invoice.quote_version,
+            )
+    return response
+
+
 router = APIRouter(prefix="/quotes", tags=["quotes"])
 
 
@@ -1228,12 +1255,15 @@ def get_quote_invoices(quote_id: int, db: Session = Depends(get_db)):
 
     invoices = (
         db.query(Invoice)
-        .options(joinedload(Invoice.line_items))
+        .options(
+            joinedload(Invoice.line_items),
+            joinedload(Invoice.quote).joinedload(Quote.project),
+        )
         .filter(Invoice.quote_id == quote_id)
         .order_by(Invoice.created_at.desc())
         .all()
     )
-    return invoices
+    return [populate_invoice_number(inv, db) for inv in invoices]
 
 
 @router.post("/{quote_id}/invoices", response_model=InvoiceSchema)
@@ -1289,11 +1319,19 @@ def create_invoice(
             )
         line_items_to_fulfill.append((line_item, fulfillment.quantity))
 
+    # Per-quote invoice sequence (1, 2, 3...) for the structured invoice number
+    next_invoice_seq = (
+        db.query(func.max(Invoice.invoice_sequence))
+        .filter(Invoice.quote_id == quote_id)
+        .scalar() or 0
+    ) + 1
+
     # Create the invoice
     invoice = Invoice(
         quote_id=quote_id,
         status="Sent",
-        notes=invoice_data.notes
+        notes=invoice_data.notes,
+        invoice_sequence=next_invoice_seq,
     )
     db.add(invoice)
     db.flush()  # Get invoice ID
@@ -1326,7 +1364,7 @@ def create_invoice(
         line_item.qty_fulfilled += fulfill_qty
         line_item.qty_pending -= fulfill_qty
 
-    # Create snapshot for this invoice action
+    # Create snapshot for this invoice action (bumps quote.current_version)
     create_snapshot(
         db=db,
         quote=quote,
@@ -1335,17 +1373,23 @@ def create_invoice(
         invoice_id=invoice.id
     )
 
+    # Capture the quote version at invoice time for the structured invoice number
+    invoice.quote_version = quote.current_version
+
     db.commit()
     db.refresh(invoice)
 
-    # Reload with relationships
+    # Reload with relationships (quote + project needed for the computed invoice_number)
     invoice = (
         db.query(Invoice)
-        .options(joinedload(Invoice.line_items))
+        .options(
+            joinedload(Invoice.line_items),
+            joinedload(Invoice.quote).joinedload(Quote.project),
+        )
         .filter(Invoice.id == invoice.id)
         .first()
     )
-    return invoice
+    return populate_invoice_number(invoice, db)
 
 
 # ==================== Snapshots (Audit Trail) ====================

@@ -893,6 +893,9 @@ class InvoiceStatusUpdate(BaseModel):
 
 class Invoice(InvoiceBase):
     id: int
+    invoice_sequence: int = 1
+    quote_version: int = 0
+    invoice_number: Optional[str] = None  # Computed: "{invoice_sequence}-{UCA}-{quote_seq:04d}-{quote_version}"
     created_at: datetime
     status: str
     voided_at: Optional[datetime] = None

@@ -348,6 +348,8 @@ class Invoice(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="Sent")  # "Sent", "Paid", "Voided"
     notes = Column(String)  # Optional notes for this invoice
+    invoice_sequence = Column(Integer, default=1)  # Per-quote sequence (1, 2, 3...)
+    quote_version = Column(Integer, default=0)  # Quote version captured at invoice time
     voided_at = Column(DateTime)  # When voided (if applicable)
     voided_by_snapshot_id = Column(Integer)  # Which revert voided this
 

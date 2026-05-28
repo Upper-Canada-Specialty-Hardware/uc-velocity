@@ -141,7 +141,7 @@ export function InvoiceEditor({ invoiceId, onUpdate }: InvoiceEditorProps) {
         <div>
           <div className="flex items-center gap-3">
             <Receipt className="h-6 w-6" />
-            <h2 className="text-xl font-semibold">Invoice #{invoice.id}</h2>
+            <h2 className="text-xl font-semibold">Invoice #{invoice.invoice_number ?? invoice.id}</h2>
             <Badge variant={getStatusBadgeVariant(invoice.status)}>
               {invoice.status}
             </Badge>

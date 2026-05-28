@@ -120,7 +120,7 @@ export function InvoicePDF({ invoice, quote, project, companySettings }: Invoice
             </View>
             <View style={styles.metaRow}>
               <Text style={styles.metaLabel}>Invoice #:</Text>
-              <Text style={styles.metaValue}>{invoice.id}</Text>
+              <Text style={styles.metaValue}>{invoice.invoice_number ?? invoice.id}</Text>
             </View>
             <View style={styles.metaRow}>
               <Text style={styles.metaLabel}>Quote Date:</Text>

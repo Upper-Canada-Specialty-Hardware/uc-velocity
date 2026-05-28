@@ -16,6 +16,7 @@ from schemas import (
     LineItemFulfillment,
     InvoiceSummaryItem
 )
+from routes.quotes import populate_invoice_number
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -98,13 +99,16 @@ def get_invoice(invoice_id: int, db: Session = Depends(get_db)):
     """Get a single invoice with all line items."""
     invoice = (
         db.query(Invoice)
-        .options(joinedload(Invoice.line_items))
+        .options(
+            joinedload(Invoice.line_items),
+            joinedload(Invoice.quote).joinedload(Quote.project),
+        )
         .filter(Invoice.id == invoice_id)
         .first()
     )
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    return invoice
+    return populate_invoice_number(invoice, db)
 
 
 @router.put("/{invoice_id}", response_model=InvoiceSchema)
@@ -141,11 +145,14 @@ def update_invoice_status(
     # Reload with relationships
     invoice = (
         db.query(Invoice)
-        .options(joinedload(Invoice.line_items))
+        .options(
+            joinedload(Invoice.line_items),
+            joinedload(Invoice.quote).joinedload(Quote.project),
+        )
         .filter(Invoice.id == invoice_id)
         .first()
     )
-    return invoice
+    return populate_invoice_number(invoice, db)
 
 
 # Invoice creation endpoint on quotes router (will be added to quotes.py)

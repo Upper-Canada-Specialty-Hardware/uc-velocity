@@ -643,6 +643,9 @@ export type InvoiceStatus = 'Sent' | 'Paid' | 'Voided';
 export interface Invoice {
   id: number;
   quote_id: number;
+  invoice_sequence: number;
+  quote_version: number;
+  invoice_number?: string | null; // Computed: "{invoice_sequence}-{UCA}-{quote_seq}-{quote_version}"
   created_at: string;
   status: InvoiceStatus;
   notes?: string;
