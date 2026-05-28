@@ -179,6 +179,9 @@ export const styles = StyleSheet.create({
   colQty: { width: '10%', textAlign: 'right' },
   colUnitPrice: { width: '20%', textAlign: 'right' },
   colTotal: { width: '20%', textAlign: 'right' },
+  // Column widths for quantities-only (no-pricing) layout
+  colDescriptionWide: { width: '85%' },
+  colQtyWide: { width: '15%', textAlign: 'right' },
   // Column header text
   colHeaderText: {
     fontFamily: 'Helvetica-Bold',
