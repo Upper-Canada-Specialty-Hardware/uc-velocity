@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
-import { Show, SignInButton, SignUpButton, UserButton } from "@clerk/react"
+import { Show, SignInButton, UserButton } from "@clerk/react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import {
@@ -58,6 +58,8 @@ import {
   BarChart3,
   Settings,
   DatabaseZap,
+  Menu,
+  X,
 } from "lucide-react"
 import { Toaster } from "@/components/ui/toaster"
 
@@ -131,6 +133,25 @@ function App() {
   const [editingPart, setEditingPart] = useState<Part | null>(null)
   const [editingLabor, setEditingLabor] = useState<Labor | null>(null)
   const [editingMisc, setEditingMisc] = useState<Miscellaneous | null>(null)
+
+  // Mobile sidebar drawer state (#127): hidden by default, hamburger toggles it on `< md:`.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+
+  // Auto-close the mobile drawer whenever the route changes — navigating to a page
+  // means the user is done with the sidebar.
+  useEffect(() => {
+    setMobileNavOpen(false)
+  }, [location.pathname])
+
+  // Esc closes the mobile drawer.
+  useEffect(() => {
+    if (!mobileNavOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMobileNavOpen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [mobileNavOpen])
 
   // Fetch inventory data when viewing inventory
   const fetchInventory = async () => {
@@ -401,7 +422,12 @@ function App() {
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{part.markup_percent ?? 0}%</div>
                           <div className={`${cellClass} font-medium justify-end`}>${(part.cost * (1 + (part.markup_percent ?? 0) / 100)).toFixed(2)}</div>
                           <div className={`${cellClass} justify-end gap-1`}>
-                            <Button variant="ghost" size="sm" onClick={() => handleEditPart(part)}>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditPart(part)}
+                              aria-label={`Edit part ${part.part_number}`}
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
                             <Button
@@ -409,6 +435,7 @@ function App() {
                               size="sm"
                               onClick={() => handleDeletePart(part.id)}
                               className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              aria-label={`Delete part ${part.part_number}`}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -461,7 +488,12 @@ function App() {
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.markup_percent}%</div>
                           <div className={`${cellClass} font-medium justify-end`}>${(labor.hours * labor.rate * (1 + labor.markup_percent / 100)).toFixed(2)}</div>
                           <div className={`${cellClass} justify-end gap-1`}>
-                            <Button variant="ghost" size="sm" onClick={() => handleEditLabor(labor)}>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditLabor(labor)}
+                              aria-label={`Edit labour ${labor.description}`}
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
                             <Button
@@ -469,6 +501,7 @@ function App() {
                               size="sm"
                               onClick={() => handleDeleteLabor(labor.id)}
                               className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              aria-label={`Delete labour ${labor.description}`}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -519,7 +552,12 @@ function App() {
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{misc.markup_percent}%</div>
                           <div className={`${cellClass} font-medium justify-end`}>${(misc.unit_price * (1 + misc.markup_percent / 100)).toFixed(2)}</div>
                           <div className={`${cellClass} justify-end gap-1`}>
-                            <Button variant="ghost" size="sm" onClick={() => handleEditMisc(misc)}>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditMisc(misc)}
+                              aria-label={`Edit miscellaneous item ${misc.description}`}
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
                             <Button
@@ -527,7 +565,7 @@ function App() {
                               size="sm"
                               onClick={() => handleDeleteMisc(misc.id)}
                               className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                              title="Delete"
+                              aria-label={`Delete miscellaneous item ${misc.description}`}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -548,22 +586,87 @@ function App() {
     }
   }
 
+  // Shared nav body — rendered inside both the desktop sidebar and the mobile drawer.
+  // Each nav button closes the mobile drawer on click (handled by the route-change effect).
+  const navItems = (
+    <nav className="p-4 space-y-2">
+      <Button
+        variant={currentView === "projects" || currentView === "project-details" ? "secondary" : "ghost"}
+        className="w-full justify-start gap-2"
+        onClick={() => navigate("/projects")}
+      >
+        <FolderOpen className="h-4 w-4" />
+        Projects
+      </Button>
+      <Button
+        variant={currentView === "profiles" ? "secondary" : "ghost"}
+        className="w-full justify-start gap-2"
+        onClick={() => navigate("/profiles")}
+      >
+        <Users className="h-4 w-4" />
+        Profiles
+      </Button>
+      <Button
+        variant={currentView === "inventory" ? "secondary" : "ghost"}
+        className="w-full justify-start gap-2"
+        onClick={() => navigate("/inventory")}
+      >
+        <Boxes className="h-4 w-4" />
+        Inventory
+      </Button>
+      <Button
+        variant={currentView === "reports" ? "secondary" : "ghost"}
+        className="w-full justify-start gap-2"
+        onClick={() => navigate("/reports")}
+      >
+        <BarChart3 className="h-4 w-4" />
+        Reports
+      </Button>
+      <Button
+        variant={currentView === "settings" ? "secondary" : "ghost"}
+        className="w-full justify-start gap-2"
+        onClick={() => navigate("/settings")}
+      >
+        <Settings className="h-4 w-4" />
+        Settings
+      </Button>
+      {isAdmin && (
+        <Button
+          variant={currentView === "migration" ? "secondary" : "ghost"}
+          className="w-full justify-start gap-2"
+          onClick={() => navigate("/admin/migration")}
+        >
+          <DatabaseZap className="h-4 w-4" />
+          Migration
+        </Button>
+      )}
+    </nav>
+  )
+
   return (
     <>
     <Show when="signed-out">
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center space-y-6">
-          <div>
-            <h1 className="text-3xl font-bold">UC Velocity</h1>
-            <p className="text-muted-foreground">ERP System</p>
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <div className="w-full max-w-md text-center space-y-6">
+          <div className="flex flex-col items-center gap-4">
+            <img
+              src="/ucsh-logo.png"
+              alt="Upper Canada Specialty Hardware logo"
+              className="h-20 w-auto"
+            />
+            <div>
+              <h1 className="text-3xl font-bold">UC Velocity</h1>
+              <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+                Quote and purchase order management for
+                <br className="hidden sm:inline" /> Upper Canada Specialty Hardware.
+              </p>
+            </div>
           </div>
-          <div className="flex gap-3 justify-center">
-            <SignInButton mode="modal">
-              <Button>Sign In</Button>
-            </SignInButton>
-            <SignUpButton mode="modal">
-              <Button variant="outline">Sign Up</Button>
-            </SignUpButton>
+          <SignInButton mode="modal">
+            <Button size="lg" className="w-full sm:w-auto sm:min-w-[200px]">Sign In</Button>
+          </SignInButton>
+          <div className="pt-6 border-t text-xs text-muted-foreground">
+            <p>Need access? Contact your administrator.</p>
           </div>
         </div>
       </div>
@@ -571,8 +674,8 @@ function App() {
 
     <Show when="signed-in">
     <div className="min-h-screen bg-background flex">
-      {/* Sidebar */}
-      <aside className="w-64 border-r bg-card flex flex-col">
+      {/* Desktop sidebar — hidden below md, where the drawer takes over. */}
+      <aside className="hidden md:flex w-64 border-r bg-card flex-col">
         <div className="p-6 border-b">
           <div className="flex items-start justify-between">
             <div>
@@ -586,69 +689,63 @@ function App() {
           </div>
         </div>
 
-        <ScrollArea className="flex-1">
-          <nav className="p-4 space-y-2">
-            <Button
-              variant={currentView === "projects" || currentView === "project-details" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-2"
-              onClick={() => navigate("/projects")}
-            >
-              <FolderOpen className="h-4 w-4" />
-              Projects
-            </Button>
-            <Button
-              variant={currentView === "profiles" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-2"
-              onClick={() => navigate("/profiles")}
-            >
-              <Users className="h-4 w-4" />
-              Profiles
-            </Button>
-            <Button
-              variant={currentView === "inventory" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-2"
-              onClick={() => navigate("/inventory")}
-            >
-              <Boxes className="h-4 w-4" />
-              Inventory
-            </Button>
-            <Button
-              variant={currentView === "reports" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-2"
-              onClick={() => navigate("/reports")}
-            >
-              <BarChart3 className="h-4 w-4" />
-              Reports
-            </Button>
-            <Button
-              variant={currentView === "settings" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-2"
-              onClick={() => navigate("/settings")}
-            >
-              <Settings className="h-4 w-4" />
-              Settings
-            </Button>
-            {isAdmin && (
-              <Button
-                variant={currentView === "migration" ? "secondary" : "ghost"}
-                className="w-full justify-start gap-2"
-                onClick={() => navigate("/admin/migration")}
-              >
-                <DatabaseZap className="h-4 w-4" />
-                Migration
-              </Button>
-            )}
-          </nav>
-        </ScrollArea>
+        <ScrollArea className="flex-1">{navItems}</ScrollArea>
       </aside>
 
+      {/* Mobile drawer + backdrop — only mounted when open to avoid stealing pointer events. */}
+      {mobileNavOpen && (
+        <>
+          <div
+            className="md:hidden fixed inset-0 z-40 bg-black/50"
+            onClick={() => setMobileNavOpen(false)}
+            aria-hidden
+          />
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="Main navigation"
+            className="md:hidden fixed inset-y-0 left-0 z-50 w-64 max-w-[85vw] border-r bg-card flex flex-col shadow-xl"
+          >
+            <div className="p-4 border-b flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h1 className="text-lg font-bold truncate">UC Velocity</h1>
+                <p className="text-xs text-muted-foreground">ERP System</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setMobileNavOpen(false)}
+                aria-label="Close navigation"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+            <ScrollArea className="flex-1">{navItems}</ScrollArea>
+          </aside>
+        </>
+      )}
+
       {/* Main Content */}
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto min-w-0">
+        {/* Mobile top bar — only visible below md. */}
+        <header className="md:hidden sticky top-0 z-30 bg-card/95 backdrop-blur border-b flex items-center gap-2 px-3 py-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Open navigation"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+          <span className="font-semibold text-sm flex-1 truncate">UC Velocity</span>
+          <ThemeToggle />
+          <UserButton />
+        </header>
         <Suspense fallback={<PageFallback />}>
           {currentView === "project-details" ? (
             renderContent()
           ) : (
-            <div className="p-6">{renderContent()}</div>
+            <div className="p-4 md:p-6">{renderContent()}</div>
           )}
         </Suspense>
       </main>

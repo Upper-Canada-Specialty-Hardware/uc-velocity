@@ -584,7 +584,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                       variant="ghost"
                       className="h-7 w-7"
                       onClick={() => setSidebarCollapsed(true)}
-                      title="Collapse sidebar"
+                      aria-label="Collapse sidebar"
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </Button>
@@ -944,6 +944,7 @@ function QuoteRow({ quote, isSelected, isHighlighted, onSelect, onDelete }: Quot
         variant="ghost"
         className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 flex-shrink-0"
         onClick={onDelete}
+        aria-label={`Delete quote ${quote.quote_number}`}
       >
         <Trash2 className="h-3 w-3 text-destructive" />
       </Button>
@@ -980,6 +981,7 @@ function PORow({ po, isSelected, isHighlighted, onSelect, onDelete }: PORowProps
         variant="ghost"
         className="opacity-0 group-hover:opacity-100 h-6 w-6 p-0 flex-shrink-0"
         onClick={onDelete}
+        aria-label={`Delete purchase order ${po.po_number}`}
       >
         <Trash2 className="h-3 w-3 text-destructive" />
       </Button>
@@ -1048,7 +1050,7 @@ function CollapsedSidebar({
         variant="ghost"
         onClick={onExpand}
         className="h-8 w-8"
-        title="Expand sidebar"
+        aria-label="Expand sidebar"
       >
         <ChevronRight className="h-4 w-4" />
       </Button>
@@ -1059,7 +1061,7 @@ function CollapsedSidebar({
           size="icon"
           variant={activeTab === key ? "secondary" : "ghost"}
           onClick={() => onSelectTab(key)}
-          title={`${label} (${count})`}
+          aria-label={`${label} (${count})`}
           className="h-8 w-8 relative"
         >
           <Icon className="h-4 w-4" />
@@ -1073,7 +1075,7 @@ function CollapsedSidebar({
       <Separator className="w-6" />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="icon" variant="ghost" className="h-8 w-8" title="New document">
+          <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="New document">
             <Plus className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>

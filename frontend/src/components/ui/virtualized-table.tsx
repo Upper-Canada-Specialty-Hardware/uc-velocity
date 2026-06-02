@@ -1,10 +1,10 @@
-import { useRef, type ReactNode } from "react"
+import { useRef, type HTMLAttributes, type ReactNode } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { cn } from "@/lib/utils"
 
 interface VirtualizedTableProps<T> {
   items: T[]
-  /** Estimated row height in pixels; rows can still measure their own height via `measureElement` if needed. */
+  /** Estimated row height in pixels; when `measureRows` is true this is just the initial guess and rows self-measure. */
   rowHeight?: number
   /** Scroll container height. Pass a number for px, or a string for CSS values like "70vh". */
   height?: number | string
@@ -24,6 +24,13 @@ interface VirtualizedTableProps<T> {
   className?: string
   /** Optional className on the per-row grid container — useful for accent borders, hover styles, etc. */
   rowClassName?: string | ((item: T, index: number) => string)
+  /** Optional per-row attributes (onClick, role, tabIndex, onKeyDown, aria-*) merged onto the row container. */
+  getRowProps?: (item: T, index: number) => HTMLAttributes<HTMLDivElement>
+  /**
+   * Opt into measured (variable) row heights via react-virtual's `measureElement`.
+   * Use when rows can grow/shrink (e.g. expandable sub-rows). `rowHeight` becomes the initial estimate.
+   */
+  measureRows?: boolean
 }
 
 const HEADER_CLASS = "px-4 py-3 text-left text-sm font-medium text-muted-foreground"
@@ -48,6 +55,8 @@ export function VirtualizedTable<T>({
   overscan = 10,
   className,
   rowClassName,
+  getRowProps,
+  measureRows = false,
 }: VirtualizedTableProps<T>) {
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
@@ -74,19 +83,23 @@ export function VirtualizedTable<T>({
               const customRowClass = typeof rowClassName === "function"
                 ? rowClassName(item, vi.index)
                 : rowClassName
+              const rowProps = getRowProps?.(item, vi.index)
               return (
                 <div
                   key={getKey(item, vi.index)}
                   data-index={vi.index}
+                  ref={measureRows ? virtualizer.measureElement : undefined}
+                  {...rowProps}
                   style={{
                     position: "absolute",
                     top: 0,
                     left: 0,
                     right: 0,
                     transform: `translateY(${vi.start}px)`,
-                    height: vi.size,
+                    ...(measureRows ? null : { height: vi.size }),
+                    ...rowProps?.style,
                   }}
-                  className={cn(baseRowClass, gridCols, customRowClass)}
+                  className={cn(baseRowClass, gridCols, customRowClass, rowProps?.className)}
                 >
                   {renderRow(item, vi.index)}
                 </div>

@@ -2825,7 +2825,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               )}
               {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
-                <Button size="sm" variant="ghost" onClick={() => setIsEditingClientPo(true)}>
+                <Button size="sm" variant="ghost" onClick={() => setIsEditingClientPo(true)} aria-label="Edit client PO number">
                   <Pencil className="h-4 w-4" />
                 </Button>
               )}
@@ -2912,7 +2912,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               )}
               {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
-                <Button size="sm" variant="ghost" onClick={() => setIsEditingWorkDescription(true)}>
+                <Button size="sm" variant="ghost" onClick={() => setIsEditingWorkDescription(true)} aria-label="Edit work description">
                   <Pencil className="h-4 w-4" />
                 </Button>
               )}
@@ -2968,7 +2968,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               )}
               {/* Edit button only visible in Edit mode */}
               {editorMode === "edit" && (
-                <Button size="sm" variant="ghost" onClick={() => setIsEditingHardwareScheduleVersion(true)}>
+                <Button size="sm" variant="ghost" onClick={() => setIsEditingHardwareScheduleVersion(true)} aria-label="Edit hardware schedule version">
                   <Pencil className="h-4 w-4" />
                 </Button>
               )}

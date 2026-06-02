@@ -1171,7 +1171,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => openEditDialog(item)}
-                                  title="Edit line item"
+                                  aria-label={`Edit line item ${getLineItemDescription(item)}`}
                                 >
                                   <Pencil className="h-4 w-4" />
                                 </Button>
@@ -1180,7 +1180,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                                   size="sm"
                                   onClick={() => handleDeleteLine(item.id)}
                                   className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                                  title="Delete line item"
+                                  aria-label={`Delete line item ${getLineItemDescription(item)}`}
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
@@ -1398,6 +1398,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                     size="sm"
                     className="h-6 w-6 p-0"
                     onClick={() => setIsEditingWorkDescription(true)}
+                    aria-label="Edit work description"
                   >
                     <Pencil className="h-3 w-3" />
                   </Button>
@@ -1446,6 +1447,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                     size="sm"
                     className="h-6 w-6 p-0"
                     onClick={() => setIsEditingVendorPo(true)}
+                    aria-label="Edit vendor PO number"
                   >
                     <Pencil className="h-3 w-3" />
                   </Button>
@@ -1520,6 +1522,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                     size="sm"
                     className="h-6 w-6 p-0"
                     onClick={() => setIsEditingDeliveryDate(true)}
+                    aria-label="Edit expected delivery date"
                   >
                     <Pencil className="h-3 w-3" />
                   </Button>
