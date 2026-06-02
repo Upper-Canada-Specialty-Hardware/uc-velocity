@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -10,14 +10,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { VirtualizedTable, headerCellClass, cellClass } from "@/components/ui/virtualized-table"
 import { ProjectForm } from "@/components/forms/ProjectForm"
 import type { ProjectFormInput } from "@/components/forms/ProjectForm"
 import { api } from "@/api/client"
@@ -32,6 +25,13 @@ interface ProjectsPageProps {
 }
 
 const SEARCH_DEBOUNCE_MS = 300
+
+// Responsive grid: 3 cols on mobile (Name + Status + Actions), 4 at sm (+UCA#), 8 at lg (full).
+// Cells use `hidden …:flex` so the column order falls into place at each breakpoint.
+const PROJECTS_GRID_COLS =
+  "grid-cols-[minmax(0,1fr)_auto_auto] " +
+  "sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto_auto] " +
+  "lg:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto_minmax(0,1fr)_auto]"
 
 const toSearchResultShape = (p: ProjectListView): ProjectSearchResult => ({
   ...p,
@@ -123,21 +123,17 @@ export function ProjectsPage({
     fetchBaseList()
   }, [])
 
-  // Debounce raw search term so we don't fire a request on every keystroke.
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedTerm(searchTerm), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(handle)
   }, [searchTerm])
 
-  // Reflect the debounce-to-fetch gap with a spinner inside the search input.
   useEffect(() => {
     if (searchTerm.trim() && searchTerm !== debouncedTerm) {
       setSearchLoading(true)
     }
   }, [searchTerm, debouncedTerm])
 
-  // Run cross-entity search when the debounced term changes. Use a cancelled flag
-  // so a stale response from an earlier query can't overwrite a newer one.
   useEffect(() => {
     const term = debouncedTerm.trim()
     if (!term) {
@@ -166,7 +162,6 @@ export function ProjectsPage({
     }
   }, [debouncedTerm])
 
-  // After a mutation, refresh both the base list and any active search.
   const refreshAll = async () => {
     await fetchBaseList()
     const term = debouncedTerm.trim()
@@ -211,16 +206,32 @@ export function ProjectsPage({
     setDialogOpen(open)
   }
 
+  // Sort headers — icon-only sort arrows pair with the column label, so they
+  // already have an accessible name. Kept as a small helper for clarity.
+  const SortHeader = ({ col, label, className = "" }: { col: SortColumn; label: string; className?: string }) => (
+    <div className={`${headerCellClass} ${className}`}>
+      <button
+        type="button"
+        onClick={() => toggleSort(col)}
+        className="inline-flex items-center gap-1 hover:text-foreground"
+        aria-label={`Sort by ${label}`}
+      >
+        {label} {renderSortIcon(col)}
+      </button>
+    </div>
+  )
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
+      <div className="flex justify-between items-start gap-3 flex-wrap">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">Projects</h1>
           <p className="text-muted-foreground">Manage projects, quotes, and purchase orders</p>
         </div>
-        <Button onClick={handleAdd} className="gap-2">
+        <Button onClick={handleAdd} className="gap-2 shrink-0">
           <Plus className="h-4 w-4" />
-          New Project
+          <span className="hidden sm:inline">New Project</span>
+          <span className="sm:hidden">New</span>
         </Button>
       </div>
 
@@ -253,146 +264,137 @@ export function ProjectsPage({
         </Button>
       </div>
 
-      <div className="bg-card rounded-lg border shadow-sm">
-        {loading ? (
-          <div className="p-8 text-center text-muted-foreground">Loading...</div>
-        ) : displayProjects.length === 0 ? (
-          <div className="p-8 text-center text-muted-foreground">
-            {baseProjects.length === 0
-              ? "No projects found. Create your first project to get started."
-              : "No projects match your search."}
-          </div>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>
-                  <button type="button" onClick={() => toggleSort("name")} className="inline-flex items-center gap-1 hover:text-foreground">
-                    Project Name {renderSortIcon("name")}
-                  </button>
-                </TableHead>
-                <TableHead>
-                  <button type="button" onClick={() => toggleSort("customer_name")} className="inline-flex items-center gap-1 hover:text-foreground">
-                    Customer {renderSortIcon("customer_name")}
-                  </button>
-                </TableHead>
-                <TableHead>
-                  <button type="button" onClick={() => toggleSort("uca_project_number")} className="inline-flex items-center gap-1 hover:text-foreground">
-                    UCA # {renderSortIcon("uca_project_number")}
-                  </button>
-                </TableHead>
-                <TableHead>
-                  <button type="button" onClick={() => toggleSort("ucsh_project_number")} className="inline-flex items-center gap-1 hover:text-foreground">
-                    UCSH # {renderSortIcon("ucsh_project_number")}
-                  </button>
-                </TableHead>
-                <TableHead>
-                  <button type="button" onClick={() => toggleSort("project_lead")} className="inline-flex items-center gap-1 hover:text-foreground">
-                    Project Lead {renderSortIcon("project_lead")}
-                  </button>
-                </TableHead>
-                <TableHead>
-                  <button type="button" onClick={() => toggleSort("status")} className="inline-flex items-center gap-1 hover:text-foreground">
-                    Status {renderSortIcon("status")}
-                  </button>
-                </TableHead>
-                <TableHead>
-                  <button type="button" onClick={() => toggleSort("created_on")} className="inline-flex items-center gap-1 hover:text-foreground">
-                    Created On {renderSortIcon("created_on")}
-                  </button>
-                </TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {displayProjects.map((project) => {
-                const hasChildMatches = project.matched_quotes.length > 0 || project.matched_pos.length > 0
-                return (
-                  <Fragment key={project.id}>
-                    <TableRow
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => onSelectProject(project.id)}
-                    >
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-2">
-                          <FolderOpen className="h-4 w-4 text-muted-foreground" />
-                          {project.name}
-                        </div>
-                      </TableCell>
-                      <TableCell>{project.customer_name}</TableCell>
-                      <TableCell className="font-mono text-sm">{project.uca_project_number}</TableCell>
-                      <TableCell className="text-muted-foreground">{project.ucsh_project_number || EMPTY_VALUE}</TableCell>
-                      <TableCell className="text-muted-foreground">{project.project_lead || EMPTY_VALUE}</TableCell>
-                      <TableCell><StatusBadge status={project.status} /></TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatDate(project.created_on)}
-                      </TableCell>
-                      <TableCell className="text-right space-x-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => handleEdit(project, e)}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => handleDelete(project.id, e)}
-                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                    {hasChildMatches && (
-                      <TableRow className="bg-muted/20 hover:bg-muted/30 border-l-2 border-l-primary/40">
-                        <TableCell colSpan={8} className="py-2 pl-10">
-                          <div className="flex flex-col gap-1 text-xs">
-                            {project.matched_quotes.map((q) => (
-                              <button
-                                key={`q-${q.id}`}
-                                type="button"
-                                className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors w-fit"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  onSelectChildDoc(project.id, { type: "quote", id: q.id })
-                                }}
-                              >
-                                <span className="text-muted-foreground/60" aria-hidden>↳</span>
-                                <FileText className="h-3 w-3" />
-                                <span>Quote</span>
-                                <span className="font-mono">{q.quote_number}</span>
-                              </button>
-                            ))}
-                            {project.matched_pos.map((po) => (
-                              <button
-                                key={`po-${po.id}`}
-                                type="button"
-                                className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors w-fit"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  onSelectChildDoc(project.id, { type: "po", id: po.id })
-                                }}
-                              >
-                                <span className="text-muted-foreground/60" aria-hidden>↳</span>
-                                <ShoppingCart className="h-3 w-3" />
-                                <span>PO</span>
-                                <span className="font-mono">{po.po_number}</span>
-                                <span className="text-muted-foreground/70">— {po.vendor_name}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </TableBody>
-          </Table>
-        )}
-      </div>
+      {loading ? (
+        <div className="bg-card rounded-lg border shadow-sm p-8 text-center text-muted-foreground">
+          Loading...
+        </div>
+      ) : displayProjects.length === 0 ? (
+        <div className="bg-card rounded-lg border shadow-sm p-8 text-center text-muted-foreground">
+          {baseProjects.length === 0
+            ? "No projects found. Create your first project to get started."
+            : "No projects match your search."}
+        </div>
+      ) : (
+        <VirtualizedTable
+          items={displayProjects}
+          rowHeight={60}
+          measureRows
+          height="calc(100vh - 280px)"
+          gridCols={PROJECTS_GRID_COLS}
+          header={
+            <>
+              <SortHeader col="name" label="Project Name" />
+              <SortHeader col="customer_name" label="Customer" className="hidden lg:flex" />
+              <SortHeader col="uca_project_number" label="UCA #" className="hidden sm:flex" />
+              <SortHeader col="ucsh_project_number" label="UCSH #" className="hidden lg:flex" />
+              <SortHeader col="project_lead" label="Project Lead" className="hidden lg:flex" />
+              <SortHeader col="status" label="Status" />
+              <SortHeader col="created_on" label="Created On" className="hidden lg:flex" />
+              <div className={`${headerCellClass} text-right`}>Actions</div>
+            </>
+          }
+          getKey={(p) => p.id}
+          getRowProps={(project) => ({
+            role: "button",
+            tabIndex: 0,
+            className: "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+            "aria-label": `Open project ${project.name}`,
+            onClick: () => onSelectProject(project.id),
+            onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+              if (e.target !== e.currentTarget) return // let inner controls own the key
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                onSelectProject(project.id)
+              }
+            },
+          })}
+          renderRow={(project) => {
+            const hasChildMatches = project.matched_quotes.length > 0 || project.matched_pos.length > 0
+            return (
+              <>
+                <div className={`${cellClass} font-medium`}>
+                  <FolderOpen className="h-4 w-4 text-muted-foreground mr-2 shrink-0" />
+                  <span className="truncate">{project.name}</span>
+                </div>
+                <div className={`${cellClass} hidden lg:flex truncate`}>{project.customer_name}</div>
+                <div className={`${cellClass} hidden sm:flex font-mono text-sm truncate`}>
+                  {project.uca_project_number}
+                </div>
+                <div className={`${cellClass} hidden lg:flex text-muted-foreground truncate`}>
+                  {project.ucsh_project_number || EMPTY_VALUE}
+                </div>
+                <div className={`${cellClass} hidden lg:flex text-muted-foreground truncate`}>
+                  {project.project_lead || EMPTY_VALUE}
+                </div>
+                <div className={cellClass}>
+                  <StatusBadge status={project.status} />
+                </div>
+                <div className={`${cellClass} hidden lg:flex text-muted-foreground`}>
+                  {formatDate(project.created_on)}
+                </div>
+                <div className={`${cellClass} justify-end gap-1`}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => handleEdit(project, e)}
+                    aria-label={`Edit project ${project.name}`}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => handleDelete(project.id, e)}
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    aria-label={`Delete project ${project.name}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+                {hasChildMatches && (
+                  <div className="col-span-full bg-muted/20 border-l-2 border-l-primary/40 px-4 py-2 pl-10 flex flex-col gap-1 text-xs">
+                    {project.matched_quotes.map((q) => (
+                      <button
+                        key={`q-${q.id}`}
+                        type="button"
+                        className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors w-fit focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onSelectChildDoc(project.id, { type: "quote", id: q.id })
+                        }}
+                        aria-label={`Open quote ${q.quote_number} in project ${project.name}`}
+                      >
+                        <span className="text-muted-foreground/60" aria-hidden>↳</span>
+                        <FileText className="h-3 w-3" />
+                        <span>Quote</span>
+                        <span className="font-mono">{q.quote_number}</span>
+                      </button>
+                    ))}
+                    {project.matched_pos.map((po) => (
+                      <button
+                        key={`po-${po.id}`}
+                        type="button"
+                        className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors w-fit focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onSelectChildDoc(project.id, { type: "po", id: po.id })
+                        }}
+                        aria-label={`Open purchase order ${po.po_number} for ${po.vendor_name} in project ${project.name}`}
+                      >
+                        <span className="text-muted-foreground/60" aria-hidden>↳</span>
+                        <ShoppingCart className="h-3 w-3" />
+                        <span>PO</span>
+                        <span className="font-mono">{po.po_number}</span>
+                        <span className="text-muted-foreground/70">— {po.vendor_name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )
+          }}
+        />
+      )}
 
       <Dialog open={dialogOpen} onOpenChange={handleDialogClose}>
         <DialogContent>
