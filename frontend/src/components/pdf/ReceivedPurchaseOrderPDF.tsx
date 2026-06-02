@@ -135,6 +135,12 @@ export function ReceivedPurchaseOrderPDF({
 }: ReceivedPurchaseOrderPDFProps) {
   const receiptIndex = buildReceiptIndex(receivings)
 
+  // For the receiving-history section: resolve line descriptions and order receipts.
+  const descById = new Map(po.line_items.map((i) => [i.id, getItemDescription(i)]))
+  const historyReceivings = [...receivings.filter((r) => !r.voided_at)].sort(
+    (a, b) => new Date(a.received_date).getTime() - new Date(b.received_date).getTime()
+  )
+
   const orderedSubtotal = po.line_items.reduce(
     (sum, item) => sum + (item.unit_price ?? 0) * item.quantity, 0
   )
@@ -249,6 +255,33 @@ export function ReceivedPurchaseOrderPDF({
             <Text style={[styles.totalsValue, styles.bold]}>{formatCurrency(receivedTotal)}</Text>
           </View>
         </View>
+
+        {/* Receiving History — what was received, when, and any notes */}
+        {historyReceivings.length > 0 && (
+          <View style={{ marginTop: 12 }}>
+            <Text style={styles.sectionTitle}>Receiving History</Text>
+            {historyReceivings.map((r, ri) => {
+              const lines = r.line_items.filter((li) => (li.qty_received_this_receiving ?? 0) > 0)
+              return (
+                <View
+                  key={ri}
+                  style={{ marginBottom: 6, paddingBottom: 4, borderBottomWidth: 0.5, borderBottomColor: BORDER_COLOR }}
+                  wrap={false}
+                >
+                  <Text style={[styles.bold, { fontSize: 8 }]}>{formatShortDate(r.received_date)}</Text>
+                  {lines.map((li, li_i) => (
+                    <Text key={li_i} style={{ fontSize: 8, marginLeft: 8 }}>
+                      • {li.qty_received_this_receiving} × {li.po_line_item_id != null ? (descById.get(li.po_line_item_id) ?? 'Item') : 'Item'}
+                    </Text>
+                  ))}
+                  {r.notes ? (
+                    <Text style={[styles.italic, { fontSize: 8, marginTop: 2 }]}>Notes: {r.notes}</Text>
+                  ) : null}
+                </View>
+              )
+            })}
+          </View>
+        )}
 
         <PDFFooter leftText={`PO ${po.po_number} — Receiving Document`} />
       </Page>

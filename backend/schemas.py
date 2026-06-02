@@ -713,6 +713,8 @@ class POSnapshotBase(BaseModel):
 class POSnapshot(POSnapshotBase):
     id: int
     created_at: datetime
+    actor_user_id: Optional[str] = None
+    actor_email: Optional[str] = None
     line_item_states: List[POLineItemSnapshot] = []
 
     class Config:
@@ -893,6 +895,9 @@ class InvoiceStatusUpdate(BaseModel):
 
 class Invoice(InvoiceBase):
     id: int
+    invoice_sequence: int = 1
+    quote_version: int = 0
+    invoice_number: Optional[str] = None  # Computed: "{invoice_sequence}-{UCA}-{quote_seq:04d}-{quote_version}"
     created_at: datetime
     status: str
     voided_at: Optional[datetime] = None
@@ -950,6 +955,8 @@ class QuoteSnapshotBase(BaseModel):
 class QuoteSnapshot(QuoteSnapshotBase):
     id: int
     created_at: datetime
+    actor_user_id: Optional[str] = None
+    actor_email: Optional[str] = None
     line_item_states: List[QuoteLineItemSnapshot] = []
 
     class Config:

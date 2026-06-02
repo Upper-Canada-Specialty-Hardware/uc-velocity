@@ -27,10 +27,21 @@ async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
+  // Attach the Clerk session token so the backend can attribute audit-trail actions.
+  let authHeaders: Record<string, string> = {};
+  try {
+    const clerk = (window as unknown as { Clerk?: { session?: { getToken?: () => Promise<string | null> } } }).Clerk;
+    const token = await clerk?.session?.getToken?.();
+    if (token) authHeaders = { Authorization: `Bearer ${token}` };
+  } catch {
+    // Best-effort: if Clerk isn't ready yet, proceed without a token.
+  }
+
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...authHeaders,
       ...options.headers,
     },
   });

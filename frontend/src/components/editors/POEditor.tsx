@@ -59,7 +59,7 @@ import type {
 import {
   Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy,
   X, GitCommit, Eye, AlertTriangle, Check, Calendar, Loader2, Hash, Printer,
-  History, ChevronDown, ChevronRight, Receipt
+  History, ChevronDown, ChevronRight, Receipt, Info, ArrowLeft
 } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDate } from "@/lib/format"
@@ -82,6 +82,8 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
   // ===== Dialog States =====
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [addDialogType, setAddDialogType] = useState<POLineItemType>("part")
+  // "select" shows the picker + inventory details; "edit-inventory" swaps in PartForm
+  const [addDialogMode, setAddDialogMode] = useState<"select" | "edit-inventory">("select")
 
   // Edit dialog states
   const [editDialogOpen, setEditDialogOpen] = useState(false)
@@ -417,11 +419,26 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
 
   const openAddDialog = (type: POLineItemType) => {
     setAddDialogType(type)
+    setAddDialogMode("select")
     setSelectedPartId("")
     setMiscDescription("")
     setQuantity("1")
     setUnitPrice("")
     setAddDialogOpen(true)
+  }
+
+  const selectedPart =
+    addDialogType === "part" && selectedPartId
+      ? parts.find((p) => p.id === parseInt(selectedPartId)) ?? null
+      : null
+
+  // After editing the part master inline, refresh the local cache so the details
+  // panel + add-pricing reflect the new values, then return to the picker.
+  const handlePartUpdateSuccess = (updated?: Part) => {
+    if (updated) {
+      setParts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+    }
+    setAddDialogMode("select")
   }
 
   const openEditDialog = (item: POLineItem) => {
@@ -737,6 +754,22 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
         qty_received: Math.max(0, qty),
         actual_unit_price: actualPrice ?? existing?.actual_unit_price,
       })
+    }
+    setStagedReceivings(newMap)
+  }
+
+  /** Stage the full pending quantity for every line item with items outstanding. */
+  const stageReceiveAll = () => {
+    if (!po) return
+    const newMap = new Map(stagedReceivings)
+    for (const item of po.line_items) {
+      if (item.qty_pending > 0) {
+        const existing = newMap.get(item.id)
+        newMap.set(item.id, {
+          qty_received: item.qty_pending,
+          actual_unit_price: existing?.actual_unit_price,
+        })
+      }
     }
     setStagedReceivings(newMap)
   }
@@ -1813,91 +1846,181 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
       {/* ===== Dialogs ===== */}
 
       {/* Add Line Item Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-        <DialogContent className="max-w-2xl">
+      <Dialog
+        open={addDialogOpen}
+        onOpenChange={(open) => {
+          setAddDialogOpen(open)
+          if (!open) setAddDialogMode("select")
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              {getTypeIcon(addDialogType)}
-              Add {addDialogType.charAt(0).toUpperCase() + addDialogType.slice(1)}
+              {addDialogMode === "edit-inventory" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setAddDialogMode("select")}
+                    className="p-1 -ml-1 rounded hover:bg-muted"
+                    title="Back to selection"
+                    aria-label="Back to selection"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </button>
+                  <Pencil className="h-5 w-5" />
+                  Edit Part Details
+                </>
+              ) : (
+                <>
+                  {getTypeIcon(addDialogType)}
+                  Add {addDialogType.charAt(0).toUpperCase() + addDialogType.slice(1)}
+                </>
+              )}
             </DialogTitle>
             <DialogDescription>
-              Add a {addDialogType} line item to this purchase order.
+              {addDialogMode === "edit-inventory"
+                ? "Updates apply to the inventory master record. Future selections will use these values; previously committed line items are unaffected."
+                : `Add a ${addDialogType} line item to this purchase order.`}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 pt-4">
-            {addDialogType === "part" && (
+          {addDialogMode === "select" && (
+            <div className="space-y-4 pt-4">
+              {addDialogType === "part" && (
+                <div className="space-y-2">
+                  <Label>Part</Label>
+                  <SearchableSelect<Part>
+                    options={parts.map((part): SearchableSelectOption => ({
+                      value: part.id.toString(),
+                      label: `${part.part_number} - ${part.description}`,
+                      description: `$${(part.cost ?? 0).toFixed(2)}`,
+                    }))}
+                    value={selectedPartId}
+                    onChange={setSelectedPartId}
+                    placeholder="Select part"
+                    searchPlaceholder="Search parts..."
+                    emptyMessage="No parts found."
+                    allowCreate={true}
+                    createLabel="Create New Part"
+                    createDialogTitle="Create New Part"
+                    createForm={<PartForm />}
+                    onCreateSuccess={(newPart) => {
+                      setParts([...parts, newPart])
+                      setSelectedPartId(newPart.id.toString())
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Inventory details panel — shown after a part is selected. */}
+              {addDialogType === "part" && selectedPart && (
+                <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold flex items-center gap-2">
+                      <Info className="h-4 w-4" />
+                      Inventory Details
+                    </h4>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setAddDialogMode("edit-inventory")}
+                      className="h-7 gap-2"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit details
+                    </Button>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <div>
+                      <dt className="text-muted-foreground">Part Number</dt>
+                      <dd className="font-medium">{selectedPart.part_number}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Description</dt>
+                      <dd className="font-medium">{selectedPart.description}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Base Cost</dt>
+                      <dd className="font-medium">${selectedPart.cost.toFixed(2)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Markup</dt>
+                      <dd className="font-medium">{(selectedPart.markup_percent ?? 0).toFixed(2)}%</dd>
+                    </div>
+                    {selectedPart.list_price != null && (
+                      <div>
+                        <dt className="text-muted-foreground">List Price</dt>
+                        <dd className="font-medium">${selectedPart.list_price.toFixed(2)}</dd>
+                      </div>
+                    )}
+                    {selectedPart.discount_percent != null && (
+                      <div>
+                        <dt className="text-muted-foreground">Discount</dt>
+                        <dd className="font-medium">{selectedPart.discount_percent.toFixed(2)}%</dd>
+                      </div>
+                    )}
+                  </dl>
+                  <p className="text-xs text-muted-foreground">PO line items use the base cost.</p>
+                </div>
+              )}
+
+              {addDialogType === "misc" && (
+                <>
+                  <div className="space-y-2">
+                    <Label>Description</Label>
+                    <Input
+                      value={miscDescription}
+                      onChange={(e) => setMiscDescription(e.target.value)}
+                      placeholder="e.g., Shipping fee"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Unit Price</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={unitPrice}
+                      onChange={(e) => setUnitPrice(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                </>
+              )}
+
               <div className="space-y-2">
-                <Label>Part</Label>
-                <SearchableSelect<Part>
-                  options={parts.map((part): SearchableSelectOption => ({
-                    value: part.id.toString(),
-                    label: `${part.part_number} - ${part.description}`,
-                    description: `$${(part.cost ?? 0).toFixed(2)}`,
-                  }))}
-                  value={selectedPartId}
-                  onChange={setSelectedPartId}
-                  placeholder="Select part"
-                  searchPlaceholder="Search parts..."
-                  emptyMessage="No parts found."
-                  allowCreate={true}
-                  createLabel="Create New Part"
-                  createDialogTitle="Create New Part"
-                  createForm={<PartForm />}
-                  onCreateSuccess={(newPart) => {
-                    setParts([...parts, newPart])
-                    setSelectedPartId(newPart.id.toString())
-                  }}
+                <Label>Quantity</Label>
+                <Input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
                 />
               </div>
-            )}
 
-            {addDialogType === "misc" && (
-              <>
-                <div className="space-y-2">
-                  <Label>Description</Label>
-                  <Input
-                    value={miscDescription}
-                    onChange={(e) => setMiscDescription(e.target.value)}
-                    placeholder="e.g., Shipping fee"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Unit Price</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={unitPrice}
-                    onChange={(e) => setUnitPrice(e.target.value)}
-                    placeholder="0.00"
-                  />
-                </div>
-              </>
-            )}
+              <Button
+                onClick={handleAddLineItem}
+                className="w-full"
+                disabled={
+                  (addDialogType === "part" && (!selectedPartId || parts.length === 0)) ||
+                  (addDialogType === "misc" && !miscDescription)
+                }
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Line Item
+              </Button>
+            </div>
+          )}
 
-            <div className="space-y-2">
-              <Label>Quantity</Label>
-              <Input
-                type="number"
-                step="1"
-                min="1"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
+          {addDialogMode === "edit-inventory" && addDialogType === "part" && selectedPart && (
+            <div className="pt-4">
+              <PartForm
+                part={selectedPart}
+                onSuccess={handlePartUpdateSuccess}
+                onCancel={() => setAddDialogMode("select")}
               />
             </div>
-
-            <Button
-              onClick={handleAddLineItem}
-              className="w-full"
-              disabled={
-                (addDialogType === "part" && (!selectedPartId || parts.length === 0)) ||
-                (addDialogType === "misc" && !miscDescription)
-              }
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Add Line Item
-            </Button>
-          </div>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -2268,7 +2391,20 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
               }
 
               return (
-                <Table>
+                <div className="space-y-2">
+                  <div className="flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={stageReceiveAll}
+                      disabled={isSubmittingReceiving}
+                      className="gap-2"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      Receive All Pending
+                    </Button>
+                  </div>
+                  <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Description</TableHead>
@@ -2356,6 +2492,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                     })}
                   </TableBody>
                 </Table>
+                </div>
               )
             })()}
           </div>

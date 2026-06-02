@@ -82,7 +82,7 @@ function EditorFallback() {
 interface ProjectDetailsPageProps {
   projectId: number
   onBack: () => void
-  initialDoc?: { type: "quote" | "po"; id: number } | null
+  initialDoc?: { type: "quote" | "po" | "invoice"; id: number } | null
 }
 
 type DocumentType = "quote" | "po" | "invoice"
@@ -298,7 +298,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
     } else {
       const inv = invoices.find((x) => x.id === selectedDoc.id)
       if (!inv) return
-      label = `Invoice ${inv.id} - ${inv.quoteNumber}`
+      label = `Invoice ${inv.invoice_number ?? `${inv.id} - ${inv.quoteNumber}`}`
       sublabel = inv.status
     }
     setRecentDocs((prev) => {
@@ -885,7 +885,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                   }}
                 >
                   <Receipt className="h-4 w-4" />
-                  <span className="flex-1">Invoice {inv.id} - {inv.quoteNumber}</span>
+                  <span className="flex-1">Invoice {inv.invoice_number ?? `${inv.id} - ${inv.quoteNumber}`}</span>
                   <StatusBadge status={inv.status} className="text-[10px]" />
                 </CommandItem>
               ))}
@@ -1008,7 +1008,7 @@ function InvoiceRow({ invoice, isSelected, isHighlighted, onSelect }: InvoiceRow
     >
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium flex items-center gap-2">
-          <span className="truncate">Invoice {invoice.id} - {invoice.quoteNumber}</span>
+          <span className="truncate">Invoice {invoice.invoice_number ?? `${invoice.id} - ${invoice.quoteNumber}`}</span>
           <StatusBadge status={invoice.status} className="text-[10px] px-1.5 py-0" />
         </div>
         <div className="text-xs text-muted-foreground">

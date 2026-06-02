@@ -558,6 +558,8 @@ export interface POSnapshot {
   action_type: POSnapshotActionType;
   action_description?: string;
   created_at: string;
+  actor_user_id?: string | null;
+  actor_email?: string | null;
   receiving_id?: number;
   line_items_states: POLineItemSnapshot[];
 }
@@ -643,6 +645,9 @@ export type InvoiceStatus = 'Sent' | 'Paid' | 'Voided';
 export interface Invoice {
   id: number;
   quote_id: number;
+  invoice_sequence: number;
+  quote_version: number;
+  invoice_number?: string | null; // Computed: "{invoice_sequence}-{UCA}-{quote_seq}-{quote_version}"
   created_at: string;
   status: InvoiceStatus;
   notes?: string;
@@ -713,6 +718,8 @@ export interface QuoteSnapshot {
   action_type: SnapshotActionType;
   action_description?: string;
   created_at: string;
+  actor_user_id?: string | null;
+  actor_email?: string | null;
   invoice_id?: number;
   line_item_states: QuoteLineItemSnapshot[];
 }

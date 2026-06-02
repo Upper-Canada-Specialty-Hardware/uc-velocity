@@ -256,6 +256,9 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
                           </div>
                           <p className="text-xs text-muted-foreground">
                             {formatDate(snapshot.created_at)}
+                            {snapshot.actor_email && (
+                              <span className="ml-2">· by {snapshot.actor_email}</span>
+                            )}
                             {snapshot.action_description && (
                               <span className="ml-2">
                                 - {snapshot.action_description}

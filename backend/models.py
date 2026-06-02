@@ -312,6 +312,8 @@ class POSnapshot(Base):
     action_description = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     receiving_id = Column(Integer, ForeignKey('po_receivings.id'), nullable=True)
+    actor_user_id = Column(String, nullable=True)  # Clerk user id (sub) who performed the action
+    actor_email = Column(String, nullable=True)  # Resolved email, for display
 
     # Relationships
     purchase_order = relationship("PurchaseOrder", back_populates="snapshots")
@@ -348,6 +350,8 @@ class Invoice(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="Sent")  # "Sent", "Paid", "Voided"
     notes = Column(String)  # Optional notes for this invoice
+    invoice_sequence = Column(Integer, default=1)  # Per-quote sequence (1, 2, 3...)
+    quote_version = Column(Integer, default=0)  # Quote version captured at invoice time
     voided_at = Column(DateTime)  # When voided (if applicable)
     voided_by_snapshot_id = Column(Integer)  # Which revert voided this
 
@@ -393,6 +397,8 @@ class QuoteSnapshot(Base):
     action_description = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     invoice_id = Column(Integer)  # If action_type="invoice", link to Invoice
+    actor_user_id = Column(String, nullable=True)  # Clerk user id (sub) who performed the action
+    actor_email = Column(String, nullable=True)  # Resolved email, for display
 
     # Relationships
     quote = relationship("Quote", back_populates="snapshots")

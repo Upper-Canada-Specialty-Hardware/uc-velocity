@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base, SessionLocal
 from routes import parts, labor, profiles, projects, quotes, purchase_orders, miscellaneous, invoices, company_settings, reports, cost_codes, vendor_pricebook, migration, system_rates, testing
 from seed import seed_system_items
+from auth import ActorMiddleware
 
 
 def run_migrations():
@@ -100,6 +101,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Capture the acting Clerk user (best-effort, never blocks) for the audit trail
+app.add_middleware(ActorMiddleware)
 
 # Include routers
 app.include_router(parts.router)
