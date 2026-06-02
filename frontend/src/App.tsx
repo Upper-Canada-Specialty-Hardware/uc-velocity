@@ -20,6 +20,18 @@ import { ProjectsPage } from "@/pages/ProjectsPage"
 import { api } from "@/api/client"
 import { useIsAdmin } from "@/hooks/use-is-admin"
 import { VirtualizedTable, headerCellClass, cellClass } from "@/components/ui/virtualized-table"
+import { formatCurrency } from "@/lib/format"
+import { toast } from "@/hooks/use-toast"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 // Lazy-loaded pages: keep ProjectsPage eager (default landing), defer the rest.
 const ProfilesPage = lazy(() =>
@@ -134,6 +146,13 @@ function App() {
   const [editingLabor, setEditingLabor] = useState<Labor | null>(null)
   const [editingMisc, setEditingMisc] = useState<Miscellaneous | null>(null)
 
+  // Inventory delete confirmation. One AlertDialog handles all three types,
+  // discriminated on `type` so the copy and the API call adapt.
+  type InventoryKind = "part" | "labor" | "misc"
+  const [deleteConfirm, setDeleteConfirm] = useState<
+    { type: InventoryKind; id: number; label: string } | null
+  >(null)
+
   // Mobile sidebar drawer state (#127): hidden by default, hamburger toggles it on `< md:`.
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
@@ -179,23 +198,33 @@ function App() {
     }
   }, [currentView])
 
-  const handleDeletePart = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this part?")) return
-    try {
-      await api.parts.delete(id)
-      fetchInventory()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete part")
-    }
+  const requestDeletePart = (part: Part) => {
+    setDeleteConfirm({ type: "part", id: part.id, label: part.part_number })
   }
 
-  const handleDeleteLabor = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this labor item?")) return
+  const requestDeleteLabor = (labor: Labor) => {
+    setDeleteConfirm({ type: "labor", id: labor.id, label: labor.description })
+  }
+
+  const requestDeleteMisc = (misc: Miscellaneous) => {
+    setDeleteConfirm({ type: "misc", id: misc.id, label: misc.description })
+  }
+
+  const performInventoryDelete = async () => {
+    if (!deleteConfirm) return
+    const { type, id } = deleteConfirm
+    setDeleteConfirm(null)
     try {
-      await api.labor.delete(id)
+      if (type === "part") await api.parts.delete(id)
+      else if (type === "labor") await api.labor.delete(id)
+      else await api.misc.delete(id)
       fetchInventory()
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete labor")
+      toast({
+        variant: "destructive",
+        title: `Failed to delete ${type === "labor" ? "labour" : type === "misc" ? "miscellaneous item" : type}`,
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
     }
   }
 
@@ -207,16 +236,6 @@ function App() {
   const handleEditLabor = (labor: Labor) => {
     setEditingLabor(labor)
     setLaborDialogOpen(true)
-  }
-
-  const handleDeleteMisc = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this miscellaneous item?")) return
-    try {
-      await api.misc.delete(id)
-      fetchInventory()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete miscellaneous item")
-    }
   }
 
   const handleEditMisc = (misc: Miscellaneous) => {
@@ -374,6 +393,7 @@ function App() {
               <div className="relative max-w-sm mb-4">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
+                  aria-label="Search inventory"
                   placeholder="Search inventory..."
                   value={inventorySearchTerm}
                   onChange={(e) => setInventorySearchTerm(e.target.value)}
@@ -396,6 +416,7 @@ function App() {
                     <div className="p-8 text-center text-muted-foreground">Loading...</div>
                   ) : (
                     <VirtualizedTable
+                      tableLabel="Parts inventory"
                       items={filteredParts}
                       rowHeight={52}
                       height="calc(100vh - 360px)"
@@ -418,9 +439,9 @@ function App() {
                         <>
                           <div className={`${cellClass} font-medium`}>{part.part_number}</div>
                           <div className={`${cellClass} text-muted-foreground truncate`}>{part.description}</div>
-                          <div className={`${cellClass} text-muted-foreground justify-end`}>${part.cost.toFixed(2)}</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>{formatCurrency(part.cost)}</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{part.markup_percent ?? 0}%</div>
-                          <div className={`${cellClass} font-medium justify-end`}>${(part.cost * (1 + (part.markup_percent ?? 0) / 100)).toFixed(2)}</div>
+                          <div className={`${cellClass} font-medium justify-end`}>{formatCurrency(part.cost * (1 + (part.markup_percent ?? 0) / 100))}</div>
                           <div className={`${cellClass} justify-end gap-1`}>
                             <Button
                               variant="ghost"
@@ -433,7 +454,7 @@ function App() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleDeletePart(part.id)}
+                              onClick={() => requestDeletePart(part)}
                               className="text-destructive hover:text-destructive hover:bg-destructive/10"
                               aria-label={`Delete part ${part.part_number}`}
                             >
@@ -462,6 +483,7 @@ function App() {
                     <div className="p-8 text-center text-muted-foreground">Loading...</div>
                   ) : (
                     <VirtualizedTable
+                      tableLabel="Labour items"
                       items={filteredLaborItems}
                       rowHeight={52}
                       height="calc(100vh - 360px)"
@@ -484,9 +506,9 @@ function App() {
                         <>
                           <div className={`${cellClass} font-medium truncate`}>{labor.description}</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.hours}</div>
-                          <div className={`${cellClass} text-muted-foreground justify-end`}>${labor.rate.toFixed(2)}/hr</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>{formatCurrency(labor.rate)}/hr</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.markup_percent}%</div>
-                          <div className={`${cellClass} font-medium justify-end`}>${(labor.hours * labor.rate * (1 + labor.markup_percent / 100)).toFixed(2)}</div>
+                          <div className={`${cellClass} font-medium justify-end`}>{formatCurrency(labor.hours * labor.rate * (1 + labor.markup_percent / 100))}</div>
                           <div className={`${cellClass} justify-end gap-1`}>
                             <Button
                               variant="ghost"
@@ -499,7 +521,7 @@ function App() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleDeleteLabor(labor.id)}
+                              onClick={() => requestDeleteLabor(labor)}
                               className="text-destructive hover:text-destructive hover:bg-destructive/10"
                               aria-label={`Delete labour ${labor.description}`}
                             >
@@ -528,6 +550,7 @@ function App() {
                     <div className="p-8 text-center text-muted-foreground">Loading...</div>
                   ) : (
                     <VirtualizedTable
+                      tableLabel="Miscellaneous items"
                       items={filteredMiscItems}
                       rowHeight={52}
                       height="calc(100vh - 360px)"
@@ -548,9 +571,9 @@ function App() {
                       renderRow={(misc) => (
                         <>
                           <div className={`${cellClass} font-medium truncate`}>{misc.description}</div>
-                          <div className={`${cellClass} text-muted-foreground justify-end`}>${misc.unit_price.toFixed(2)}</div>
+                          <div className={`${cellClass} text-muted-foreground justify-end`}>{formatCurrency(misc.unit_price)}</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{misc.markup_percent}%</div>
-                          <div className={`${cellClass} font-medium justify-end`}>${(misc.unit_price * (1 + misc.markup_percent / 100)).toFixed(2)}</div>
+                          <div className={`${cellClass} font-medium justify-end`}>{formatCurrency(misc.unit_price * (1 + misc.markup_percent / 100))}</div>
                           <div className={`${cellClass} justify-end gap-1`}>
                             <Button
                               variant="ghost"
@@ -563,7 +586,7 @@ function App() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleDeleteMisc(misc.id)}
+                              onClick={() => requestDeleteMisc(misc)}
                               className="text-destructive hover:text-destructive hover:bg-destructive/10"
                               aria-label={`Delete miscellaneous item ${misc.description}`}
                             >
@@ -674,12 +697,22 @@ function App() {
 
     <Show when="signed-in">
     <div className="min-h-screen bg-background flex">
+      {/* Skip link — first focusable element on Tab, jumps past the sidebar/nav
+          to the main region. Visible only while focused. WCAG 2.4.1. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-background focus:p-2 focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
       {/* Desktop sidebar — hidden below md, where the drawer takes over. */}
       <aside className="hidden md:flex w-64 border-r bg-card flex-col">
         <div className="p-6 border-b">
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-xl font-bold">UC Velocity</h1>
+              {/* Brand chrome — page-level h1 lives on each route, so this is a styled
+                  paragraph rather than a heading to keep one h1 per page (a11y). */}
+              <p className="text-xl font-bold">UC Velocity</p>
               <p className="text-sm text-muted-foreground">ERP System</p>
             </div>
             <div className="flex items-center gap-1">
@@ -708,7 +741,7 @@ function App() {
           >
             <div className="p-4 border-b flex items-center justify-between gap-2">
               <div className="min-w-0">
-                <h1 className="text-lg font-bold truncate">UC Velocity</h1>
+                <p className="text-lg font-bold truncate">UC Velocity</p>
                 <p className="text-xs text-muted-foreground">ERP System</p>
               </div>
               <Button
@@ -726,7 +759,7 @@ function App() {
       )}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto min-w-0">
+      <main id="main-content" tabIndex={-1} className="flex-1 overflow-auto min-w-0">
         {/* Mobile top bar — only visible below md. */}
         <header className="md:hidden sticky top-0 z-30 bg-card/95 backdrop-blur border-b flex items-center gap-2 px-3 py-2">
           <Button
@@ -809,6 +842,38 @@ function App() {
           />
         </DialogContent>
       </Dialog>
+
+      {/* Inventory Delete Confirmation (shared across Parts / Labour / Misc) */}
+      <AlertDialog
+        open={deleteConfirm !== null}
+        onOpenChange={(open) => { if (!open) setDeleteConfirm(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deleteConfirm?.type === "part" && "Delete part?"}
+              {deleteConfirm?.type === "labor" && "Delete labour item?"}
+              {deleteConfirm?.type === "misc" && "Delete miscellaneous item?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteConfirm ? (
+                <>
+                  This will permanently remove <span className="font-medium">{deleteConfirm.label}</span> from inventory. This action cannot be undone.
+                </>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={performInventoryDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Toaster />
     </div>

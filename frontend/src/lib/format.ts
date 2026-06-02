@@ -1,6 +1,7 @@
 /**
- * Shared formatting utilities so dates and empty values look identical across
- * the entire app. Adopting these is part of UX-3 (visual consistency).
+ * Shared formatting utilities so dates, currency, and empty values look
+ * identical across the entire app. Adopting these is part of UX-3
+ * (visual consistency).
  */
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -9,12 +10,26 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
 })
 
+// narrowSymbol → `$` instead of the default `CA$` for en-CA.
+const currencyFormatter = new Intl.NumberFormat("en-CA", {
+  style: "currency",
+  currency: "CAD",
+  currencyDisplay: "narrowSymbol",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
 /** Render a date as `MMM d, yyyy` (e.g. `Jun 8, 2020`); em-dash for missing values. */
 export function formatDate(value: string | Date | null | undefined): string {
   if (value == null || value === "") return "—"
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) return "—"
   return dateFormatter.format(date)
+}
+
+/** Render a number as CAD currency with thousand separators (e.g. `$1,234.56`). */
+export function formatCurrency(amount: number): string {
+  return currencyFormatter.format(amount)
 }
 
 /** The single empty-value glyph used everywhere a read-only value is missing. */

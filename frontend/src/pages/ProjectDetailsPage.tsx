@@ -43,6 +43,7 @@ import {
   CommandList,
 } from "@/components/ui/command"
 import { api } from "@/api/client"
+import { toast } from "@/hooks/use-toast"
 import type { ProjectFull, Profile, Invoice } from "@/types"
 import {
   ArrowLeft,
@@ -212,12 +213,11 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
 
   const fetchInvoices = async (quotes: { id: number; quote_number: string }[]) => {
     try {
-      const allInvoices: (Invoice & { quoteId: number; quoteNumber: string })[] = []
-      for (const quote of quotes) {
-        const quoteInvoices = await api.quotes.getInvoices(quote.id)
-        allInvoices.push(...quoteInvoices.map(inv => ({ ...inv, quoteId: quote.id, quoteNumber: quote.quote_number })))
-      }
-      // Sort by created_at descending
+      // Fan out once per quote instead of waiting on each round-trip serially.
+      const results = await Promise.all(quotes.map((q) => api.quotes.getInvoices(q.id)))
+      const allInvoices = results.flatMap((arr, i) =>
+        arr.map((inv) => ({ ...inv, quoteId: quotes[i].id, quoteNumber: quotes[i].quote_number }))
+      )
       allInvoices.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       setInvoices(allInvoices)
     } catch (err) {
@@ -337,7 +337,11 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       setSelectedDoc({ type: "quote", id: quote.id })
       navigate(`/projects/${projectId}/quotes/${quote.id}?tab=quotes`)
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to create quote")
+      toast({
+        variant: "destructive",
+        title: "Failed to create quote",
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
     }
   }
 
@@ -355,7 +359,11 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       setSelectedDoc({ type: "po", id: po.id })
       navigate(`/projects/${projectId}/pos/${po.id}?tab=pos`)
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to create purchase order")
+      toast({
+        variant: "destructive",
+        title: "Failed to create purchase order",
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
     }
   }
 
@@ -386,7 +394,11 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       }
       fetchProject()
     } catch (err) {
-      alert(err instanceof Error ? err.message : `Failed to delete ${type === "po" ? "PO" : "quote"}`)
+      toast({
+        variant: "destructive",
+        title: `Failed to delete ${type === "po" ? "purchase order" : "quote"}`,
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
     }
   }
 

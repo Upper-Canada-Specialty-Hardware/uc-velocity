@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { api } from "@/api/client"
+import { formatCurrency } from "@/lib/format"
 import type { POSnapshot, PORevertPreview } from "@/types"
 import { RevertConfirmDialog } from "./RevertConfirmDialog"
 import {
@@ -150,10 +151,6 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
       hour: "numeric",
       minute: "2-digit",
     })
-  }
-
-  const formatCurrency = (value: number): string => {
-    return `$${value.toFixed(2)}`
   }
 
   if (loading) {
