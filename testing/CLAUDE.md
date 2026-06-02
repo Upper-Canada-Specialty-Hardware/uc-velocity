@@ -64,15 +64,31 @@ Steps from a fresh chrome-devtools session:
    }
    ```
 
-3. **Navigate Chrome to the frontend with the ticket appended.** Clerk's frontend SDK consumes `__clerk_ticket` automatically on load and signs the user in. No email/password/2FA UI to drive.
+3. **Navigate Chrome to the frontend with the ticket appended.** Clerk's frontend SDK is *supposed* to consume `__clerk_ticket` automatically on load, but as of 2026-06-02 this auto-consumption is unreliable — the SDK loads, no sign-in request fires, and `window.Clerk.user` stays `null`.
 
    ```
    https://frontend-production-11d4.up.railway.app/?__clerk_ticket=<long-token>
    ```
 
+   **If the page lands on the signed-out splash (Sign In / Sign Up buttons visible), sign in explicitly via the SDK using `evaluate_script`:**
+
+   ```js
+   async () => {
+     const r = await fetch("https://uc-velocity-production.up.railway.app/testing/clerk-sign-in?email=jayp@ucsh.com", { cache: "no-store" });
+     const { ticket } = await r.json();
+     const signIn = await window.Clerk.client.signIn.create({ strategy: "ticket", ticket });
+     await window.Clerk.setActive({ session: signIn.createdSessionId });
+     return { userId: window.Clerk.user?.id, sessionId: window.Clerk.session?.id };
+   }
+   ```
+
+   Then `navigate_page` to `/projects` (or any signed-in route) so the React `<Show when="signed-in">` shell re-renders.
+
 4. **Take a snapshot.** You should see the signed-in shell (sidebar with Projects/Profiles/Inventory/Reports/Settings/Migration, plus `UserButton` in the top-right).
 
 Tickets are **single-use and expire in 10 minutes** — mint a fresh one if a flow re-mounts ClerkProvider or you wait too long.
+
+⚠️ **WebFetch caches responses for ~15 min.** If you call WebFetch on the sign-in URL twice within that window, the second call returns the *same* (already-consumed) ticket. Use `evaluate_script`-with-`fetch` (as above) or `cache: "no-store"` inside the browser to guarantee freshness.
 
 ---
 
