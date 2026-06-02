@@ -78,3 +78,6 @@ tmpclaude-*
 CLAUDE.md
 # Exception: the agentic-UI-testing knowledge base is intended to be shared
 !testing/CLAUDE.md
+
+# Audit / review artifacts (screenshots, findings docs) — durable value lives in GitHub issues, not in the repo
+testing/ux-review/
