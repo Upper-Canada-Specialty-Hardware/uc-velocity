@@ -62,7 +62,7 @@ import {
   History, ChevronDown, ChevronRight, Receipt, Info, ArrowLeft
 } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
-import { formatDate } from "@/lib/format"
+import { formatDate, formatCurrency } from "@/lib/format"
 import { PartForm } from "@/components/forms/PartForm"
 import { POAuditTrail } from "./POAuditTrail"
 
@@ -947,14 +947,10 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     }
   }
 
-  const formatCurrency = (value: number): string => {
-    return `$${value.toFixed(2)}`
-  }
-
   const formatVariance = (variance: number): string => {
-    if (variance === 0) return "$0.00"
+    if (variance === 0) return formatCurrency(0)
     const sign = variance > 0 ? "+" : ""
-    return `${sign}$${variance.toFixed(2)}`
+    return `${sign}${formatCurrency(variance)}`
   }
 
   const getVarianceColor = (variance: number): string => {

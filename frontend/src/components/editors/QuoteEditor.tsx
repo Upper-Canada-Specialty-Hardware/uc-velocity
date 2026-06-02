@@ -2097,7 +2097,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                   onClick={() => openAddDialog(type)}
                   disabled={hasBeenInvoiced}
                   className="gap-2"
-                  title={hasBeenInvoiced ? "Quote is frozen" : `Add ${addButtonLabel}`}
+                  title={hasBeenInvoiced ? "Quote is frozen" : undefined}
                 >
                   <Plus className="h-4 w-4" />
                   {addButtonLabel}

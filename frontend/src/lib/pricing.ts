@@ -1,4 +1,9 @@
 import type { QuoteLineItem } from '@/types'
+import { formatCurrency } from '@/lib/format'
+
+// Re-exported so existing `import { formatCurrency } from '@/lib/pricing'`
+// call-sites keep working after the canonical formatter moved to lib/format.
+export { formatCurrency }
 
 /**
  * Get the base cost (before markup) for a quote line item.
@@ -117,7 +122,3 @@ export function calculateQuoteTotal(lineItems: QuoteLineItem[]): number {
   return nonPmsTotal + pmsTotal
 }
 
-/** Format a number as currency with 2 decimal places. */
-export function formatCurrency(amount: number): string {
-  return `$${amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
-}

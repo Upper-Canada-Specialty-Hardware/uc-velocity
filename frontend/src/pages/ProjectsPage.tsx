@@ -10,10 +10,21 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { VirtualizedTable, headerCellClass, cellClass } from "@/components/ui/virtualized-table"
 import { ProjectForm } from "@/components/forms/ProjectForm"
 import type { ProjectFormInput } from "@/components/forms/ProjectForm"
 import { api } from "@/api/client"
+import { toast } from "@/hooks/use-toast"
 import type { ProjectListView, ProjectSearchResult } from "@/types"
 import { Plus, Trash2, Pencil, FolderOpen, Search, FileText, ShoppingCart, Loader2, ChevronUp, ChevronDown, ArrowUpDown } from "lucide-react"
 
@@ -64,6 +75,7 @@ export function ProjectsPage({
   const [debouncedTerm, setDebouncedTerm] = useState(searchTerm)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<ProjectFormInput | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; name: string } | null>(null)
 
   // UX-4 filter controls
   const [showArchived, setShowArchived] = useState(false)
@@ -177,14 +189,24 @@ export function ProjectsPage({
     }
   }
 
-  const handleDelete = async (id: number, e: React.MouseEvent) => {
+  const requestDelete = (project: ProjectListView, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!confirm("Are you sure you want to delete this project? All quotes and purchase orders will be deleted.")) return
+    setDeleteConfirm({ id: project.id, name: project.name })
+  }
+
+  const performDelete = async () => {
+    if (!deleteConfirm) return
+    const { id } = deleteConfirm
+    setDeleteConfirm(null)
     try {
       await api.projects.delete(id)
       refreshAll()
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete project")
+      toast({
+        variant: "destructive",
+        title: "Failed to delete project",
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
     }
   }
 
@@ -207,19 +229,23 @@ export function ProjectsPage({
   }
 
   // Sort headers — icon-only sort arrows pair with the column label, so they
-  // already have an accessible name. Kept as a small helper for clarity.
-  const SortHeader = ({ col, label, className = "" }: { col: SortColumn; label: string; className?: string }) => (
-    <div className={`${headerCellClass} ${className}`}>
-      <button
-        type="button"
-        onClick={() => toggleSort(col)}
-        className="inline-flex items-center gap-1 hover:text-foreground"
-        aria-label={`Sort by ${label}`}
-      >
-        {label} {renderSortIcon(col)}
-      </button>
-    </div>
-  )
+  // already have an accessible name. aria-sort communicates current state to AT.
+  const SortHeader = ({ col, label, className = "" }: { col: SortColumn; label: string; className?: string }) => {
+    const ariaSort: "ascending" | "descending" | "none" =
+      sortBy === col ? (sortDir === "asc" ? "ascending" : "descending") : "none"
+    return (
+      <div className={`${headerCellClass} ${className}`} role="columnheader" aria-sort={ariaSort}>
+        <button
+          type="button"
+          onClick={() => toggleSort(col)}
+          className="inline-flex items-center gap-1 hover:text-foreground"
+          aria-label={`Sort by ${label}`}
+        >
+          {label} {renderSortIcon(col)}
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -245,6 +271,7 @@ export function ProjectsPage({
         <div className="relative max-w-md flex-1 min-w-[260px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
+            aria-label="Search projects, purchase orders, quotes, and vendors"
             placeholder="Search projects, POs, quotes, vendors..."
             value={searchTerm}
             onChange={(e) => onSearchTermChange(e.target.value)}
@@ -276,6 +303,7 @@ export function ProjectsPage({
         </div>
       ) : (
         <VirtualizedTable
+          tableLabel="Projects"
           items={displayProjects}
           rowHeight={60}
           measureRows
@@ -344,7 +372,7 @@ export function ProjectsPage({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={(e) => handleDelete(project.id, e)}
+                    onClick={(e) => requestDelete(project, e)}
                     className="text-destructive hover:text-destructive hover:bg-destructive/10"
                     aria-label={`Delete project ${project.name}`}
                   >
@@ -352,7 +380,7 @@ export function ProjectsPage({
                   </Button>
                 </div>
                 {hasChildMatches && (
-                  <div className="col-span-full bg-muted/20 border-l-2 border-l-primary/40 px-4 py-2 pl-10 flex flex-col gap-1 text-xs">
+                  <div className="col-span-full bg-muted/20 px-4 py-2 pl-10 flex flex-col gap-1 text-xs">
                     {project.matched_quotes.map((q) => (
                       <button
                         key={`q-${q.id}`}
@@ -414,6 +442,33 @@ export function ProjectsPage({
           />
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={deleteConfirm !== null}
+        onOpenChange={(open) => { if (!open) setDeleteConfirm(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteConfirm ? (
+                <>
+                  This will permanently delete <span className="font-medium">{deleteConfirm.name}</span> along with all of its quotes and purchase orders. This action cannot be undone.
+                </>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={performDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete project
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
