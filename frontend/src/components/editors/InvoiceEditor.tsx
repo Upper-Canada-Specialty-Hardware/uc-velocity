@@ -19,7 +19,10 @@ import {
 import { Button } from "@/components/ui/button"
 import { api } from "@/api/client"
 import type { Invoice, Project, CompanySettings } from "@/types"
-import { Receipt, Package, Wrench, FileText, AlertTriangle, Printer, Loader2 } from "lucide-react"
+import { Receipt, Package, Wrench, FileText, AlertTriangle, Printer, Loader2, Pencil } from "lucide-react"
+import { formatDateTime } from "@/lib/format"
+import { EditCreatedAtDialog } from "./EditCreatedAtDialog"
+import { InvoiceAuditTrail } from "./InvoiceAuditTrail"
 
 interface InvoiceEditorProps {
   invoiceId: number
@@ -31,6 +34,8 @@ export function InvoiceEditor({ invoiceId, onUpdate }: InvoiceEditorProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isPrinting, setIsPrinting] = useState(false)
+  const [createdAtDialogOpen, setCreatedAtDialogOpen] = useState(false)
+  const [savingCreatedAt, setSavingCreatedAt] = useState(false)
 
   const fetchInvoice = async () => {
     setLoading(true)
@@ -58,6 +63,20 @@ export function InvoiceEditor({ invoiceId, onUpdate }: InvoiceEditorProps) {
       onUpdate?.()
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to update status")
+    }
+  }
+
+  const handleSaveCreatedAt = async (iso: string) => {
+    setSavingCreatedAt(true)
+    try {
+      await api.invoices.updateCreatedAt(invoiceId, iso)
+      setCreatedAtDialogOpen(false)
+      await fetchInvoice()
+      onUpdate?.()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update created date")
+    } finally {
+      setSavingCreatedAt(false)
     }
   }
 
@@ -146,12 +165,23 @@ export function InvoiceEditor({ invoiceId, onUpdate }: InvoiceEditorProps) {
               {invoice.status}
             </Badge>
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Created: {new Date(invoice.created_at).toLocaleString()}
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground mt-1">
+            <span>Created: {formatDateTime(invoice.created_at)}</span>
+            {!isVoided && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => setCreatedAtDialogOpen(true)}
+              >
+                <Pencil className="mr-1 h-3 w-3" />
+                Edit
+              </Button>
+            )}
           </p>
           {invoice.voided_at && (
             <p className="text-sm text-destructive mt-1">
-              Voided: {new Date(invoice.voided_at).toLocaleString()}
+              Voided: {formatDateTime(invoice.voided_at)}
             </p>
           )}
         </div>
@@ -288,11 +318,32 @@ export function InvoiceEditor({ invoiceId, onUpdate }: InvoiceEditorProps) {
         </CardContent>
       </Card>
 
+      {/* Audit Trail */}
+      <InvoiceAuditTrail
+        invoiceId={invoiceId}
+        currentVersion={invoice.current_version}
+        onRevert={() => {
+          fetchInvoice()
+          onUpdate?.()
+        }}
+      />
+
       {/* Read-only notice */}
       <p className="text-xs text-muted-foreground text-center">
         Invoices are read-only. To modify fulfilled quantities, revert the quote to a
         previous version.
       </p>
+
+      {/* Edit Created Date Dialog */}
+      <EditCreatedAtDialog
+        open={createdAtDialogOpen}
+        onOpenChange={setCreatedAtDialogOpen}
+        currentCreatedAt={invoice.created_at}
+        entityLabel="invoice"
+        changesDocumentNumber={false}
+        onConfirm={handleSaveCreatedAt}
+        isLoading={savingCreatedAt}
+      />
     </div>
   )
 }

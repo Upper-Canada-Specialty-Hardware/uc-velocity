@@ -57,9 +57,10 @@ import type {
 } from "@/types"
 import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
-import { formatDate } from "@/lib/format"
+import { formatDateTime } from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
 import { QuoteAuditTrail } from "./QuoteAuditTrail"
+import { EditCreatedAtDialog } from "./EditCreatedAtDialog"
 import { PartForm } from "@/components/forms/PartForm"
 import { LaborForm } from "@/components/forms/LaborForm"
 import { MiscForm } from "@/components/forms/MiscForm"
@@ -206,6 +207,10 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   const [editModeStartVersion, setEditModeStartVersion] = useState<number | null>(null)
   const [quoteChangedDialogOpen, setQuoteChangedDialogOpen] = useState(false)
 
+  // "Edit created date" affordance (edit mode only, hidden once invoiced/frozen)
+  const [createdAtDialogOpen, setCreatedAtDialogOpen] = useState(false)
+  const [savingCreatedAt, setSavingCreatedAt] = useState(false)
+
   // Computed: Is quote frozen (has been invoiced)?
   const hasBeenInvoiced = quote?.line_items.some(item => item.qty_fulfilled > 0) ?? false
 
@@ -227,20 +232,26 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // Computed: Does any line item have qty_pending > 0? (Flow 1 precondition)
   const hasAnyPendingQuantity = quote?.line_items.some(item => item.qty_pending > 0) ?? false
 
-  const fetchQuote = async () => {
+  // expectedVersion: when this refetch follows an edit WE just made that bumped the
+  // version (e.g. a created-date edit), pass the new version so it isn't mistaken for an
+  // external change. Defaults to the captured edit/invoicing baseline from state.
+  const fetchQuote = async (expectedVersion?: number) => {
     setLoading(true)
     setError(null)
     try {
       const data = await api.quotes.get(quoteId)
 
+      const invoicingBaseline = expectedVersion ?? initialQuoteVersion
+      const editBaseline = expectedVersion ?? editModeStartVersion
+
       // Flow 7E: Detect external changes during invoicing or edit mode
-      if (editorMode === "invoicing" && initialQuoteVersion !== null && data.current_version !== initialQuoteVersion) {
+      if (editorMode === "invoicing" && invoicingBaseline !== null && data.current_version !== invoicingBaseline) {
         // Quote was modified externally - clear staging and warn user
         clearInvoicingState()
         setQuoteChangedDialogOpen(true)
         // Update the version to the new value so subsequent fetches don't re-trigger
         setInitialQuoteVersion(data.current_version)
-      } else if (editorMode === "edit" && editModeStartVersion !== null && data.current_version !== editModeStartVersion) {
+      } else if (editorMode === "edit" && editBaseline !== null && data.current_version !== editBaseline) {
         // Quote was modified externally while editing - clear staging and warn user
         clearEditModeState()
         setQuoteChangedDialogOpen(true)
@@ -607,6 +618,29 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     setIsEditingHardwareScheduleVersion(false)
     setEditorMode("view")
     setDiscardConfirmOpen(false)
+  }
+
+  // Edit the quote's "created on" date. Commits immediately (bumps version, changes the
+  // quote number) - so we advance editModeStartVersion to avoid fetchQuote() mistaking
+  // our own bump for an external change.
+  const handleSaveCreatedAt = async (iso: string) => {
+    setSavingCreatedAt(true)
+    try {
+      const updated = await api.quotes.updateCreatedAt(quoteId, iso)
+      setEditModeStartVersion(updated.current_version)
+      setCreatedAtDialogOpen(false)
+      toast({ title: "Created date updated", description: `Now ${formatDateTime(updated.created_at)} (version ${updated.current_version}).` })
+      // Pass the new version so the refetch doesn't flag our own bump as an external change.
+      await fetchQuote(updated.current_version)
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Could not update created date",
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
+    } finally {
+      setSavingCreatedAt(false)
+    }
   }
 
   // ===== Invoice Staging Mode Handlers =====
@@ -2789,8 +2823,19 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       <div className="flex justify-between items-start">
         <div>
           <h2 className="text-xl font-semibold">{quote.quote_number}</h2>
-          <p className="text-sm text-muted-foreground">
-            Created: {formatDate(quote.created_at)}
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <span>Created: {formatDateTime(quote.created_at)}</span>
+            {editorMode === "edit" && !hasBeenInvoiced && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => setCreatedAtDialogOpen(true)}
+              >
+                <Pencil className="mr-1 h-3 w-3" />
+                Edit
+              </Button>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -4233,6 +4278,17 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Edit Created Date Dialog */}
+      <EditCreatedAtDialog
+        open={createdAtDialogOpen}
+        onOpenChange={setCreatedAtDialogOpen}
+        currentCreatedAt={quote.created_at}
+        entityLabel="quote"
+        changesDocumentNumber
+        onConfirm={handleSaveCreatedAt}
+        isLoading={savingCreatedAt}
+      />
 
       {/* Commit Changes Confirmation Dialog */}
       <AlertDialog open={commitConfirmOpen} onOpenChange={setCommitConfirmOpen}>

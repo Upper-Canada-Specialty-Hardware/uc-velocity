@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from database import get_db
 from auth import current_actor
+from utils import to_naive_utc
 from models import (
     Quote, QuoteLineItem, Project, Labor, Part, Miscellaneous,
     QuoteSnapshot, QuoteLineItemSnapshot, Invoice, InvoiceLineItem, CostCode
@@ -18,7 +19,7 @@ from schemas import (
     QuoteSnapshot as QuoteSnapshotSchema,
     Invoice as InvoiceSchema, InvoiceCreate,
     RevertPreview, MarkupControlToggleRequest, MarkupControlToggleResponse,
-    CommitEditsRequest, CommitEditsResponse
+    CommitEditsRequest, CommitEditsResponse, CreatedAtUpdate
 )
 
 DEFAULT_LIMIT = 50
@@ -424,6 +425,43 @@ def update_quote(quote_id: int, quote_data: QuoteUpdate, db: Session = Depends(g
     db.refresh(db_quote)
 
     # Return with computed quote_number
+    return populate_quote_number(db_quote, db_quote.project.uca_project_number)
+
+
+@router.put("/{quote_id}/created-at", response_model=QuoteSchema)
+def update_quote_created_at(quote_id: int, payload: CreatedAtUpdate, db: Session = Depends(get_db)):
+    """
+    Edit the 'created on' date/time of a quote.
+
+    Bumps current_version by 1 (which changes the visible quote number) and records
+    the change in the audit trail. Rejected if the quote is frozen (invoiced), matching
+    the line-item edit guard.
+    """
+    db_quote = (
+        db.query(Quote)
+        .options(joinedload(Quote.project))
+        .filter(Quote.id == quote_id)
+        .first()
+    )
+    if not db_quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+
+    # Reject the edit if the quote has been invoiced (frozen) - same guard as line edits
+    check_quote_not_frozen(quote_id, db)
+
+    old_created_at = db_quote.created_at
+    db_quote.created_at = to_naive_utc(payload.created_at)
+
+    create_snapshot(
+        db,
+        db_quote,
+        action_type="date_edit",
+        action_description=f"Created date changed from {old_created_at} to {db_quote.created_at}",
+    )
+
+    db.commit()
+    db.refresh(db_quote)
+
     return populate_quote_number(db_quote, db_quote.project.uca_project_number)
 
 

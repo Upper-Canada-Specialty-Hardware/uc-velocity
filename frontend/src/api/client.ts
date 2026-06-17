@@ -12,6 +12,7 @@ import type {
   POReceiving, POReceivingCreate, POSnapshot, PORevertPreview,
   POCommitEditsRequest, POCommitEditsResponse,
   Invoice, InvoiceCreate, InvoiceStatusUpdate, QuoteSnapshot, RevertPreview,
+  InvoiceSnapshot, InvoiceRevertPreview,
   MarkupControlToggleRequest, MarkupControlToggleResponse,
   CommitEditsRequest, CommitEditsResponse,
   CompanySettings, CompanySettingsUpdate, InvoiceSummaryItem,
@@ -193,6 +194,10 @@ export const api = {
       request<Quote>('/quotes/', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: number, data: QuoteUpdate) =>
       request<Quote>(`/quotes/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    // Edit the "created on" date/time (bumps version, snapshots, changes quote number).
+    // `iso` is a UTC ISO-8601 string (e.g. from new Date(localValue).toISOString()).
+    updateCreatedAt: (id: number, iso: string) =>
+      request<Quote>(`/quotes/${id}/created-at`, { method: 'PUT', body: JSON.stringify({ created_at: iso }) }),
     delete: (id: number) =>
       request<{ message: string }>(`/quotes/${id}`, { method: 'DELETE' }),
 
@@ -242,11 +247,27 @@ export const api = {
     get: (id: number) => request<Invoice>(`/invoices/${id}`),
     updateStatus: (id: number, data: InvoiceStatusUpdate) =>
       request<Invoice>(`/invoices/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    // Edit the "created on" date/time (bumps version, snapshots; invoice number unchanged).
+    // `iso` is a UTC ISO-8601 string (e.g. from new Date(localValue).toISOString()).
+    updateCreatedAt: (id: number, iso: string) =>
+      request<Invoice>(`/invoices/${id}/created-at`, { method: 'PUT', body: JSON.stringify({ created_at: iso }) }),
     getSummary: (startDate: string, endDate: string, projectId?: number) => {
       const qs = new URLSearchParams({ start_date: startDate, end_date: endDate })
       if (projectId !== undefined) qs.set('project_id', String(projectId))
       return request<InvoiceSummaryItem[]>(`/invoices/?${qs.toString()}`)
     },
+
+    // Snapshots (Audit Trail)
+    getSnapshots: (invoiceId: number) =>
+      request<InvoiceSnapshot[]>(`/invoices/${invoiceId}/snapshots`),
+    getSnapshot: (invoiceId: number, version: number) =>
+      request<InvoiceSnapshot>(`/invoices/${invoiceId}/snapshots/${version}`),
+
+    // Revert
+    previewRevert: (invoiceId: number, version: number) =>
+      request<InvoiceRevertPreview>(`/invoices/${invoiceId}/revert/${version}/preview`),
+    revert: (invoiceId: number, version: number) =>
+      request<Invoice>(`/invoices/${invoiceId}/revert/${version}`, { method: 'POST' }),
   },
 
   // ===== Company Settings =====
@@ -271,6 +292,11 @@ export const api = {
 
     update: (id: number, data: PurchaseOrderUpdate) =>
       request<PurchaseOrder>(`/purchase-orders/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+    // Edit the "created on" date/time (bumps version, snapshots, changes PO number).
+    // `iso` is a UTC ISO-8601 string (e.g. from new Date(localValue).toISOString()).
+    updateCreatedAt: (id: number, iso: string) =>
+      request<PurchaseOrder>(`/purchase-orders/${id}/created-at`, { method: 'PUT', body: JSON.stringify({ created_at: iso }) }),
 
     delete: (id: number) =>
       request<{ message: string }>(`/purchase-orders/${id}`, { method: 'DELETE' }),

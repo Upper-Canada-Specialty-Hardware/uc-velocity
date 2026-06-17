@@ -6,6 +6,7 @@ from datetime import datetime
 
 from database import get_db
 from auth import current_actor
+from utils import to_naive_utc
 from models import (
     PurchaseOrder, POLineItem, Project, Profile, ProfileType, Part,
     POReceiving, POReceivingLineItem, POSnapshot, POLineItemSnapshot, POStatus, CostCode
@@ -17,7 +18,8 @@ from schemas import (
     POReceiving as POReceivingSchema, POReceivingCreate, POReceivingLineItemCreate,
     POReceivingLineItem as POReceivingLineItemSchema,
     POSnapshot as POSnapshotSchema, POLineItemSnapshot as POLineItemSnapshotSchema,
-    PORevertPreview, POCommitEditsRequest, POCommitEditsResponse, StagedPOLineItemChange
+    PORevertPreview, POCommitEditsRequest, POCommitEditsResponse, StagedPOLineItemChange,
+    CreatedAtUpdate
 )
 
 DEFAULT_LIMIT = 50
@@ -433,6 +435,48 @@ def update_purchase_order(
             joinedload(PurchaseOrder.cost_code)
         )
         .filter(PurchaseOrder.id == db_po.id)
+        .first()
+    )
+    return populate_po_number(db_po, db_po.project.uca_project_number)
+
+
+@router.put("/{po_id}/created-at", response_model=PurchaseOrderSchema)
+def update_po_created_at(po_id: int, payload: CreatedAtUpdate, db: Session = Depends(get_db)):
+    """
+    Edit the 'created on' date/time of a purchase order.
+
+    Bumps current_version by 1 (which changes the visible PO number) and records the
+    change in the audit trail. POs have no frozen/invoiced state, so this is always allowed.
+    """
+    db_po = (
+        db.query(PurchaseOrder)
+        .options(joinedload(PurchaseOrder.project))
+        .filter(PurchaseOrder.id == po_id)
+        .first()
+    )
+    if not db_po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+
+    old_created_at = db_po.created_at
+    db_po.created_at = to_naive_utc(payload.created_at)
+
+    create_po_snapshot(
+        db,
+        db_po,
+        "date_edit",
+        f"Created date changed from {old_created_at} to {db_po.created_at}",
+    )
+
+    db.commit()
+
+    db_po = (
+        db.query(PurchaseOrder)
+        .options(
+            joinedload(PurchaseOrder.vendor),
+            joinedload(PurchaseOrder.project),
+            joinedload(PurchaseOrder.cost_code)
+        )
+        .filter(PurchaseOrder.id == po_id)
         .first()
     )
     return populate_po_number(db_po, db_po.project.uca_project_number)

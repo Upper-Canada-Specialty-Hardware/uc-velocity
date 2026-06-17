@@ -549,7 +549,7 @@ export interface POLineItemSnapshot {
   is_deleted: boolean;
 }
 
-export type POSnapshotActionType = 'create' | 'edit' | 'delete' | 'receive' | 'status_change' | 'revert';
+export type POSnapshotActionType = 'create' | 'edit' | 'delete' | 'receive' | 'status_change' | 'date_edit' | 'revert';
 
 export interface POSnapshot {
   id: number;
@@ -647,6 +647,7 @@ export interface Invoice {
   quote_id: number;
   invoice_sequence: number;
   quote_version: number;
+  current_version: number;
   invoice_number?: string | null; // Computed: "{invoice_sequence}-{UCA}-{quote_seq}-{quote_version}"
   created_at: string;
   status: InvoiceStatus;
@@ -709,7 +710,7 @@ export interface MigrationResult {
 }
 
 // ===== Quote Snapshots =====
-export type SnapshotActionType = 'create' | 'edit' | 'delete' | 'invoice' | 'revert';
+export type SnapshotActionType = 'create' | 'edit' | 'delete' | 'invoice' | 'date_edit' | 'revert';
 
 export interface QuoteSnapshot {
   id: number;
@@ -728,6 +729,44 @@ export interface QuoteSnapshot {
 export interface RevertPreview {
   target_version: number;
   invoices_to_void: Invoice[];
+  changes_summary: string;
+}
+
+// ===== Invoice Snapshots =====
+export type InvoiceSnapshotActionType = 'date_edit' | 'revert';
+
+export interface InvoiceLineItemSnapshot {
+  id: number;
+  snapshot_id: number;
+  original_line_item_id?: number;
+  quote_line_item_id?: number;
+  item_type: LineItemType;
+  description?: string;
+  unit_price?: number;
+  qty_ordered?: number;
+  qty_fulfilled_this_invoice?: number;
+  qty_fulfilled_total?: number;
+  qty_pending_after?: number;
+  labor_id?: number;
+  part_id?: number;
+  misc_id?: number;
+}
+
+export interface InvoiceSnapshot {
+  id: number;
+  invoice_id: number;
+  version: number;
+  action_type: InvoiceSnapshotActionType;
+  action_description?: string;
+  created_at: string;
+  entity_created_at?: string | null;
+  actor_user_id?: string | null;
+  actor_email?: string | null;
+  line_item_states: InvoiceLineItemSnapshot[];
+}
+
+export interface InvoiceRevertPreview {
+  target_version: number;
   changes_summary: string;
 }
 

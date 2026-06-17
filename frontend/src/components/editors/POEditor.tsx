@@ -62,9 +62,10 @@ import {
   History, ChevronDown, ChevronRight, Receipt, Info, ArrowLeft
 } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
-import { formatDate, formatCurrency } from "@/lib/format"
+import { formatDate, formatDateTime, formatCurrency } from "@/lib/format"
 import { PartForm } from "@/components/forms/PartForm"
 import { POAuditTrail } from "./POAuditTrail"
+import { EditCreatedAtDialog } from "./EditCreatedAtDialog"
 
 interface POEditorProps {
   poId: number
@@ -117,6 +118,10 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
   // ===== Version Tracking =====
   const [editModeStartVersion, setEditModeStartVersion] = useState<number | null>(null)
   const [poChangedDialogOpen, setPOChangedDialogOpen] = useState(false)
+
+  // ===== "Edit created date" affordance (edit mode only) =====
+  const [createdAtDialogOpen, setCreatedAtDialogOpen] = useState(false)
+  const [savingCreatedAt, setSavingCreatedAt] = useState(false)
 
   // ===== Metadata Editing States =====
   const [workDescription, setWorkDescription] = useState("")
@@ -173,14 +178,19 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
 
   // ===== Data Fetching =====
 
-  const fetchPO = async () => {
+  // expectedVersion: when this refetch follows an edit WE just made that bumped the
+  // version (e.g. a created-date edit), pass the new version so it isn't mistaken for an
+  // external change. Defaults to the captured edit baseline from state.
+  const fetchPO = async (expectedVersion?: number) => {
     setLoading(true)
     setError(null)
     try {
       const data = await api.purchaseOrders.get(poId)
 
+      const editBaseline = expectedVersion ?? editModeStartVersion
+
       // Detect external changes during edit mode
-      if (editorMode === "edit" && editModeStartVersion !== null && data.current_version !== editModeStartVersion) {
+      if (editorMode === "edit" && editBaseline !== null && data.current_version !== editBaseline) {
         clearEditModeState()
         setPOChangedDialogOpen(true)
         setEditModeStartVersion(data.current_version)
@@ -619,6 +629,24 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
       alert(err instanceof Error ? err.message : "Failed to update cost code")
     } finally {
       setSavingCostCode(false)
+    }
+  }
+
+  // Edit the PO's "created on" date. Commits immediately (bumps version, changes the PO
+  // number) - advance editModeStartVersion so fetchPO() doesn't flag our own bump.
+  const handleSaveCreatedAt = async (iso: string) => {
+    setSavingCreatedAt(true)
+    try {
+      const updated = await api.purchaseOrders.updateCreatedAt(poId, iso)
+      setEditModeStartVersion(updated.current_version)
+      setCreatedAtDialogOpen(false)
+      // Pass the new version so the refetch doesn't flag our own bump as an external change.
+      await fetchPO(updated.current_version)
+      onUpdate?.()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update created date")
+    } finally {
+      setSavingCreatedAt(false)
     }
   }
 
@@ -1312,8 +1340,19 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
             <Building className="h-4 w-4" />
             <span>Vendor: {po.vendor.name}</span>
           </div>
-          <p className="text-sm text-muted-foreground">
-            Created: {formatDate(po.created_at)}
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <span>Created: {formatDateTime(po.created_at)}</span>
+            {editorMode === "edit" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => setCreatedAtDialogOpen(true)}
+              >
+                <Pencil className="mr-1 h-3 w-3" />
+                Edit
+              </Button>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -2520,6 +2559,17 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Created Date Dialog */}
+      <EditCreatedAtDialog
+        open={createdAtDialogOpen}
+        onOpenChange={setCreatedAtDialogOpen}
+        currentCreatedAt={po.created_at}
+        entityLabel="purchase order"
+        changesDocumentNumber
+        onConfirm={handleSaveCreatedAt}
+        isLoading={savingCreatedAt}
+      />
     </div>
   )
 }

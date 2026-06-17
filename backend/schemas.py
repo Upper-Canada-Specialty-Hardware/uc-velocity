@@ -897,6 +897,7 @@ class Invoice(InvoiceBase):
     id: int
     invoice_sequence: int = 1
     quote_version: int = 0
+    current_version: int = 0
     invoice_number: Optional[str] = None  # Computed: "{invoice_sequence}-{UCA}-{quote_seq:04d}-{quote_version}"
     created_at: datetime
     status: str
@@ -906,6 +907,61 @@ class Invoice(InvoiceBase):
 
     class Config:
         from_attributes = True
+
+
+# ===== Created-at edit request (quotes / POs / invoices) =====
+class CreatedAtUpdate(BaseModel):
+    created_at: datetime  # ISO-8601 string; parsed to naive-UTC on the backend
+
+
+# ===== Invoice Line Item Snapshot Schemas =====
+class InvoiceLineItemSnapshotBase(BaseModel):
+    original_line_item_id: Optional[int] = None
+    quote_line_item_id: Optional[int] = None
+    item_type: str
+    description: Optional[str] = None
+    unit_price: Optional[float] = None
+    qty_ordered: Optional[int] = None
+    qty_fulfilled_this_invoice: Optional[int] = None
+    qty_fulfilled_total: Optional[int] = None
+    qty_pending_after: Optional[int] = None
+    labor_id: Optional[int] = None
+    part_id: Optional[int] = None
+    misc_id: Optional[int] = None
+
+
+class InvoiceLineItemSnapshot(InvoiceLineItemSnapshotBase):
+    id: int
+    snapshot_id: int
+
+    class Config:
+        from_attributes = True
+
+
+# ===== Invoice Snapshot Schemas =====
+class InvoiceSnapshotBase(BaseModel):
+    invoice_id: int
+    version: int
+    action_type: str  # "date_edit", "revert"
+    action_description: Optional[str] = None
+
+
+class InvoiceSnapshot(InvoiceSnapshotBase):
+    id: int
+    created_at: datetime
+    entity_created_at: Optional[datetime] = None
+    actor_user_id: Optional[str] = None
+    actor_email: Optional[str] = None
+    line_item_states: List[InvoiceLineItemSnapshot] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ===== Invoice Revert Preview Schema =====
+class InvoiceRevertPreview(BaseModel):
+    target_version: int
+    changes_summary: str
 
 
 # ===== Quote Line Item Snapshot Schemas =====
