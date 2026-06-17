@@ -197,7 +197,7 @@ class PartBase(BaseModel):
     part_number: str
     description: str
     cost: float
-    markup_percent: float = 0.0
+    markup_percent: float = 50.0
     category_id: Optional[int] = None
     vendor_id: Optional[int] = None
     list_price: Optional[float] = None
@@ -232,7 +232,7 @@ class LaborBase(BaseModel):
     description: str
     hours: float = 1
     rate: float
-    markup_percent: float = 0.0
+    markup_percent: float = 50.0
     category_id: Optional[int] = None
 
     @validator('hours', pre=True)
@@ -281,7 +281,7 @@ class Labor(LaborBase):
 class MiscellaneousBase(BaseModel):
     description: str
     unit_price: float
-    markup_percent: float = 0.0
+    markup_percent: float = 50.0
     category_id: Optional[int] = None
 
 
