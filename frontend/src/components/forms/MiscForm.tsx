@@ -20,7 +20,8 @@ export function MiscForm({ misc, onSuccess, onCancel }: MiscFormProps) {
   // Form state - use strings for number fields to allow empty while editing
   const [description, setDescription] = useState("")
   const [unitPrice, setUnitPrice] = useState("")
-  const [markupPercent, setMarkupPercent] = useState("")
+  // New misc items default to 50% markup; edit mode loads the item's real value below.
+  const [markupPercent, setMarkupPercent] = useState(isEditing ? "" : "50")
 
   // Populate form when editing
   useEffect(() => {

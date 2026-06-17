@@ -125,7 +125,7 @@ async def import_pricebook(
                 cost=cost,
                 vendor_id=vendor_id,
                 discount_percent=discount_percent,
-                markup_percent=0.0,
+                markup_percent=50.0,
             )
             db.add(new_part)
             created += 1
