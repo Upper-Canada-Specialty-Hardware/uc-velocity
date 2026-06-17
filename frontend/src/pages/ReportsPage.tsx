@@ -292,7 +292,8 @@ export function ReportsPage() {
                         <th className="px-3 py-2 text-left font-medium text-muted-foreground">Date</th>
                         <th className="px-3 py-2 text-left font-medium text-muted-foreground">UCA Project #</th>
                         <th className="px-3 py-2 text-left font-medium text-muted-foreground">P/O Number</th>
-                        <th className="px-3 py-2 text-left font-medium text-muted-foreground">Customer / Project</th>
+                        <th className="px-3 py-2 text-left font-medium text-muted-foreground">Customer</th>
+                        <th className="px-3 py-2 text-left font-medium text-muted-foreground">Project</th>
                         <th className="px-3 py-2 text-right font-medium text-muted-foreground">Net Sales</th>
                         <th className="px-3 py-2 text-right font-medium text-muted-foreground">HST</th>
                         <th className="px-3 py-2 text-right font-medium text-muted-foreground">Total</th>
@@ -305,7 +306,8 @@ export function ReportsPage() {
                           <td className="px-3 py-2">{formatDate(inv.invoice_date)}</td>
                           <td className="px-3 py-2">{inv.uca_project_number}</td>
                           <td className="px-3 py-2">{inv.client_po_number || '—'}</td>
-                          <td className="px-3 py-2">{inv.customer_name} — {inv.project_name}</td>
+                          <td className="px-3 py-2">{inv.customer_name}</td>
+                          <td className="px-3 py-2">{inv.project_name}</td>
                           <td className="px-3 py-2 text-right">${inv.net_sales.toFixed(2)}</td>
                           <td className="px-3 py-2 text-right">${inv.hst_amount.toFixed(2)}</td>
                           <td className="px-3 py-2 text-right font-medium">${inv.grand_total.toFixed(2)}</td>
@@ -314,7 +316,7 @@ export function ReportsPage() {
                     </tbody>
                     <tfoot className="bg-muted/50 font-medium">
                       <tr>
-                        <td colSpan={5} className="px-3 py-2">Totals</td>
+                        <td colSpan={6} className="px-3 py-2">Totals</td>
                         <td className="px-3 py-2 text-right">
                           ${invoices.reduce((s, i) => s + i.net_sales, 0).toFixed(2)}
                         </td>
