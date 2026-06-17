@@ -106,6 +106,19 @@ def safe_str(val: str | None, default: str = "") -> str:
     return val.strip() or default
 
 
+def wo_prefixed_description(legacy_wo_id: int, raw_desc: str | None) -> str:
+    """Prepend the legacy UC Vision work-order number to a quote's work description.
+
+    Issue #54: in UC Vision the WorkorderID was the human-facing quote-number.
+    Velocity replaced it with its own quote_number, so the legacy reference is
+    preserved at the very start of the migrated work description as "[WO {id}]".
+    A blank description collapses to just the "[WO {id}]" tag.
+    """
+    prefix = f"[WO {legacy_wo_id}]"
+    desc = safe_str(raw_desc)
+    return f"{prefix} {desc}" if desc else prefix
+
+
 def flush_batch(db: Session, batch: list, id_map: dict):
     """Flush a batch of (legacy_id, orm_object) and populate id_map."""
     if not batch:
@@ -636,12 +649,19 @@ async def import_legacy_data(
                 for seq, row in enumerate(quote_rows, start=1):
                     legacy_wo_id = int(row["_legacy_wo_id"])
 
+                    # Issue #54: prepend the legacy UC Vision work-order number
+                    # (WorkorderID) to the start of the work description so the old
+                    # quote-number reference survives the migration.
+                    work_description = wo_prefixed_description(
+                        legacy_wo_id, row.get("memWorkDescription", "")
+                    )
+
                     quote = Quote(
                         project_id=project_map[proj_legacy_id],
                         quote_sequence=seq,
                         created_at=parse_date(row.get("dtmDateStarted", "")) or datetime.utcnow(),
                         status="Closed",
-                        work_description=safe_str(row.get("memWorkDescription", "")) or None,
+                        work_description=work_description,
                         client_po_number=safe_str(row.get("intPONumber", "")) or None,
                         cost_code_id=None,
                         current_version=0,
