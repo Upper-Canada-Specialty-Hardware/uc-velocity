@@ -33,7 +33,8 @@ export function PartForm({ part, onSuccess, onCancel }: PartFormProps) {
   const [partNumber, setPartNumber] = useState("")
   const [description, setDescription] = useState("")
   const [cost, setCost] = useState("")
-  const [markupPercent, setMarkupPercent] = useState("")
+  // New parts default to 50% markup; edit mode loads the part's real value below.
+  const [markupPercent, setMarkupPercent] = useState(isEditing ? "" : "50")
   const [selectedLaborIds, setSelectedLaborIds] = useState<string[]>([])
 
   // New pricing flow fields

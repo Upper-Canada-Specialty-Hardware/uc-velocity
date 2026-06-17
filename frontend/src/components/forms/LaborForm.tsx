@@ -21,7 +21,8 @@ export function LaborForm({ labor, onSuccess, onCancel }: LaborFormProps) {
   const [description, setDescription] = useState("")
   const [hours, setHours] = useState("")
   const [rate, setRate] = useState("")
-  const [markupPercent, setMarkupPercent] = useState("")
+  // New labour defaults to 50% markup; edit mode loads the item's real value below.
+  const [markupPercent, setMarkupPercent] = useState(isEditing ? "" : "50")
 
   // Populate form when editing
   useEffect(() => {
