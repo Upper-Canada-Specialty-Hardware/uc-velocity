@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, lazy, Suspense } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { Show, SignInButton, UserButton } from "@clerk/react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -172,6 +172,44 @@ function App() {
     return () => window.removeEventListener("keydown", onKey)
   }, [mobileNavOpen])
 
+  // ----- Unsaved-changes navigation guard -----
+  // A page (currently Settings) reports its dirty state here; while dirty, sidebar
+  // navigation is intercepted and confirmed before the route actually changes.
+  // BrowserRouter exposes no useBlocker, so we guard the nav triggers directly — the
+  // same approach ProjectDetailsPage uses for its in-page navigation.
+  const pageDirtyRef = useRef(false)
+  const pendingNavRef = useRef<(() => void) | null>(null)
+  const [navConfirmOpen, setNavConfirmOpen] = useState(false)
+
+  const handlePageDirtyChange = useCallback((dirty: boolean) => {
+    pageDirtyRef.current = dirty
+  }, [])
+
+  const guardedNavigate = useCallback(
+    (to: string) => {
+      if (pageDirtyRef.current) {
+        pendingNavRef.current = () => navigate(to)
+        setNavConfirmOpen(true)
+      } else {
+        navigate(to)
+      }
+    },
+    [navigate]
+  )
+
+  const confirmLeave = useCallback(() => {
+    setNavConfirmOpen(false)
+    pageDirtyRef.current = false
+    const action = pendingNavRef.current
+    pendingNavRef.current = null
+    action?.()
+  }, [])
+
+  const cancelLeave = useCallback(() => {
+    setNavConfirmOpen(false)
+    pendingNavRef.current = null
+  }, [])
+
   // Fetch inventory data when viewing inventory
   const fetchInventory = async () => {
     setLoading(true)
@@ -311,7 +349,7 @@ function App() {
         return <ReportsPage />
 
       case "settings":
-        return <SettingsPage />
+        return <SettingsPage onDirtyChange={handlePageDirtyChange} />
 
       case "migration":
         // Defensive gate in case state somehow lands here for a non-admin
@@ -616,7 +654,7 @@ function App() {
       <Button
         variant={currentView === "projects" || currentView === "project-details" ? "secondary" : "ghost"}
         className="w-full justify-start gap-2"
-        onClick={() => navigate("/projects")}
+        onClick={() => guardedNavigate("/projects")}
       >
         <FolderOpen className="h-4 w-4" />
         Projects
@@ -624,7 +662,7 @@ function App() {
       <Button
         variant={currentView === "profiles" ? "secondary" : "ghost"}
         className="w-full justify-start gap-2"
-        onClick={() => navigate("/profiles")}
+        onClick={() => guardedNavigate("/profiles")}
       >
         <Users className="h-4 w-4" />
         Profiles
@@ -632,7 +670,7 @@ function App() {
       <Button
         variant={currentView === "inventory" ? "secondary" : "ghost"}
         className="w-full justify-start gap-2"
-        onClick={() => navigate("/inventory")}
+        onClick={() => guardedNavigate("/inventory")}
       >
         <Boxes className="h-4 w-4" />
         Inventory
@@ -640,7 +678,7 @@ function App() {
       <Button
         variant={currentView === "reports" ? "secondary" : "ghost"}
         className="w-full justify-start gap-2"
-        onClick={() => navigate("/reports")}
+        onClick={() => guardedNavigate("/reports")}
       >
         <BarChart3 className="h-4 w-4" />
         Reports
@@ -648,7 +686,7 @@ function App() {
       <Button
         variant={currentView === "settings" ? "secondary" : "ghost"}
         className="w-full justify-start gap-2"
-        onClick={() => navigate("/settings")}
+        onClick={() => guardedNavigate("/settings")}
       >
         <Settings className="h-4 w-4" />
         Settings
@@ -657,7 +695,7 @@ function App() {
         <Button
           variant={currentView === "migration" ? "secondary" : "ghost"}
           className="w-full justify-start gap-2"
-          onClick={() => navigate("/admin/migration")}
+          onClick={() => guardedNavigate("/admin/migration")}
         >
           <DatabaseZap className="h-4 w-4" />
           Migration
@@ -870,6 +908,27 @@ function App() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Unsaved-changes guard — shown when leaving a dirty page (e.g. Settings) */}
+      <AlertDialog open={navConfirmOpen} onOpenChange={(open) => { if (!open) cancelLeave() }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have unsaved changes that will be lost if you leave this page.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelLeave}>Stay</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmLeave}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Leave without saving
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

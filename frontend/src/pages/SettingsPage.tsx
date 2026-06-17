@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Separator } from '@/components/ui/separator'
 import {
   Table,
   TableBody,
@@ -23,104 +22,229 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { api } from '@/api/client'
-import type { CompanySettings, CompanySettingsUpdate, CostCode, CostCodeCreate, SystemRate, SystemRateCreate, SystemRateUpdate } from '@/types'
-import { Loader2, Save, Pencil, Trash2, Plus, X, Check, Upload } from 'lucide-react'
+import type { CompanySettings, CompanySettingsUpdate, CostCode, SystemRate } from '@/types'
+import { Loader2, Save, Trash2, Plus, Upload, Undo2, AlertTriangle } from 'lucide-react'
 
-// Inline editing row state
-interface CostCodeEditState {
+// Working-row shapes. Numeric fields are kept as strings while editing so inputs stay
+// controlled; they're parsed and validated at save time. A negative id marks a row that
+// doesn't exist on the server yet (a staged add).
+interface TravelRow {
+  id: number
+  description: string
+  unit_price: string
+  markup_percent: string
+  sort_order: string
+}
+
+interface CostCodeRow {
+  id: number
   code: string
   description: string
 }
 
-export function SettingsPage() {
-  const [settings, setSettings] = useState<CompanySettings | null>(null)
+interface ParkingForm {
+  description: string
+  unit_price: string
+  markup_percent: string
+}
+
+interface SettingsPageProps {
+  // Lets the App shell guard sidebar navigation when there are unsaved edits.
+  onDirtyChange?: (dirty: boolean) => void
+}
+
+// One canonical object for the whole editable form. Serialized to snapshot the loaded
+// baseline and, on every render, to detect whether anything has changed since.
+interface WorkingState {
+  company: {
+    name: string
+    address: string
+    phone: string
+    fax: string
+    gstNumber: string
+    hstRate: string
+    pmsDefault: string
+    logoDataUrl: string | null
+  }
+  parking: ParkingForm | null
+  travel: TravelRow[]
+  costCodes: CostCodeRow[]
+}
+
+const serialize = (w: WorkingState): string =>
+  JSON.stringify({
+    company: w.company,
+    parking: w.parking,
+    travel: [...w.travel].sort((a, b) => a.id - b.id),
+    costCodes: [...w.costCodes].sort((a, b) => a.id - b.id),
+  })
+
+const travelFromServer = (t: SystemRate): TravelRow => ({
+  id: t.id,
+  description: t.description,
+  unit_price: String(t.unit_price),
+  markup_percent: String(t.markup_percent),
+  sort_order: String(t.sort_order),
+})
+
+const costCodeFromServer = (c: CostCode): CostCodeRow => ({
+  id: c.id,
+  code: c.code,
+  description: c.description,
+})
+
+const parkingFromServer = (p: SystemRate | null): ParkingForm | null =>
+  p
+    ? { description: p.description, unit_price: String(p.unit_price), markup_percent: String(p.markup_percent) }
+    : null
+
+export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
 
-  // Form state
+  // Company info + business variables (kept as discrete fields for simple input binding).
   const [name, setName] = useState('')
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
   const [fax, setFax] = useState('')
   const [gstNumber, setGstNumber] = useState('')
   const [hstRate, setHstRate] = useState('')
-
-  // Cost codes state
-  const [costCodes, setCostCodes] = useState<CostCode[]>([])
-  const [costCodesLoading, setCostCodesLoading] = useState(true)
-  const [editingCostCodeId, setEditingCostCodeId] = useState<number | null>(null)
-  const [editingCostCode, setEditingCostCode] = useState<CostCodeEditState | null>(null)
-  const [addingCostCode, setAddingCostCode] = useState(false)
-  const [newCostCode, setNewCostCode] = useState<CostCodeEditState>({ code: '', description: '' })
-  const [costCodeSaving, setCostCodeSaving] = useState(false)
-  const [costCodeError, setCostCodeError] = useState<string | null>(null)
-  const [deleteConfirm, setDeleteConfirm] = useState<CostCode | null>(null)
-
-  // Parking rate state
-  const [parkingRate, setParkingRate] = useState<SystemRate | null>(null)
-  const [editingParking, setEditingParking] = useState(false)
-  const [parkingForm, setParkingForm] = useState({ description: '', unit_price: '', markup_percent: '' })
-  const [parkingSaving, setParkingSaving] = useState(false)
-
-  // Travel distance state
-  const [travelTiers, setTravelTiers] = useState<SystemRate[]>([])
-  const [travelLoading, setTravelLoading] = useState(true)
-  const [editingTravelId, setEditingTravelId] = useState<number | null>(null)
-  const [editingTravel, setEditingTravel] = useState<{ description: string; unit_price: string; markup_percent: string; sort_order: string } | null>(null)
-  const [addingTravel, setAddingTravel] = useState(false)
-  const [newTravel, setNewTravel] = useState({ description: '', unit_price: '', markup_percent: '', sort_order: '' })
-  const [travelSaving, setTravelSaving] = useState(false)
-  const [travelError, setTravelError] = useState<string | null>(null)
-  const [deleteTravelConfirm, setDeleteTravelConfirm] = useState<SystemRate | null>(null)
-
-  // PMS default state
   const [pmsDefault, setPmsDefault] = useState('')
-
-  // Company logo state (base64 data URL)
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  useEffect(() => {
-    fetchSettings()
-    fetchCostCodes()
-    fetchParkingRate()
-    fetchTravelTiers()
-  }, [])
+  // Editable tables.
+  const [parkingForm, setParkingForm] = useState<ParkingForm | null>(null)
+  const [travelRows, setTravelRows] = useState<TravelRow[]>([])
+  const [costCodeRows, setCostCodeRows] = useState<CostCodeRow[]>([])
 
-  const fetchSettings = async () => {
-    setLoading(true)
-    setError(null)
+  // Server-truth snapshots — used to diff on save and to revert on discard.
+  const [originalCompany, setOriginalCompany] = useState<CompanySettings | null>(null)
+  const [originalParking, setOriginalParking] = useState<SystemRate | null>(null)
+  const [originalTravel, setOriginalTravel] = useState<SystemRate[]>([])
+  const [originalCostCodes, setOriginalCostCodes] = useState<CostCode[]>([])
+
+  // Canonical snapshot of the form as last loaded/saved; dirty = current !== baseline.
+  const [baseline, setBaseline] = useState<string | null>(null)
+
+  // Monotonic negative ids for staged-add rows.
+  const nextTempId = useRef(-1)
+
+  // Push a full set of server data into the working form and reset baseline + snapshots.
+  const applyServerData = (
+    company: CompanySettings,
+    parking: SystemRate | null,
+    travel: SystemRate[],
+    costCodes: CostCode[]
+  ) => {
+    const companyForm = {
+      name: company.name || '',
+      address: company.address || '',
+      phone: company.phone || '',
+      fax: company.fax || '',
+      gstNumber: company.gst_number || '',
+      hstRate: String(company.hst_rate ?? 13.0),
+      pmsDefault: company.default_pms_percent != null ? String(company.default_pms_percent) : '',
+      logoDataUrl: company.logo_data_url ?? null,
+    }
+    const parkingF = parkingFromServer(parking)
+    const travelF = travel.map(travelFromServer)
+    const costCodesF = costCodes.map(costCodeFromServer)
+
+    setName(companyForm.name)
+    setAddress(companyForm.address)
+    setPhone(companyForm.phone)
+    setFax(companyForm.fax)
+    setGstNumber(companyForm.gstNumber)
+    setHstRate(companyForm.hstRate)
+    setPmsDefault(companyForm.pmsDefault)
+    setLogoDataUrl(companyForm.logoDataUrl)
+    setParkingForm(parkingF)
+    setTravelRows(travelF)
+    setCostCodeRows(costCodesF)
+
+    setOriginalCompany(company)
+    setOriginalParking(parking)
+    setOriginalTravel(travel)
+    setOriginalCostCodes(costCodes)
+
+    setBaseline(serialize({ company: companyForm, parking: parkingF, travel: travelF, costCodes: costCodesF }))
+  }
+
+  // silent=true skips the full-page loading state (used for the post-save re-sync so the
+  // page doesn't blink back to a spinner — the Save button shows its own spinner).
+  const loadAll = async (silent = false) => {
+    if (!silent) setLoading(true)
+    if (!silent) setError(null)
     try {
-      const data = await api.companySettings.get()
-      setSettings(data)
-      setName(data.name || '')
-      setAddress(data.address || '')
-      setPhone(data.phone || '')
-      setFax(data.fax || '')
-      setGstNumber(data.gst_number || '')
-      setHstRate(String(data.hst_rate ?? 13.0))
-      setPmsDefault(data.default_pms_percent != null ? String(data.default_pms_percent) : '')
-      setLogoDataUrl(data.logo_data_url ?? null)
+      const [company, travel, costCodes] = await Promise.all([
+        api.companySettings.get(),
+        api.systemRates.getTravelDistance(),
+        api.costCodes.getAll(),
+      ])
+      // Parking is a singleton that may not exist yet; tolerate its absence.
+      let parking: SystemRate | null = null
+      try {
+        parking = await api.systemRates.getParking()
+      } catch {
+        parking = null
+      }
+      applyServerData(company, parking, travel, costCodes)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load settings')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
+  useEffect(() => {
+    loadAll()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ----- Dirty detection -----
+  const currentWorking: WorkingState = {
+    company: { name, address, phone, fax, gstNumber, hstRate, pmsDefault, logoDataUrl },
+    parking: parkingForm,
+    travel: travelRows,
+    costCodes: costCodeRows,
+  }
+  const isDirty = baseline !== null && serialize(currentWorking) !== baseline
+
+  // Report dirty state up so the shell can guard sidebar navigation; clear on unmount.
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+  }, [isDirty, onDirtyChange])
+  useEffect(() => {
+    return () => onDirtyChange?.(false)
+  }, [onDirtyChange])
+
+  // Warn on browser-level navigation (tab close / refresh) while there are unsaved edits.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault()
+        e.returnValue = 'You have unsaved changes that will be lost. Are you sure you want to leave?'
+        return e.returnValue
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
+
+  // ----- Logo handlers -----
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-
     const MAX_BYTES = 2 * 1024 * 1024
     if (file.size > MAX_BYTES) {
       setError('Logo image must be 2MB or smaller.')
       e.target.value = ''
       return
     }
-
     const reader = new FileReader()
     reader.onload = () => {
       if (typeof reader.result === 'string') {
@@ -128,197 +252,104 @@ export function SettingsPage() {
         setError(null)
       }
     }
-    reader.onerror = () => {
-      setError('Failed to read logo image.')
-    }
+    reader.onerror = () => setError('Failed to read logo image.')
     reader.readAsDataURL(file)
     e.target.value = ''
   }
 
-  const handleRemoveLogo = () => {
-    setLogoDataUrl(null)
+  // ----- Row add / update / remove -----
+  const addTravelRow = () => {
+    const nextSort =
+      travelRows.length > 0 ? Math.max(...travelRows.map((t) => parseInt(t.sort_order) || 0)) + 1 : 1
+    setTravelRows([
+      ...travelRows,
+      { id: nextTempId.current--, description: '', unit_price: '', markup_percent: '', sort_order: String(nextSort) },
+    ])
   }
+  const updateTravelRow = (id: number, patch: Partial<TravelRow>) =>
+    setTravelRows((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  const removeTravelRow = (id: number) => setTravelRows((rows) => rows.filter((r) => r.id !== id))
 
-  const fetchCostCodes = async () => {
-    setCostCodesLoading(true)
-    try {
-      const data = await api.costCodes.getAll()
-      setCostCodes(data)
-    } catch (err) {
-      setCostCodeError(err instanceof Error ? err.message : 'Failed to load cost codes')
-    } finally {
-      setCostCodesLoading(false)
-    }
-  }
+  const addCostCodeRow = () =>
+    setCostCodeRows([...costCodeRows, { id: nextTempId.current--, code: '', description: '' }])
+  const updateCostCodeRow = (id: number, patch: Partial<CostCodeRow>) =>
+    setCostCodeRows((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  const removeCostCodeRow = (id: number) => setCostCodeRows((rows) => rows.filter((r) => r.id !== id))
 
-  // Parking rate handlers
-  const fetchParkingRate = async () => {
-    try {
-      const data = await api.systemRates.getParking()
-      setParkingRate(data)
-    } catch (_) {
-      // Parking rate may not exist yet
-    }
-  }
-
-  const startEditParking = () => {
-    if (!parkingRate) return
-    setParkingForm({
-      description: parkingRate.description,
-      unit_price: String(parkingRate.unit_price),
-      markup_percent: String(parkingRate.markup_percent),
-    })
-    setEditingParking(true)
-  }
-
-  const saveParking = async () => {
-    const unit_price = parseFloat(parkingForm.unit_price)
-    const markup_percent = parseFloat(parkingForm.markup_percent)
-    if (isNaN(unit_price) || unit_price < 0) { setError('Parking base cost must be a non-negative number.'); return }
-    if (isNaN(markup_percent) || markup_percent < 0) { setError('Parking markup must be a non-negative number.'); return }
-
-    setParkingSaving(true)
+  // ----- Discard: revert the whole form to the last-saved snapshot -----
+  const handleDiscard = () => {
+    if (!originalCompany) return
+    applyServerData(originalCompany, originalParking, originalTravel, originalCostCodes)
+    setDiscardConfirmOpen(false)
     setError(null)
-    try {
-      const updated = await api.systemRates.updateParking({
-        description: parkingForm.description.trim(),
-        unit_price,
-        markup_percent,
-      })
-      setParkingRate(updated)
-      setEditingParking(false)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update parking rate')
-    } finally {
-      setParkingSaving(false)
-    }
   }
 
-  // Travel distance handlers
-  const fetchTravelTiers = async () => {
-    setTravelLoading(true)
-    try {
-      const data = await api.systemRates.getTravelDistance()
-      setTravelTiers(data)
-    } catch (err) {
-      setTravelError(err instanceof Error ? err.message : 'Failed to load travel tiers')
-    } finally {
-      setTravelLoading(false)
-    }
-  }
-
-  const startEditTravel = (tier: SystemRate) => {
-    setEditingTravelId(tier.id)
-    setEditingTravel({
-      description: tier.description,
-      unit_price: String(tier.unit_price),
-      markup_percent: String(tier.markup_percent),
-      sort_order: String(tier.sort_order),
-    })
-    setTravelError(null)
-  }
-
-  const cancelEditTravel = () => {
-    setEditingTravelId(null)
-    setEditingTravel(null)
-  }
-
-  const saveEditTravel = async () => {
-    if (!editingTravel || editingTravelId === null) return
-    const unit_price = parseFloat(editingTravel.unit_price)
-    const markup_percent = parseFloat(editingTravel.markup_percent)
-    const sort_order = parseInt(editingTravel.sort_order)
-    if (!editingTravel.description.trim()) { setTravelError('Description is required.'); return }
-    if (isNaN(unit_price) || unit_price < 0) { setTravelError('Base cost must be a non-negative number.'); return }
-    if (isNaN(markup_percent) || markup_percent < 0) { setTravelError('Markup must be a non-negative number.'); return }
-
-    setTravelSaving(true)
-    setTravelError(null)
-    try {
-      await api.systemRates.updateTravelDistance(editingTravelId, {
-        description: editingTravel.description.trim(),
-        unit_price,
-        markup_percent,
-        sort_order: isNaN(sort_order) ? undefined : sort_order,
-      })
-      setEditingTravelId(null)
-      setEditingTravel(null)
-      fetchTravelTiers()
-    } catch (err) {
-      setTravelError(err instanceof Error ? err.message : 'Failed to update travel tier')
-    } finally {
-      setTravelSaving(false)
-    }
-  }
-
-  const startAddTravel = () => {
-    const nextSort = travelTiers.length > 0 ? Math.max(...travelTiers.map(t => t.sort_order)) + 1 : 1
-    setAddingTravel(true)
-    setNewTravel({ description: '', unit_price: '', markup_percent: '', sort_order: String(nextSort) })
-    setTravelError(null)
-  }
-
-  const cancelAddTravel = () => {
-    setAddingTravel(false)
-    setNewTravel({ description: '', unit_price: '', markup_percent: '', sort_order: '' })
-  }
-
-  const saveNewTravel = async () => {
-    const unit_price = parseFloat(newTravel.unit_price)
-    const markup_percent = parseFloat(newTravel.markup_percent || '0')
-    const sort_order = parseInt(newTravel.sort_order || '0')
-    if (!newTravel.description.trim()) { setTravelError('Description is required.'); return }
-    if (isNaN(unit_price) || unit_price < 0) { setTravelError('Base cost must be a non-negative number.'); return }
-
-    setTravelSaving(true)
-    setTravelError(null)
-    try {
-      await api.systemRates.createTravelDistance({
-        description: newTravel.description.trim(),
-        unit_price,
-        markup_percent: isNaN(markup_percent) ? 0 : markup_percent,
-        sort_order: isNaN(sort_order) ? 0 : sort_order,
-      })
-      setAddingTravel(false)
-      setNewTravel({ description: '', unit_price: '', markup_percent: '', sort_order: '' })
-      fetchTravelTiers()
-    } catch (err) {
-      setTravelError(err instanceof Error ? err.message : 'Failed to create travel tier')
-    } finally {
-      setTravelSaving(false)
-    }
-  }
-
-  const deleteTravel = async (tier: SystemRate) => {
-    setTravelError(null)
-    try {
-      await api.systemRates.deleteTravelDistance(tier.id)
-      setDeleteTravelConfirm(null)
-      fetchTravelTiers()
-    } catch (err) {
-      setDeleteTravelConfirm(null)
-      setTravelError(err instanceof Error ? err.message : 'Failed to delete travel tier')
-    }
-  }
-
+  // ----- Save: validate -> diff against snapshots -> fire all writes -> re-sync truth -----
   const handleSave = async () => {
     setError(null)
     setSuccessMessage(null)
 
+    // Company / business variables
     const hstValue = parseFloat(hstRate)
     if (isNaN(hstValue) || hstValue < 0 || hstValue > 100) {
       setError('HST Rate must be a number between 0 and 100.')
       return
     }
-
     const pmsValue = pmsDefault.trim() === '' ? null : parseFloat(pmsDefault)
     if (pmsValue !== null && (isNaN(pmsValue) || pmsValue < 0 || pmsValue > 100)) {
       setError('Default PMS Percentage must be a number between 0 and 100.')
       return
     }
 
+    // Parking
+    if (parkingForm) {
+      const pu = parseFloat(parkingForm.unit_price)
+      const pm = parseFloat(parkingForm.markup_percent)
+      if (isNaN(pu) || pu < 0) { setError('Parking base cost must be a non-negative number.'); return }
+      if (isNaN(pm) || pm < 0) { setError('Parking markup must be a non-negative number.'); return }
+    }
+
+    // Travel — drop fully-blank new rows, then validate the rest
+    const travelToSave = travelRows.filter(
+      (r) => !(r.id < 0 && !r.description.trim() && !r.unit_price.trim() && !r.markup_percent.trim())
+    )
+    for (const r of travelToSave) {
+      if (!r.description.trim()) { setError('Every travel tier needs a description.'); return }
+      const u = parseFloat(r.unit_price)
+      if (isNaN(u) || u < 0) { setError(`Travel tier "${r.description}": base cost must be a non-negative number.`); return }
+      const m = r.markup_percent.trim() === '' ? 0 : parseFloat(r.markup_percent)
+      if (isNaN(m) || m < 0) { setError(`Travel tier "${r.description}": markup must be a non-negative number.`); return }
+    }
+
+    // Cost codes — drop fully-blank new rows, then validate the rest
+    const costCodesToSave = costCodeRows.filter((r) => !(r.id < 0 && !r.code.trim() && !r.description.trim()))
+    for (const r of costCodesToSave) {
+      if (!r.code.trim() || !r.description.trim()) {
+        setError('Every cost code needs both a code and a description.')
+        return
+      }
+    }
+
     setSaving(true)
-    try {
+
+    // Each write is wrapped so a single failure doesn't abort the others; we collect
+    // labelled error strings and report them together.
+    const run = (label: string, p: Promise<unknown>): Promise<string | null> =>
+      p.then(() => null).catch((e) => `${label}: ${e instanceof Error ? e.message : 'failed'}`)
+    const ops: Promise<string | null>[] = []
+
+    // Company settings — one PUT if anything in the two cards changed
+    const companyChanged =
+      !originalCompany ||
+      name !== (originalCompany.name || '') ||
+      address !== (originalCompany.address || '') ||
+      phone !== (originalCompany.phone || '') ||
+      fax !== (originalCompany.fax || '') ||
+      gstNumber !== (originalCompany.gst_number || '') ||
+      hstValue !== originalCompany.hst_rate ||
+      pmsValue !== (originalCompany.default_pms_percent ?? null) ||
+      (logoDataUrl ?? null) !== (originalCompany.logo_data_url ?? null)
+    if (companyChanged) {
       const update: CompanySettingsUpdate = {
         name,
         address,
@@ -329,100 +360,92 @@ export function SettingsPage() {
         default_pms_percent: pmsValue,
         logo_data_url: logoDataUrl,
       }
-      const data = await api.companySettings.update(update)
-      setSettings(data)
-      setSuccessMessage('Settings saved successfully.')
-      setTimeout(() => setSuccessMessage(null), 3000)
+      ops.push(run('Company settings', api.companySettings.update(update)))
+    }
+
+    // Parking — one PUT if changed
+    if (parkingForm && originalParking) {
+      const changed =
+        parkingForm.description !== originalParking.description ||
+        parseFloat(parkingForm.unit_price) !== originalParking.unit_price ||
+        parseFloat(parkingForm.markup_percent) !== originalParking.markup_percent
+      if (changed) {
+        ops.push(
+          run('Parking rate', api.systemRates.updateParking({
+            description: parkingForm.description.trim(),
+            unit_price: parseFloat(parkingForm.unit_price),
+            markup_percent: parseFloat(parkingForm.markup_percent),
+          }))
+        )
+      }
+    }
+
+    // Travel — deletes (snapshot rows no longer present), creates (negative ids), updates
+    const travelKept = new Set(travelToSave.filter((r) => r.id > 0).map((r) => r.id))
+    for (const o of originalTravel) {
+      if (!travelKept.has(o.id)) {
+        ops.push(run(`Delete travel tier "${o.description}"`, api.systemRates.deleteTravelDistance(o.id)))
+      }
+    }
+    for (const r of travelToSave) {
+      const payload = {
+        description: r.description.trim(),
+        unit_price: parseFloat(r.unit_price),
+        markup_percent: r.markup_percent.trim() === '' ? 0 : parseFloat(r.markup_percent),
+        sort_order: r.sort_order.trim() === '' ? undefined : parseInt(r.sort_order),
+      }
+      if (r.id < 0) {
+        ops.push(run(`Create travel tier "${payload.description}"`, api.systemRates.createTravelDistance(payload)))
+      } else {
+        const o = originalTravel.find((t) => t.id === r.id)
+        const changed =
+          !o ||
+          payload.description !== o.description ||
+          payload.unit_price !== o.unit_price ||
+          payload.markup_percent !== o.markup_percent ||
+          (payload.sort_order ?? o.sort_order) !== o.sort_order
+        if (changed) {
+          ops.push(run(`Update travel tier "${payload.description}"`, api.systemRates.updateTravelDistance(r.id, payload)))
+        }
+      }
+    }
+
+    // Cost codes — same delete / create / update diff
+    const ccKept = new Set(costCodesToSave.filter((r) => r.id > 0).map((r) => r.id))
+    for (const o of originalCostCodes) {
+      if (!ccKept.has(o.id)) {
+        ops.push(run(`Delete cost code "${o.code}"`, api.costCodes.delete(o.id)))
+      }
+    }
+    for (const r of costCodesToSave) {
+      const payload = { code: r.code.trim(), description: r.description.trim() }
+      if (r.id < 0) {
+        ops.push(run(`Create cost code "${payload.code}"`, api.costCodes.create(payload)))
+      } else {
+        const o = originalCostCodes.find((c) => c.id === r.id)
+        const changed = !o || payload.code !== o.code || payload.description !== o.description
+        if (changed) {
+          ops.push(run(`Update cost code "${payload.code}"`, api.costCodes.update(r.id, payload)))
+        }
+      }
+    }
+
+    try {
+      const results = await Promise.all(ops)
+      const errors = results.filter((r): r is string => r !== null)
+      // Re-sync to server truth regardless of partial failures so the page never shows
+      // phantom state: writes that succeeded persist, ones that failed revert in the UI.
+      await loadAll(true)
+      if (errors.length > 0) {
+        setError(`Some changes could not be saved — ${errors.join('; ')}`)
+      } else {
+        setSuccessMessage('Settings saved successfully.')
+        setTimeout(() => setSuccessMessage(null), 3000)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save settings')
     } finally {
       setSaving(false)
-    }
-  }
-
-  // Cost code CRUD handlers
-  const startEditCostCode = (cc: CostCode) => {
-    setEditingCostCodeId(cc.id)
-    setEditingCostCode({
-      code: cc.code,
-      description: cc.description,
-    })
-    setCostCodeError(null)
-  }
-
-  const cancelEditCostCode = () => {
-    setEditingCostCodeId(null)
-    setEditingCostCode(null)
-  }
-
-  const saveEditCostCode = async () => {
-    if (!editingCostCode || editingCostCodeId === null) return
-    if (!editingCostCode.code.trim() || !editingCostCode.description.trim()) {
-      setCostCodeError('Code and Description are required.')
-      return
-    }
-
-    setCostCodeSaving(true)
-    setCostCodeError(null)
-    try {
-      await api.costCodes.update(editingCostCodeId, {
-        code: editingCostCode.code.trim(),
-        description: editingCostCode.description.trim(),
-      })
-      setEditingCostCodeId(null)
-      setEditingCostCode(null)
-      fetchCostCodes()
-    } catch (err) {
-      setCostCodeError(err instanceof Error ? err.message : 'Failed to update cost code')
-    } finally {
-      setCostCodeSaving(false)
-    }
-  }
-
-  const startAddCostCode = () => {
-    setAddingCostCode(true)
-    setNewCostCode({ code: '', description: '' })
-    setCostCodeError(null)
-  }
-
-  const cancelAddCostCode = () => {
-    setAddingCostCode(false)
-    setNewCostCode({ code: '', description: '' })
-  }
-
-  const saveNewCostCode = async () => {
-    if (!newCostCode.code.trim() || !newCostCode.description.trim()) {
-      setCostCodeError('Code and Description are required.')
-      return
-    }
-
-    setCostCodeSaving(true)
-    setCostCodeError(null)
-    try {
-      const data: CostCodeCreate = {
-        code: newCostCode.code.trim(),
-        description: newCostCode.description.trim(),
-      }
-      await api.costCodes.create(data)
-      setAddingCostCode(false)
-      setNewCostCode({ code: '', description: '' })
-      fetchCostCodes()
-    } catch (err) {
-      setCostCodeError(err instanceof Error ? err.message : 'Failed to create cost code')
-    } finally {
-      setCostCodeSaving(false)
-    }
-  }
-
-  const deleteCostCode = async (cc: CostCode) => {
-    setCostCodeError(null)
-    try {
-      await api.costCodes.delete(cc.id)
-      setDeleteConfirm(null)
-      fetchCostCodes()
-    } catch (err) {
-      setDeleteConfirm(null)
-      setCostCodeError(err instanceof Error ? err.message : 'Failed to delete cost code')
     }
   }
 
@@ -439,7 +462,9 @@ export function SettingsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Settings</h1>
-        <p className="text-muted-foreground">Manage company information and business variables</p>
+        <p className="text-muted-foreground">
+          Edit company information and business variables, then save everything at once.
+        </p>
       </div>
 
       {error && (
@@ -463,45 +488,25 @@ export function SettingsPage() {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="company-name">Company Name</Label>
-              <Input
-                id="company-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
+              <Input id="company-name" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="gst-number">GST Number</Label>
-              <Input
-                id="gst-number"
-                value={gstNumber}
-                onChange={(e) => setGstNumber(e.target.value)}
-              />
+              <Input id="gst-number" value={gstNumber} onChange={(e) => setGstNumber(e.target.value)} />
             </div>
           </div>
           <div className="space-y-2">
             <Label htmlFor="address">Address</Label>
-            <Input
-              id="address"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-            />
+            <Input id="address" value={address} onChange={(e) => setAddress(e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="phone">Phone</Label>
-              <Input
-                id="phone"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-              />
+              <Input id="phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="fax">Fax</Label>
-              <Input
-                id="fax"
-                value={fax}
-                onChange={(e) => setFax(e.target.value)}
-              />
+              <Input id="fax" value={fax} onChange={(e) => setFax(e.target.value)} />
             </div>
           </div>
 
@@ -529,13 +534,13 @@ export function SettingsPage() {
                     {logoDataUrl ? 'Replace logo' : 'Upload logo'}
                   </Button>
                   {logoDataUrl && (
-                    <Button type="button" variant="ghost" size="sm" onClick={handleRemoveLogo}>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => setLogoDataUrl(null)}>
                       Remove
                     </Button>
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  PNG, JPEG, or WebP. Max 2MB. Appears on quote, invoice, and PO PDFs. Click "Save Settings" below to apply.
+                  PNG, JPEG, or WebP. Max 2MB. Appears on quote, invoice, and PO PDFs. Saved when you click Save Settings.
                 </p>
               </div>
             </div>
@@ -599,7 +604,7 @@ export function SettingsPage() {
           <CardTitle>Parking Rate</CardTitle>
         </CardHeader>
         <CardContent>
-          {parkingRate ? (
+          {parkingForm ? (
             <div className="rounded-md border">
               <Table>
                 <TableHeader>
@@ -608,69 +613,40 @@ export function SettingsPage() {
                     <TableHead className="w-[130px]">Base Cost ($)</TableHead>
                     <TableHead className="w-[130px]">Markup (%)</TableHead>
                     <TableHead className="w-[130px]">Total ($)</TableHead>
-                    <TableHead className="w-[80px] text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   <TableRow>
-                    {editingParking ? (
-                      <>
-                        <TableCell>
-                          <Input
-                            value={parkingForm.description}
-                            onChange={(e) => setParkingForm({ ...parkingForm, description: e.target.value })}
-                            className="h-8"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={parkingForm.unit_price}
-                            onChange={(e) => setParkingForm({ ...parkingForm, unit_price: e.target.value })}
-                            className="h-8"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={parkingForm.markup_percent}
-                            onChange={(e) => setParkingForm({ ...parkingForm, markup_percent: e.target.value })}
-                            className="h-8"
-                          />
-                        </TableCell>
-                        <TableCell className="text-sm font-medium">
-                          ${(parseFloat(parkingForm.unit_price || '0') * (1 + parseFloat(parkingForm.markup_percent || '0') / 100)).toFixed(2)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={saveParking} disabled={parkingSaving}>
-                              {parkingSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 text-green-600" />}
-                            </Button>
-                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditingParking(false)}>
-                              <X className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </>
-                    ) : (
-                      <>
-                        <TableCell className="font-medium">{parkingRate.description}</TableCell>
-                        <TableCell>${parkingRate.unit_price.toFixed(2)}</TableCell>
-                        <TableCell>{parkingRate.markup_percent.toFixed(1)}%</TableCell>
-                        <TableCell className="font-medium">
-                          ${(parkingRate.unit_price * (1 + parkingRate.markup_percent / 100)).toFixed(2)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={startEditParking}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                        </TableCell>
-                      </>
-                    )}
+                    <TableCell>
+                      <Input
+                        value={parkingForm.description}
+                        onChange={(e) => setParkingForm({ ...parkingForm, description: e.target.value })}
+                        className="h-8"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={parkingForm.unit_price}
+                        onChange={(e) => setParkingForm({ ...parkingForm, unit_price: e.target.value })}
+                        className="h-8"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={parkingForm.markup_percent}
+                        onChange={(e) => setParkingForm({ ...parkingForm, markup_percent: e.target.value })}
+                        className="h-8"
+                      />
+                    </TableCell>
+                    <TableCell className="text-sm font-medium">
+                      ${(parseFloat(parkingForm.unit_price || '0') * (1 + parseFloat(parkingForm.markup_percent || '0') / 100)).toFixed(2)}
+                    </TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
@@ -685,384 +661,201 @@ export function SettingsPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Travel Distance Tiers</CardTitle>
-          <Button
-            size="sm"
-            onClick={startAddTravel}
-            disabled={addingTravel || editingTravelId !== null}
-            className="gap-1"
-          >
+          <Button size="sm" onClick={addTravelRow} className="gap-1">
             <Plus className="h-4 w-4" />
-            Add New
+            Add Tier
           </Button>
         </CardHeader>
         <CardContent>
-          {travelError && (
-            <div className="p-3 mb-4 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">
-              {travelError}
-            </div>
-          )}
-
-          {travelLoading ? (
-            <div className="p-4 text-center text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-              Loading travel tiers...
-            </div>
-          ) : (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="w-[120px]">Base Cost ($)</TableHead>
-                    <TableHead className="w-[110px]">Markup (%)</TableHead>
-                    <TableHead className="w-[120px]">Total ($)</TableHead>
-                    <TableHead className="w-[80px]">Order</TableHead>
-                    <TableHead className="w-[100px] text-right">Actions</TableHead>
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="w-[120px]">Base Cost ($)</TableHead>
+                  <TableHead className="w-[110px]">Markup (%)</TableHead>
+                  <TableHead className="w-[120px]">Total ($)</TableHead>
+                  <TableHead className="w-[80px]">Order</TableHead>
+                  <TableHead className="w-[60px] text-right">
+                    <span className="sr-only">Remove</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {travelRows.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell>
+                      <Input
+                        value={r.description}
+                        onChange={(e) => updateTravelRow(r.id, { description: e.target.value })}
+                        className="h-8"
+                        placeholder="e.g. Zone 1 (0-25km)"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={r.unit_price}
+                        onChange={(e) => updateTravelRow(r.id, { unit_price: e.target.value })}
+                        className="h-8"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={r.markup_percent}
+                        onChange={(e) => updateTravelRow(r.id, { markup_percent: e.target.value })}
+                        className="h-8"
+                      />
+                    </TableCell>
+                    <TableCell className="text-sm font-medium">
+                      ${(parseFloat(r.unit_price || '0') * (1 + parseFloat(r.markup_percent || '0') / 100)).toFixed(2)}
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={r.sort_order}
+                        onChange={(e) => updateTravelRow(r.id, { sort_order: e.target.value })}
+                        className="h-8 w-16"
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={() => removeTravelRow(r.id)}
+                        aria-label={`Remove travel tier ${r.description || '(new)'}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {travelTiers.map((tier) => (
-                    <TableRow key={tier.id}>
-                      {editingTravelId === tier.id && editingTravel ? (
-                        <>
-                          <TableCell>
-                            <Input
-                              value={editingTravel.description}
-                              onChange={(e) => setEditingTravel({ ...editingTravel, description: e.target.value })}
-                              className="h-8"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="number" min="0" step="0.01"
-                              value={editingTravel.unit_price}
-                              onChange={(e) => setEditingTravel({ ...editingTravel, unit_price: e.target.value })}
-                              className="h-8"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="number" min="0" step="0.01"
-                              value={editingTravel.markup_percent}
-                              onChange={(e) => setEditingTravel({ ...editingTravel, markup_percent: e.target.value })}
-                              className="h-8"
-                            />
-                          </TableCell>
-                          <TableCell className="text-sm font-medium">
-                            ${(parseFloat(editingTravel.unit_price || '0') * (1 + parseFloat(editingTravel.markup_percent || '0') / 100)).toFixed(2)}
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="number" min="0"
-                              value={editingTravel.sort_order}
-                              onChange={(e) => setEditingTravel({ ...editingTravel, sort_order: e.target.value })}
-                              className="h-8 w-16"
-                            />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={saveEditTravel} disabled={travelSaving}>
-                                {travelSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 text-green-600" />}
-                              </Button>
-                              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={cancelEditTravel}>
-                                <X className="h-4 w-4 text-muted-foreground" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </>
-                      ) : (
-                        <>
-                          <TableCell className="font-medium">{tier.description}</TableCell>
-                          <TableCell>${tier.unit_price.toFixed(2)}</TableCell>
-                          <TableCell>{tier.markup_percent.toFixed(1)}%</TableCell>
-                          <TableCell className="font-medium">
-                            ${(tier.unit_price * (1 + tier.markup_percent / 100)).toFixed(2)}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{tier.sort_order}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button
-                                size="icon" variant="ghost" className="h-7 w-7"
-                                onClick={() => startEditTravel(tier)}
-                                disabled={addingTravel || editingTravelId !== null}
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                size="icon" variant="ghost"
-                                className="h-7 w-7 text-destructive hover:text-destructive"
-                                onClick={() => setDeleteTravelConfirm(tier)}
-                                disabled={addingTravel || editingTravelId !== null}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </>
-                      )}
-                    </TableRow>
-                  ))}
+                ))}
 
-                  {/* Add new row */}
-                  {addingTravel && (
-                    <TableRow>
-                      <TableCell>
-                        <Input
-                          value={newTravel.description}
-                          onChange={(e) => setNewTravel({ ...newTravel, description: e.target.value })}
-                          className="h-8"
-                          placeholder='e.g. "Travel Distance (300km) (1 Day)"'
-                          autoFocus
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          type="number" min="0" step="0.01"
-                          value={newTravel.unit_price}
-                          onChange={(e) => setNewTravel({ ...newTravel, unit_price: e.target.value })}
-                          className="h-8"
-                          placeholder="0.00"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          type="number" min="0" step="0.01"
-                          value={newTravel.markup_percent}
-                          onChange={(e) => setNewTravel({ ...newTravel, markup_percent: e.target.value })}
-                          className="h-8"
-                          placeholder="0.0"
-                        />
-                      </TableCell>
-                      <TableCell className="text-sm font-medium">
-                        ${(parseFloat(newTravel.unit_price || '0') * (1 + parseFloat(newTravel.markup_percent || '0') / 100)).toFixed(2)}
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          type="number" min="0"
-                          value={newTravel.sort_order}
-                          onChange={(e) => setNewTravel({ ...newTravel, sort_order: e.target.value })}
-                          className="h-8 w-16"
-                        />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={saveNewTravel} disabled={travelSaving}>
-                            {travelSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 text-green-600" />}
-                          </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={cancelAddTravel}>
-                            <X className="h-4 w-4 text-muted-foreground" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-
-                  {travelTiers.length === 0 && !addingTravel && (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                        No travel distance tiers found. Click "Add New" to create one.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+                {travelRows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                      No travel distance tiers. Click "Add Tier" to create one.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
-
-      <Separator />
-
-      <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={saving} className="gap-2">
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          Save Settings
-        </Button>
-      </div>
 
       {/* Cost Codes */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Cost Codes</CardTitle>
-          <Button
-            size="sm"
-            onClick={startAddCostCode}
-            disabled={addingCostCode || editingCostCodeId !== null}
-            className="gap-1"
-          >
+          <Button size="sm" onClick={addCostCodeRow} className="gap-1">
             <Plus className="h-4 w-4" />
-            Add New
+            Add Code
           </Button>
         </CardHeader>
         <CardContent>
-          {costCodeError && (
-            <div className="p-3 mb-4 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">
-              {costCodeError}
-            </div>
-          )}
-
-          {costCodesLoading ? (
-            <div className="p-4 text-center text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-              Loading cost codes...
-            </div>
-          ) : (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[120px]">Code</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="w-[100px] text-right">Actions</TableHead>
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[160px]">Code</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="w-[60px] text-right">
+                    <span className="sr-only">Remove</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {costCodeRows.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell>
+                      <Input
+                        value={r.code}
+                        onChange={(e) => updateCostCodeRow(r.id, { code: e.target.value })}
+                        className="h-8 font-mono"
+                        placeholder="e.g. 999-100"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        value={r.description}
+                        onChange={(e) => updateCostCodeRow(r.id, { description: e.target.value })}
+                        className="h-8"
+                        placeholder="Description"
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={() => removeCostCodeRow(r.id)}
+                        aria-label={`Remove cost code ${r.code || '(new)'}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {costCodes.map((cc) => (
-                    <TableRow key={cc.id}>
-                      {editingCostCodeId === cc.id && editingCostCode ? (
-                        <>
-                          <TableCell>
-                            <Input
-                              value={editingCostCode.code}
-                              onChange={(e) => setEditingCostCode({ ...editingCostCode, code: e.target.value })}
-                              className="h-8"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              value={editingCostCode.description}
-                              onChange={(e) => setEditingCostCode({ ...editingCostCode, description: e.target.value })}
-                              className="h-8"
-                            />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={saveEditCostCode} disabled={costCodeSaving}>
-                                {costCodeSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 text-green-600" />}
-                              </Button>
-                              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={cancelEditCostCode}>
-                                <X className="h-4 w-4 text-muted-foreground" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </>
-                      ) : (
-                        <>
-                          <TableCell className="font-mono text-sm">{cc.code}</TableCell>
-                          <TableCell>{cc.description}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-7 w-7"
-                                onClick={() => startEditCostCode(cc)}
-                                disabled={addingCostCode || editingCostCodeId !== null}
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-7 w-7 text-destructive hover:text-destructive"
-                                onClick={() => setDeleteConfirm(cc)}
-                                disabled={addingCostCode || editingCostCodeId !== null}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </>
-                      )}
-                    </TableRow>
-                  ))}
+                ))}
 
-                  {/* Add new row */}
-                  {addingCostCode && (
-                    <TableRow>
-                      <TableCell>
-                        <Input
-                          value={newCostCode.code}
-                          onChange={(e) => setNewCostCode({ ...newCostCode, code: e.target.value })}
-                          className="h-8"
-                          placeholder="e.g. 999-100"
-                          autoFocus
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          value={newCostCode.description}
-                          onChange={(e) => setNewCostCode({ ...newCostCode, description: e.target.value })}
-                          className="h-8"
-                          placeholder="Description"
-                        />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={saveNewCostCode} disabled={costCodeSaving}>
-                            {costCodeSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 text-green-600" />}
-                          </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={cancelAddCostCode}>
-                            <X className="h-4 w-4 text-muted-foreground" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-
-                  {costCodes.length === 0 && !addingCostCode && (
-                    <TableRow>
-                      <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
-                        No cost codes found. Click "Add New" to create one.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+                {costCodeRows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                      No cost codes. Click "Add Code" to create one.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
 
-      {/* Delete cost code confirmation dialog */}
-      <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Cost Code</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete cost code <strong>{deleteConfirm?.code}</strong> ({deleteConfirm?.description})?
-              This cannot be undone. If this cost code is used by any quotes or purchase orders, deletion will be blocked.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => deleteConfirm && deleteCostCode(deleteConfirm)}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Sticky save bar — single commit point for the whole page */}
+      <div className="sticky bottom-0 z-10 -mx-4 md:-mx-6 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="flex items-center justify-end gap-3">
+          {isDirty && (
+            <span className="mr-auto text-sm text-muted-foreground">You have unsaved changes.</span>
+          )}
+          {isDirty && (
+            <Button variant="outline" onClick={() => setDiscardConfirmOpen(true)} disabled={saving} className="gap-2">
+              <Undo2 className="h-4 w-4" />
+              Discard
+            </Button>
+          )}
+          <Button onClick={handleSave} disabled={!isDirty || saving} className="gap-2">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Save Settings
+          </Button>
+        </div>
+      </div>
 
-      {/* Delete travel tier confirmation dialog */}
-      <AlertDialog open={!!deleteTravelConfirm} onOpenChange={(open) => !open && setDeleteTravelConfirm(null)}>
+      {/* Discard confirmation */}
+      <AlertDialog open={discardConfirmOpen} onOpenChange={setDiscardConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Travel Distance Tier</AlertDialogTitle>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Discard changes?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to remove <strong>{deleteTravelConfirm?.description}</strong>?
-              Existing quotes using this tier will not be affected.
+              This reverts every field on this page back to the last saved values. Unsaved edits will be lost.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
             <AlertDialogAction
+              onClick={handleDiscard}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => deleteTravelConfirm && deleteTravel(deleteTravelConfirm)}
             >
-              Delete
+              Discard changes
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
