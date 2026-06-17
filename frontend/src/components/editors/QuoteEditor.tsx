@@ -989,6 +989,30 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       return
     }
 
+    // In edit mode, stage the add like every other "add item" path instead of
+    // writing immediately. A direct addLine here bumps the quote's
+    // current_version, which the next fetchQuote() reads as an external change
+    // and responds to by clearing all staged drafts (issue #145).
+    if (editorMode === "edit") {
+      const stagedPms: Omit<StagedAdd, "tempId"> = {
+        item_type: "labor",
+        description: "Project Management Services",
+        quantity: 1,
+        is_pms: true,
+      }
+      if (pmsType === "percent") {
+        stagedPms.pms_percent = value
+        // Initial snapshot; the row and projected totals recalculate dynamically.
+        stagedPms.unit_price = calculateProjectedNonPmsTotal() * value / 100
+      } else {
+        stagedPms.unit_price = value
+      }
+      stageAdd(stagedPms)
+      setPmsDialogOpen(false)
+      setPmsValue("")
+      return
+    }
+
     const lineItem: QuoteLineItemCreate = {
       item_type: "labor",
       description: "Project Management Services",
@@ -1121,34 +1145,24 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // ===== Projected Calculations (for Edit Mode comparison) =====
   // These include staged changes: adds, edits, deletes
 
-  const calculateProjectedTotal = (): number => {
+  // Non-PMS subtotal that reflects staged adds/edits/deletes. PMS percentage
+  // items price off this figure, so the per-row display and the projected total
+  // must share it to stay in agreement (issue #145).
+  const calculateProjectedNonPmsTotal = (): number => {
     if (!quote) return 0
-
-    // Start with existing items, excluding deleted ones
-    let projectedItems: { unitPrice: number; quantity: number; isPms: boolean; pmsPercent?: number }[] = []
+    let total = 0
 
     for (const item of quote.line_items) {
-      if (stagedDeletes.has(item.id)) continue // Skip deleted items
-
+      if (stagedDeletes.has(item.id) || item.is_pms) continue
       const editedItem = stagedEdits.get(item.id)
       const quantity = editedItem?.quantity ?? item.quantity
-      // Calculate unit price from unit cost + markup, accounting for staged changes
       const baseCost = editedItem?.base_cost ?? getLineItemBaseCost(item)
       const markup = editedItem?.markup_percent ?? item.markup_percent ?? 0
-      const unitPrice = item.is_pms
-        ? getLineItemUnitPrice(item)
-        : baseCost * (1 + markup / 100)
-
-      projectedItems.push({
-        unitPrice,
-        quantity,
-        isPms: item.is_pms,
-        pmsPercent: item.pms_percent ?? undefined,
-      })
+      total += baseCost * (1 + markup / 100) * quantity
     }
 
-    // Add staged adds
     for (const add of stagedAdds) {
+      if (add.is_pms) continue
       const addBaseCost = add.base_cost ?? (
         add.part ? add.part.cost :
         add.labor ? add.labor.hours * add.labor.rate :
@@ -1159,32 +1173,37 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
         add.labor ? add.labor.markup_percent :
         add.miscellaneous ? add.miscellaneous.markup_percent : 0
       )
-      const unitPrice = addBaseCost * (1 + (addMarkup ?? 0) / 100)
-      projectedItems.push({
-        unitPrice,
-        quantity: add.quantity,
-        isPms: add.is_pms ?? false,
-        pmsPercent: add.pms_percent ?? undefined,
-      })
+      total += addBaseCost * (1 + (addMarkup ?? 0) / 100) * add.quantity
     }
 
-    // Calculate non-PMS total first
-    const nonPmsTotal = projectedItems
-      .filter(item => !item.isPms)
-      .reduce((sum, item) => {
-        return sum + item.unitPrice * item.quantity
-      }, 0)
+    return total
+  }
 
-    // Calculate PMS total
-    const pmsTotal = projectedItems
-      .filter(item => item.isPms)
-      .reduce((sum, item) => {
-        if (item.pmsPercent != null) {
-          const unitPrice = nonPmsTotal * item.pmsPercent / 100
-          return sum + unitPrice * item.quantity
-        }
-        return sum + item.unitPrice * item.quantity
-      }, 0)
+  const calculateProjectedTotal = (): number => {
+    if (!quote) return 0
+
+    const nonPmsTotal = calculateProjectedNonPmsTotal()
+
+    // PMS items (existing + staged) price off the non-PMS subtotal when set as a
+    // percentage, otherwise they fall back to their flat unit price.
+    let pmsTotal = 0
+
+    for (const item of quote.line_items) {
+      if (stagedDeletes.has(item.id) || !item.is_pms) continue
+      const quantity = stagedEdits.get(item.id)?.quantity ?? item.quantity
+      const unitPrice = item.pms_percent != null
+        ? nonPmsTotal * item.pms_percent / 100
+        : getLineItemUnitPrice(item)
+      pmsTotal += unitPrice * quantity
+    }
+
+    for (const add of stagedAdds) {
+      if (!add.is_pms) continue
+      const unitPrice = add.pms_percent != null
+        ? nonPmsTotal * add.pms_percent / 100
+        : (add.unit_price ?? 0)
+      pmsTotal += unitPrice * add.quantity
+    }
 
     return nonPmsTotal + pmsTotal
   }
@@ -2503,7 +2522,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                 }
                 const addBaseCost = getAddBaseCost()
                 const addMarkup = getAddMarkup()
-                const unitPrice = addBaseCost * (1 + addMarkup / 100)
+                // PMS rows price off the staged-aware non-PMS subtotal (percentage)
+                // or a flat amount (dollar); all other rows use cost + markup.
+                const unitPrice = add.is_pms
+                  ? (add.pms_percent != null
+                      ? calculateProjectedNonPmsTotal() * add.pms_percent / 100
+                      : (add.unit_price ?? 0))
+                  : addBaseCost * (1 + addMarkup / 100)
                 const total = unitPrice * add.quantity
                 return (
                   <TableRow
@@ -2514,6 +2539,9 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-green-700 dark:text-green-300">{getAddDescription()}</span>
+                        {add.is_pms && add.pms_percent != null && (
+                          <span className="text-xs text-muted-foreground">({add.pms_percent}%)</span>
+                        )}
                         <Badge variant="outline" className="text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 border-green-300">
                           + New
                         </Badge>
@@ -2522,9 +2550,9 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                         )}
                       </div>
                     </TableCell>
-                    {/* Qty Ordered */}
+                    {/* Qty Ordered — PMS is always qty 1, mirror the locked existing-item behaviour */}
                     <TableCell className="text-right">
-                      {editorMode === "edit" ? (
+                      {editorMode === "edit" && !add.is_pms ? (
                         <Input
                           type="number"
                           step="1"
