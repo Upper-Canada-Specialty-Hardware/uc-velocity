@@ -93,7 +93,7 @@ class Part(Base):
     part_number = Column(String, unique=True, nullable=False)
     description = Column(String, nullable=False)
     cost = Column(Float, nullable=False)
-    markup_percent = Column(Float, default=0.0)
+    markup_percent = Column(Float, default=50.0)
     category_id = Column(Integer, ForeignKey('categories.id'))
     vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=True, index=True)
     list_price = Column(Float, nullable=True)
@@ -112,7 +112,7 @@ class Labor(Base):
     description = Column(String, nullable=False)
     hours = Column(Float, nullable=False, default=1)
     rate = Column(Float, nullable=False)
-    markup_percent = Column(Float, default=0.0)
+    markup_percent = Column(Float, default=50.0)
     category_id = Column(Integer, ForeignKey('categories.id'))
 
     # Relationships
@@ -126,7 +126,7 @@ class Miscellaneous(Base):
     id = Column(Integer, primary_key=True, index=True)
     description = Column(String, nullable=False)
     unit_price = Column(Float, nullable=False)
-    markup_percent = Column(Float, default=0.0)
+    markup_percent = Column(Float, default=50.0)
     category_id = Column(Integer, ForeignKey('categories.id'))
     is_system_item = Column(Boolean, default=False)
 
