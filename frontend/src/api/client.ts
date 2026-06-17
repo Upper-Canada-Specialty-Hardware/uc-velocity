@@ -38,6 +38,10 @@ async function request<T>(
   }
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
+    // Disable HTTP caching for all API calls so a cold full-page reload never
+    // replays a stale cached GET. Placed before ...options so a caller can
+    // still override it per-call if ever needed.
+    cache: 'no-store',
     ...options,
     headers: {
       'Content-Type': 'application/json',
