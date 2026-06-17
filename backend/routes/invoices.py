@@ -51,7 +51,7 @@ def list_invoices(
     )
     if project_id is not None:
         query = query.filter(Project.id == project_id)
-    invoices = query.order_by(Invoice.created_at).all()
+    invoices = query.order_by(Invoice.created_at, Profile.name, Project.name).all()
 
     results = []
     for inv in invoices:
