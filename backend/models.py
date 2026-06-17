@@ -308,7 +308,7 @@ class POSnapshot(Base):
     id = Column(Integer, primary_key=True, index=True)
     purchase_order_id = Column(Integer, ForeignKey('purchase_orders.id'), nullable=False)
     version = Column(Integer, nullable=False)
-    action_type = Column(String, nullable=False)  # "create", "edit", "delete", "receive", "status_change", "revert"
+    action_type = Column(String, nullable=False)  # "create", "edit", "delete", "receive", "status_change", "date_edit", "revert"
     action_description = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     receiving_id = Column(Integer, ForeignKey('po_receivings.id'), nullable=True)
@@ -352,12 +352,14 @@ class Invoice(Base):
     notes = Column(String)  # Optional notes for this invoice
     invoice_sequence = Column(Integer, default=1)  # Per-quote sequence (1, 2, 3...)
     quote_version = Column(Integer, default=0)  # Quote version captured at invoice time
+    current_version = Column(Integer, default=0, server_default='0')  # Invoice's own snapshot version (audit trail)
     voided_at = Column(DateTime)  # When voided (if applicable)
     voided_by_snapshot_id = Column(Integer)  # Which revert voided this
 
     # Relationships
     quote = relationship("Quote", back_populates="invoices")
     line_items = relationship("InvoiceLineItem", back_populates="invoice", cascade="all, delete-orphan")
+    snapshots = relationship("InvoiceSnapshot", back_populates="invoice", cascade="all, delete-orphan", order_by="InvoiceSnapshot.version")
 
 
 class InvoiceLineItem(Base):
@@ -385,6 +387,50 @@ class InvoiceLineItem(Base):
     invoice = relationship("Invoice", back_populates="line_items")
 
 
+# ===== Invoice Snapshot Models (for versioning/revert) =====
+
+class InvoiceSnapshot(Base):
+    __tablename__ = "invoice_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    invoice_id = Column(Integer, ForeignKey('invoices.id'), nullable=False)
+    version = Column(Integer, nullable=False)
+    action_type = Column(String, nullable=False)  # "date_edit", "revert"
+    action_description = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)  # When this snapshot was taken
+    entity_created_at = Column(DateTime, nullable=True)  # The invoice's created_at at snapshot time (for revert)
+    actor_user_id = Column(String, nullable=True)  # Clerk user id (sub) who performed the action
+    actor_email = Column(String, nullable=True)  # Resolved email, for display
+
+    # Relationships
+    invoice = relationship("Invoice", back_populates="snapshots")
+    line_item_states = relationship("InvoiceLineItemSnapshot", back_populates="snapshot", cascade="all, delete-orphan")
+
+
+class InvoiceLineItemSnapshot(Base):
+    __tablename__ = "invoice_line_item_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    snapshot_id = Column(Integer, ForeignKey('invoice_snapshots.id'), nullable=False)
+    original_line_item_id = Column(Integer, nullable=True)  # Reference to original invoice line item
+    quote_line_item_id = Column(Integer, nullable=True)  # The invoice line's quote_line_item_id
+
+    # Full state of the invoice line at this snapshot
+    item_type = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    unit_price = Column(Float, nullable=True)
+    qty_ordered = Column(Integer, nullable=True)
+    qty_fulfilled_this_invoice = Column(Integer, nullable=True)
+    qty_fulfilled_total = Column(Integer, nullable=True)
+    qty_pending_after = Column(Integer, nullable=True)
+    labor_id = Column(Integer, nullable=True)
+    part_id = Column(Integer, nullable=True)
+    misc_id = Column(Integer, nullable=True)
+
+    # Relationships
+    snapshot = relationship("InvoiceSnapshot", back_populates="line_item_states")
+
+
 # ===== Quote Snapshot Models (for versioning/revert) =====
 
 class QuoteSnapshot(Base):
@@ -393,7 +439,7 @@ class QuoteSnapshot(Base):
     id = Column(Integer, primary_key=True, index=True)
     quote_id = Column(Integer, ForeignKey('quotes.id'), nullable=False)
     version = Column(Integer, nullable=False)
-    action_type = Column(String, nullable=False)  # "create", "edit", "delete", "invoice", "revert"
+    action_type = Column(String, nullable=False)  # "create", "edit", "delete", "invoice", "date_edit", "revert"
     action_description = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     invoice_id = Column(Integer)  # If action_type="invoice", link to Invoice
