@@ -185,7 +185,7 @@ class Quote(Base):
     # Relationships
     project = relationship("Project", back_populates="quotes")
     line_items = relationship("QuoteLineItem", back_populates="quote", cascade="all, delete-orphan")
-    invoices = relationship("Invoice", back_populates="quote", order_by="Invoice.created_at")
+    invoices = relationship("Invoice", back_populates="quote", cascade="all, delete-orphan", order_by="Invoice.created_at")
     snapshots = relationship("QuoteSnapshot", back_populates="quote", cascade="all, delete-orphan", order_by="QuoteSnapshot.version")
     cost_code = relationship("CostCode")
 
@@ -240,7 +240,7 @@ class PurchaseOrder(Base):
     project = relationship("Project", back_populates="purchase_orders")
     vendor = relationship("Profile", back_populates="purchase_orders")
     line_items = relationship("POLineItem", back_populates="purchase_order", cascade="all, delete-orphan")
-    receivings = relationship("POReceiving", back_populates="purchase_order", order_by="POReceiving.created_at")
+    receivings = relationship("POReceiving", back_populates="purchase_order", cascade="all, delete-orphan", order_by="POReceiving.created_at")
     snapshots = relationship("POSnapshot", back_populates="purchase_order", cascade="all, delete-orphan", order_by="POSnapshot.version")
     cost_code = relationship("CostCode")
 
@@ -318,6 +318,10 @@ class POSnapshot(Base):
     # Relationships
     purchase_order = relationship("PurchaseOrder", back_populates="snapshots")
     line_item_states = relationship("POLineItemSnapshot", back_populates="snapshot", cascade="all, delete-orphan")
+    # FK-only link to the receiving a "receive" snapshot recorded. The relationship (not the bare
+    # receiving_id FK) is what registers a unit-of-work dependency, so on PO delete SQLAlchemy
+    # deletes po_snapshots before po_receivings instead of tripping the FK constraint (issue #160).
+    receiving = relationship("POReceiving", foreign_keys=[receiving_id])
 
 
 class POLineItemSnapshot(Base):
