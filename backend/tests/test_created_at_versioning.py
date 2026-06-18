@@ -62,22 +62,10 @@ def _make_project(db, suffix):
 
 
 def _cleanup(db, *objs):
-    """Delete test objects, first removing snapshot rows whose FK back to the parent is
-    NOT NULL with no DB/ORM cascade (quote_snapshots, po_snapshots). Without this, deleting
-    a quote/PO that owns a date_edit snapshot raises an IntegrityError as SQLAlchemy tries
-    to NULL the snapshot's FK. invoice_snapshots cascade via the ORM relationship, so the
-    invoice itself can just be deleted."""
-    for obj in objs:
-        if isinstance(obj, Quote):
-            snaps = db.query(QuoteSnapshot).filter(QuoteSnapshot.quote_id == obj.id).all()
-        elif isinstance(obj, PurchaseOrder):
-            snaps = db.query(POSnapshot).filter(POSnapshot.purchase_order_id == obj.id).all()
-        else:
-            snaps = []
-        # ORM delete so cascade clears the *_line_item_snapshots children too.
-        for snap in snaps:
-            db.delete(snap)
-    db.flush()
+    """Delete test objects directly. Since issue #158 added cascade="all, delete-orphan"
+    to Quote.snapshots and PurchaseOrder.snapshots (invoice_snapshots already had it),
+    deleting a quote/PO that owns snapshot rows cascades to the snapshot and
+    line-item-snapshot rows instead of tripping the NOT NULL parent FK."""
     for obj in objs:
         if obj is not None:
             db.delete(obj)
