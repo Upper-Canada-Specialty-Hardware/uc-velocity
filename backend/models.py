@@ -186,7 +186,7 @@ class Quote(Base):
     project = relationship("Project", back_populates="quotes")
     line_items = relationship("QuoteLineItem", back_populates="quote", cascade="all, delete-orphan")
     invoices = relationship("Invoice", back_populates="quote", order_by="Invoice.created_at")
-    snapshots = relationship("QuoteSnapshot", back_populates="quote", order_by="QuoteSnapshot.version")
+    snapshots = relationship("QuoteSnapshot", back_populates="quote", cascade="all, delete-orphan", order_by="QuoteSnapshot.version")
     cost_code = relationship("CostCode")
 
 
@@ -241,7 +241,7 @@ class PurchaseOrder(Base):
     vendor = relationship("Profile", back_populates="purchase_orders")
     line_items = relationship("POLineItem", back_populates="purchase_order", cascade="all, delete-orphan")
     receivings = relationship("POReceiving", back_populates="purchase_order", order_by="POReceiving.created_at")
-    snapshots = relationship("POSnapshot", back_populates="purchase_order", order_by="POSnapshot.version")
+    snapshots = relationship("POSnapshot", back_populates="purchase_order", cascade="all, delete-orphan", order_by="POSnapshot.version")
     cost_code = relationship("CostCode")
 
 
