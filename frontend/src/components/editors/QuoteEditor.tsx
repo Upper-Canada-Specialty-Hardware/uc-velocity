@@ -2033,6 +2033,33 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     }
   }
 
+  const runPrintLaborHours = async () => {
+    if (!quote) return
+    setPrintDialogOpen(false)
+    setIsPrinting(true)
+    try {
+      const [project, companySettings, { pdf }, { LaborHoursPDF }] = await Promise.all([
+        api.projects.get(quote.project_id) as Promise<Project>,
+        api.companySettings.get(),
+        import('@react-pdf/renderer'),
+        import('@/components/pdf/LaborHoursPDF'),
+      ])
+      const blob = await pdf(
+        <LaborHoursPDF
+          quote={quote}
+          project={project}
+          companySettings={companySettings}
+        />
+      ).toBlob()
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to generate PDF")
+    } finally {
+      setIsPrinting(false)
+    }
+  }
+
   if (loading) {
     return <div className="p-8 text-center text-muted-foreground">Loading...</div>
   }
@@ -3773,7 +3800,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               Print Quote
             </DialogTitle>
             <DialogDescription>
-              Choose how line items appear in the printout.
+              Choose what to print for this quote.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 pt-2">
@@ -3795,6 +3822,16 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               <div className="font-medium">Quantities only</div>
               <div className="text-sm text-muted-foreground mt-1">
                 Show each item's description and quantity, but hide all unit prices, line totals, and section subtotals. Only the final Subtotal, HST, and Total are shown.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={runPrintLaborHours}
+              className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
+            >
+              <div className="font-medium">Labour hours report</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Show the calculated labour time for each item and the total labour hours for the quote, with the estimated labour cost before markup.
               </div>
             </button>
           </div>
