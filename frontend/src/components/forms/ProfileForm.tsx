@@ -76,7 +76,7 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
     if (profile) {
       setName(profile.name)
       setType(profile.type)
-      setPst(profile.pst)
+      setPst(profile.pst || "")
       setAddress(profile.address)
       setPostalCode(profile.postal_code)
       setDefaultDiscountPercent(profile.default_discount_percent?.toString() || "")
@@ -150,7 +150,9 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
 
   // Validation
   const isFormValid = () => {
-    if (!name.trim() || !pst.trim() || !address.trim() || !postalCode.trim()) return false
+    if (!name.trim() || !address.trim() || !postalCode.trim()) return false
+    // Staff have no Provincial Tax Number; PST is required only for customers/vendors.
+    if (type !== "staff" && !pst.trim()) return false
     if (contacts.length === 0) return false
     return contacts.every(c => c.name.trim() !== "")
   }
@@ -178,7 +180,7 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
         await api.profiles.update(profile.id, {
           name: name.trim(),
           type,
-          pst: pst.trim(),
+          pst: type === "staff" ? undefined : pst.trim(),
           address: address.trim(),
           postal_code: postalCode.trim(),
           default_discount_percent: defaultDiscountPercent ? parseFloat(defaultDiscountPercent) : undefined,
@@ -218,7 +220,7 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
         const profileData: ProfileCreate = {
           name: name.trim(),
           type,
-          pst: pst.trim(),
+          pst: type === "staff" ? undefined : pst.trim(),
           address: address.trim(),
           postal_code: postalCode.trim(),
           default_discount_percent: defaultDiscountPercent ? parseFloat(defaultDiscountPercent) : undefined,
@@ -251,7 +253,7 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
 
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="name">{type === "customer" ? "Company Name" : "Supplier Name"} *</Label>
+            <Label htmlFor="name">{type === "customer" ? "Company Name" : type === "vendor" ? "Supplier Name" : "Staff Name"} *</Label>
             <Input
               id="name"
               value={name}
@@ -270,21 +272,25 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
               <SelectContent>
                 <SelectItem value="customer">Customer</SelectItem>
                 <SelectItem value="vendor">Vendor</SelectItem>
+                <SelectItem value="staff">Staff</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="pst">PST (Provincial Tax Number) *</Label>
-          <Input
-            id="pst"
-            value={pst}
-            onChange={(e) => setPst(e.target.value)}
-            placeholder="e.g., PST-1234567"
-            required
-          />
-        </div>
+        {/* PST — not applicable to staff (they have no Provincial Tax Number) */}
+        {type !== "staff" && (
+          <div className="space-y-2">
+            <Label htmlFor="pst">PST (Provincial Tax Number) *</Label>
+            <Input
+              id="pst"
+              value={pst}
+              onChange={(e) => setPst(e.target.value)}
+              placeholder="e.g., PST-1234567"
+              required
+            />
+          </div>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="address">Address *</Label>
