@@ -59,6 +59,7 @@ import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck,
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDateTime } from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
+import type { QuotePrintMode } from "@/components/pdf/QuotePDF"
 import { QuoteAuditTrail } from "./QuoteAuditTrail"
 import { EditCreatedAtDialog } from "./EditCreatedAtDialog"
 import { PartForm } from "@/components/forms/PartForm"
@@ -2005,7 +2006,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     }
   }
 
-  const runPrintQuote = async (includeBreakdown: boolean) => {
+  const runPrintQuote = async (mode: QuotePrintMode) => {
     if (!quote) return
     setPrintDialogOpen(false)
     setIsPrinting(true)
@@ -2021,7 +2022,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           quote={quote}
           project={project}
           companySettings={companySettings}
-          includeBreakdown={includeBreakdown}
+          mode={mode}
         />
       ).toBlob()
       const url = URL.createObjectURL(blob)
@@ -3806,7 +3807,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           <div className="space-y-3 pt-2">
             <button
               type="button"
-              onClick={() => runPrintQuote(true)}
+              onClick={() => runPrintQuote('full')}
               className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
             >
               <div className="font-medium">Include line-item breakdown</div>
@@ -3816,7 +3817,17 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
             </button>
             <button
               type="button"
-              onClick={() => runPrintQuote(false)}
+              onClick={() => runPrintQuote('category-totals')}
+              className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
+            >
+              <div className="font-medium">Category totals only</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Show each item's description and quantity, hide per-item unit prices and totals, but keep each category's subtotal and the final Subtotal, HST, and Total.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => runPrintQuote('quantities')}
               className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
             >
               <div className="font-medium">Quantities only</div>
