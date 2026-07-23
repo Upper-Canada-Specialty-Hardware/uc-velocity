@@ -55,7 +55,7 @@ import type {
   InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
-import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
+import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, Unlock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDateTime } from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
@@ -174,6 +174,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // Print PDF state
   const [isPrinting, setIsPrinting] = useState(false)
   const [printDialogOpen, setPrintDialogOpen] = useState(false)
+  const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
+  const [isReopening, setIsReopening] = useState(false)
 
   // Company settings (for HST rate display)
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null)
@@ -2038,6 +2040,21 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     }
   }
 
+  const runReopen = async () => {
+    if (!quote) return
+    setReopenDialogOpen(false)
+    setIsReopening(true)
+    try {
+      await api.quotes.reopen(quote.id)
+      await fetchQuote()
+      onUpdate?.()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to reopen quote")
+    } finally {
+      setIsReopening(false)
+    }
+  }
+
   if (loading) {
     return <div className="p-8 text-center text-muted-foreground">Loading...</div>
   }
@@ -3379,6 +3396,19 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                 <Copy className="h-4 w-4" />
                 {isCloning ? "Cloning..." : "Clone"}
               </Button>
+              {quote.legacy_imported && quote.status === "Closed" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setReopenDialogOpen(true)}
+                  disabled={isReopening}
+                  className="shadow-md gap-2 bg-background"
+                  title="Reopen this migrated quote (reset fulfillment so it is no longer Closed)"
+                >
+                  <Unlock className="h-4 w-4" />
+                  {isReopening ? "Reopening..." : "Reopen"}
+                </Button>
+              )}
             </div>
           )}
 
@@ -3860,6 +3890,31 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           <DialogFooter>
             <Button variant="outline" onClick={() => setPrintDialogOpen(false)}>
               Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reopen Confirmation Dialog (migrated quotes only) */}
+      <Dialog open={reopenDialogOpen} onOpenChange={setReopenDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Unlock className="h-4 w-4" />
+              Reopen migrated quote
+            </DialogTitle>
+            <DialogDescription>
+              This quote was imported from UC Vision as fully fulfilled, which is why it shows as Closed.
+              Reopening resets every line item to unfulfilled so the quote becomes an open Work Order again,
+              and staff can invoice the remaining work going forward. The change is recorded in the audit trail.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReopenDialogOpen(false)} disabled={isReopening}>
+              Cancel
+            </Button>
+            <Button onClick={runReopen} disabled={isReopening}>
+              {isReopening ? "Reopening..." : "Reopen quote"}
             </Button>
           </DialogFooter>
         </DialogContent>

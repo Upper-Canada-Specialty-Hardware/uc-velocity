@@ -466,6 +466,65 @@ def update_quote_created_at(quote_id: int, payload: CreatedAtUpdate, db: Session
     return populate_quote_number(db_quote, db_quote.project.uca_project_number)
 
 
+@router.post("/{quote_id}/reopen", response_model=QuoteSchema)
+def reopen_quote(quote_id: int, db: Session = Depends(get_db)):
+    """
+    Reopen a migrated ('Closed') quote by clearing its line-item fulfillment.
+
+    Migrated quotes were imported with every line marked fully fulfilled
+    (qty_fulfilled = quantity, qty_pending = 0), so they all derive to "Closed"
+    even when the real work order is still ongoing (Issue #164). This resets each
+    line to unfulfilled (qty_pending = quantity, qty_fulfilled = 0) so the quote
+    recomputes to "Work Order" (has a client PO) or "Draft", and staff can invoice
+    it going forward. The change is snapshotted into the audit trail.
+
+    Scoped to legacy-imported quotes on purpose: the normal edit path blocks a
+    frozen (invoiced) quote, and every migrated quote looks frozen, so this
+    endpoint is the one sanctioned way to un-freeze - and only for migrated rows.
+    """
+    db_quote = (
+        db.query(Quote)
+        .options(joinedload(Quote.project), joinedload(Quote.line_items))
+        .filter(Quote.id == quote_id)
+        .first()
+    )
+    if not db_quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+
+    if not db_quote.legacy_imported:
+        raise HTTPException(
+            status_code=400,
+            detail="Only migrated (legacy-imported) quotes can be reopened this way.",
+        )
+
+    # A migrated quote genuinely invoiced inside Velocity has real invoice records;
+    # resetting its fulfillment would desync those. Block that case.
+    if db_quote.invoices:
+        raise HTTPException(
+            status_code=400,
+            detail="This quote has invoices and cannot be reopened - its fulfillment reflects real invoicing.",
+        )
+
+    reset_count = 0
+    for li in db_quote.line_items:
+        if li.qty_fulfilled != 0 or li.qty_pending != li.quantity:
+            li.qty_pending = li.quantity
+            li.qty_fulfilled = 0
+            reset_count += 1
+
+    create_snapshot(
+        db,
+        db_quote,
+        action_type="reopen",
+        action_description=f"Reopened migrated quote - reset fulfillment on {reset_count} line item(s)",
+    )
+
+    db.commit()
+    db.refresh(db_quote)
+
+    return populate_quote_number(db_quote, db_quote.project.uca_project_number)
+
+
 @router.delete("/{quote_id}")
 def delete_quote(quote_id: int, db: Session = Depends(get_db)):
     """Delete a quote and all its line items."""

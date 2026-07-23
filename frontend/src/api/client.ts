@@ -230,6 +230,9 @@ export const api = {
     // `iso` is a UTC ISO-8601 string (e.g. from new Date(localValue).toISOString()).
     updateCreatedAt: (id: number, iso: string) =>
       request<Quote>(`/quotes/${id}/created-at`, { method: 'PUT', body: JSON.stringify({ created_at: iso }) }),
+    // Reopen a migrated ('Closed') quote: clears line-item fulfillment so it recomputes to Work Order/Draft.
+    reopen: (id: number) =>
+      request<Quote>(`/quotes/${id}/reopen`, { method: 'POST' }),
     delete: (id: number) =>
       request<{ message: string }>(`/quotes/${id}`, { method: 'DELETE' }),
 
