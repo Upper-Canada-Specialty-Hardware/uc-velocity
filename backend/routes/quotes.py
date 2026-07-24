@@ -39,7 +39,8 @@ def create_snapshot(
     Args:
         db: Database session
         quote: The quote to snapshot
-        action_type: Type of action ("create", "edit", "delete", "invoice", "revert")
+        action_type: Type of action ("create", "edit", "delete", "invoice",
+            "revert", "date_edit", "reopen")
         action_description: Human-readable description of the action
         invoice_id: Optional invoice ID if action_type is "invoice"
 
