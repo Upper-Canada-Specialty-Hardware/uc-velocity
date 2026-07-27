@@ -275,6 +275,28 @@ export interface ProfileUpdate {
   default_discount_percent?: number;
 }
 
+// ===== Feedback (UCSH telemetry service) =====
+// A reply within a feedback thread. `author_kind` is 'dev' for a UCSH reply
+// (author = the dev's GitHub login) or 'user' for the person's own reply.
+export interface FeedbackReply {
+  author_kind: 'user' | 'dev';
+  author: string | null;
+  body: string;
+  received_at: string;
+}
+
+// One feedback note the signed-in user opened, with its replies (oldest-first).
+export interface FeedbackThread {
+  id: number;
+  received_at: string;
+  source: string;
+  region: string | null;
+  category: string | null;
+  title: string | null;
+  message: string;
+  replies: FeedbackReply[];
+}
+
 // ===== Projects =====
 export interface Project {
   id: number;

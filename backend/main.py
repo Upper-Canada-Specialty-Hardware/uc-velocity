@@ -11,9 +11,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base, SessionLocal
-from routes import parts, labor, profiles, projects, quotes, purchase_orders, miscellaneous, invoices, company_settings, reports, cost_codes, vendor_pricebook, migration, system_rates, testing
+from routes import parts, labor, profiles, projects, quotes, purchase_orders, miscellaneous, invoices, company_settings, reports, cost_codes, vendor_pricebook, migration, system_rates, testing, feedback
 from seed import seed_system_items
 from auth import ActorMiddleware
+from telemetry_middleware import TelemetryMiddleware
 
 
 def run_migrations():
@@ -105,6 +106,10 @@ app.add_middleware(
 # Capture the acting Clerk user (best-effort, never blocks) for the audit trail
 app.add_middleware(ActorMiddleware)
 
+# Fire-and-forget request telemetry (outermost, so it times the whole request).
+# Inert unless TELEMETRY_URL/TELEMETRY_KEY are set; never blocks or breaks a request.
+app.add_middleware(TelemetryMiddleware)
+
 # Include routers
 app.include_router(parts.router)
 app.include_router(labor.router)
@@ -121,6 +126,7 @@ app.include_router(vendor_pricebook.router)
 app.include_router(migration.router)
 app.include_router(system_rates.router)
 app.include_router(testing.router)
+app.include_router(feedback.router)
 
 
 @app.get("/")

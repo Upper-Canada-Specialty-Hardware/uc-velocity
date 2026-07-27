@@ -16,6 +16,7 @@ import { PartForm } from "@/components/forms/PartForm"
 import { LaborForm } from "@/components/forms/LaborForm"
 import { MiscForm } from "@/components/forms/MiscForm"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { FeedbackWidget } from "@/components/FeedbackWidget"
 import { ProjectsPage } from "@/pages/ProjectsPage"
 import { api } from "@/api/client"
 import { useIsAdmin } from "@/hooks/use-is-admin"
@@ -820,6 +821,9 @@ function App() {
           )}
         </Suspense>
       </main>
+
+      {/* In-app feedback thread (hidden unless telemetry is configured). */}
+      <FeedbackWidget />
 
       {/* Part Dialog */}
       <Dialog open={partDialogOpen} onOpenChange={handlePartDialogClose}>

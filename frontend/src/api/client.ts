@@ -17,7 +17,8 @@ import type {
   CommitEditsRequest, CommitEditsResponse,
   CompanySettings, CompanySettingsUpdate, InvoiceSummaryItem,
   BacklogQuoteItem, InventoryHealthReport, PricebookImportResult, MigrationResult,
-  SystemRate, SystemRateCreate, SystemRateUpdate
+  SystemRate, SystemRateCreate, SystemRateUpdate,
+  FeedbackThread
 } from '@/types';
 
 // API base URL - configurable via environment variable for production
@@ -407,5 +408,21 @@ export const api = {
       }
       return response.json();
     },
+  },
+
+  // ===== Feedback (UCSH telemetry service) =====
+  // Backend proxies these to the telemetry service so the ingest key stays
+  // server-side and the per-user thread key is derived from the Clerk identity.
+  feedback: {
+    // Whether telemetry is switched on; the widget hides itself when false.
+    config: () => request<{ enabled: boolean }>(`/feedback/config`),
+    // This user's own threads (their notes + dev/user replies).
+    threads: () => request<{ threads: FeedbackThread[] }>(`/feedback/threads`),
+    // Open a new feedback note.
+    submit: (data: { message: string; title?: string; category?: string }) =>
+      request<{ ok: boolean }>(`/feedback/submit`, { method: 'POST', body: JSON.stringify(data) }),
+    // Reply within an existing thread.
+    reply: (data: { feedback_id: number; message: string }) =>
+      request<{ ok: boolean }>(`/feedback/reply`, { method: 'POST', body: JSON.stringify(data) }),
   },
 };
