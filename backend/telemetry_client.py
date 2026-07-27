@@ -17,7 +17,7 @@ from telemetry import Telemetry
 
 TELEMETRY_URL = os.getenv("TELEMETRY_URL", "").strip().rstrip("/")
 TELEMETRY_KEY = os.getenv("TELEMETRY_KEY", "").strip()
-TELEMETRY_SOURCE = (os.getenv("TELEMETRY_SOURCE") or "velocity").strip()
+TELEMETRY_SOURCE = (os.getenv("TELEMETRY_SOURCE") or "uc-velocity").strip()
 APP_VERSION = os.getenv("APP_VERSION") or os.getenv("RAILWAY_GIT_COMMIT_SHA") or None
 TELEMETRY_ENABLED = bool(TELEMETRY_URL and TELEMETRY_KEY)
 
@@ -29,7 +29,7 @@ _THREAD_SALT = os.getenv("TELEMETRY_THREAD_SALT", "")
 
 # One stable logical "install" for the server so analytics counts one backend, not
 # one-per-restart. A single web backend is genuinely one install.
-_INSTALL_ID = (os.getenv("TELEMETRY_INSTALL_ID") or "velocity-server").strip()
+_INSTALL_ID = (os.getenv("TELEMETRY_INSTALL_ID") or "uc-velocity-server").strip()
 
 # The single, process-wide, fire-and-forget analytics emitter.
 tel = Telemetry(source=TELEMETRY_SOURCE, app_version=APP_VERSION)
@@ -44,4 +44,4 @@ if tel.enabled:
 def feedback_thread_key(user_id: str) -> str:
     """Opaque, stable per-user id used as the telemetry ``install_id`` for feedback."""
     digest = hashlib.sha256(f"{_THREAD_SALT}{user_id}".encode("utf-8")).hexdigest()
-    return f"velocity-user-{digest[:40]}"
+    return f"uc-velocity-user-{digest[:40]}"

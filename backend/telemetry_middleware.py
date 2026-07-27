@@ -1,10 +1,10 @@
 """Fire-and-forget request telemetry for UC Velocity.
 
-Wraps every HTTP request and records a ``backend_call`` event via the shared
-telemetry client: an ``action`` on success, an ``error`` on a 5xx or an unhandled
-exception. This single choke point is what the telemetry README calls "the one call
-worth adding first" — it fills the error-rate, latency (p95), version-adoption and
-install panels without hand-instrumenting each route.
+Wraps every HTTP request via the shared telemetry client: an ``api_request`` action
+on success, and a ``request_failed`` error on a 5xx or an unhandled exception — the
+single error choke-point the integration brief asks for. This one place fills the
+error-rate, latency (p95), version-adoption and install panels without
+hand-instrumenting each route.
 
 Guarantees, in order of importance:
   * It never breaks a request. The emit is non-blocking (the client batches in a
@@ -65,14 +65,14 @@ class TelemetryMiddleware:
         try:
             duration_ms = round((time.monotonic() - start) * 1000)
             if exc is not None:
-                tel.error("backend_call", endpoint=path, http_method=method,
+                tel.error("request_failed", endpoint=path, http_method=method,
                           status_code=code, error_class=type(exc).__name__,
                           error_message=str(exc), duration_ms=duration_ms)
             elif code >= 500:
-                tel.error("backend_call", endpoint=path, http_method=method,
+                tel.error("request_failed", endpoint=path, http_method=method,
                           status_code=code, duration_ms=duration_ms)
             else:
-                tel.action("backend_call", endpoint=path, http_method=method,
+                tel.action("api_request", endpoint=path, http_method=method,
                            status_code=code, duration_ms=duration_ms)
         except Exception:
             pass  # telemetry must never break the request it measures

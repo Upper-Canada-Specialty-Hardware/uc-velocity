@@ -15,6 +15,7 @@ from routes import parts, labor, profiles, projects, quotes, purchase_orders, mi
 from seed import seed_system_items
 from auth import ActorMiddleware
 from telemetry_middleware import TelemetryMiddleware
+from telemetry_client import tel as telemetry
 
 
 def run_migrations():
@@ -127,6 +128,9 @@ app.include_router(migration.router)
 app.include_router(system_rates.router)
 app.include_router(testing.router)
 app.include_router(feedback.router)
+
+# Announce process start to telemetry (inert unless TELEMETRY_URL/KEY are set).
+telemetry.lifecycle("startup")
 
 
 @app.get("/")
