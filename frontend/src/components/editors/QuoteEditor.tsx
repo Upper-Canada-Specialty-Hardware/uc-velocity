@@ -1167,14 +1167,30 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   }
 
   // Calculate total labor hours (excluding PMS items)
+  // Total non-PMS labour hours. In Edit mode this reflects staged adds/edits/
+  // deletes so that Parking and Travel (whose quantities derive from labour
+  // hours) count labour the user has added but not yet committed (issue #180).
+  // Outside Edit mode the staged collections are empty, so this returns exactly
+  // the persisted labour hours as before.
   const calculateTotalLaborHours = (): number => {
     if (!quote) return 0
-    return quote.line_items
-      .filter(item => item.item_type === "labor" && !item.is_pms && item.labor)
-      .reduce((sum, item) => {
-        const laborHours = item.labor?.hours || 0
-        return sum + (laborHours * item.quantity)
-      }, 0)
+    let hours = 0
+
+    // Persisted labour lines (skip staged deletes; honour staged-edit quantity)
+    for (const item of quote.line_items) {
+      if (stagedDeletes.has(item.id)) continue
+      if (item.item_type !== "labor" || item.is_pms || !item.labor) continue
+      const quantity = stagedEdits.get(item.id)?.quantity ?? item.quantity
+      hours += (item.labor.hours || 0) * quantity
+    }
+
+    // Staged (uncommitted) labour adds
+    for (const add of stagedAdds) {
+      if (add.item_type !== "labor" || add.is_pms || !add.labor) continue
+      hours += (add.labor.hours || 0) * add.quantity
+    }
+
+    return hours
   }
 
   // ===== Projected Calculations (for Edit Mode comparison) =====
