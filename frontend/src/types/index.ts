@@ -146,6 +146,7 @@ export interface CostCodeUpdate {
 export interface Labor {
   id: number;
   description: string;
+  product_code?: string;  // Product code, mirrors Part.part_number (issue #179)
   hours: number;
   rate: number;
   markup_percent: number;
@@ -154,6 +155,7 @@ export interface Labor {
 
 export interface LaborCreate {
   description: string;
+  product_code?: string;  // Product code, mirrors Part.part_number (issue #179)
   hours: number;
   rate: number;
   markup_percent: number;

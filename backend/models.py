@@ -110,6 +110,7 @@ class Labor(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     description = Column(String, nullable=False)
+    product_code = Column(String, nullable=True)  # Product code, mirrors Part.part_number (issue #179)
     hours = Column(Float, nullable=False, default=1)
     rate = Column(Float, nullable=False)
     markup_percent = Column(Float, default=50.0)
