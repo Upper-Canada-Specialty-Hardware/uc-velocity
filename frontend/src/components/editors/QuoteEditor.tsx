@@ -2222,6 +2222,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               <TableRow>
                 <TableHead>Description</TableHead>
                 <TableHead className="text-right">Qty Ordered</TableHead>
+                {type === "labor" && <TableHead className="text-right">Hours</TableHead>}
                 <TableHead className="text-right">Qty Pending</TableHead>
                 {/* Qty to Fulfill column - only in invoicing mode */}
                 {editorMode === "invoicing" && (
@@ -2327,6 +2328,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                       )}
                     </TableCell>
 
+                    {/* Hours Column — labour only (issue #181): line hours = catalog hours × qty */}
+                    {type === "labor" && (
+                      <TableCell className="text-right text-muted-foreground">
+                        {item.labor ? parseFloat((item.labor.hours * (editedItem?.quantity ?? item.quantity)).toFixed(2)) : "—"}
+                      </TableCell>
+                    )}
                     {/* Qty Pending Column - now read-only display */}
                     <TableCell className="text-right">
                       {item.qty_pending}
@@ -2666,6 +2673,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                         <span className="text-green-700 dark:text-green-300 font-medium">{add.quantity}</span>
                       )}
                     </TableCell>
+                    {/* Hours — labour only (issue #181) */}
+                    {type === "labor" && (
+                      <TableCell className="text-right text-muted-foreground">
+                        {add.labor ? parseFloat((add.labor.hours * add.quantity).toFixed(2)) : "—"}
+                      </TableCell>
+                    )}
                     {/* Qty Pending */}
                     <TableCell className="text-right text-muted-foreground">-</TableCell>
                     {/* Qty to Fulfill - only in invoicing mode */}
@@ -2763,6 +2776,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                   <TableCell className="font-semibold">Section Total</TableCell>
                   {/* Qty Ordered */}
                   <TableCell className="text-right font-semibold">{calculateSectionTotals(items, useEffectivePricing).qtyOrdered}</TableCell>
+                  {/* Hours total — labour only (issue #181) */}
+                  {type === "labor" && (
+                    <TableCell className="text-right font-semibold">
+                      {parseFloat(items.reduce((s, i) => s + (i.labor ? i.labor.hours * i.quantity : 0), 0).toFixed(2))}
+                    </TableCell>
+                  )}
                   {/* Qty Pending */}
                   <TableCell className="text-right font-semibold">{calculateSectionTotals(items, useEffectivePricing).qtyPending}</TableCell>
                   {/* Qty to Fulfill - only in invoicing mode */}
@@ -2827,6 +2846,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                     </TableCell>
                     {/* Qty Ordered */}
                     <TableCell></TableCell>
+                    {/* Hours — labour only (issue #181) */}
+                    {type === "labor" && <TableCell></TableCell>}
                     {/* Qty Pending */}
                     <TableCell></TableCell>
                     {/* Qty to Fulfill */}
