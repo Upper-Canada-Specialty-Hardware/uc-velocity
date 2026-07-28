@@ -358,6 +358,7 @@ export interface QuoteLineItem {
   part_id?: number;
   misc_id?: number;
   description?: string;
+  description_override?: string;  // Per-quote display description override (issue #178)
   quantity: number;  // Qty Ordered
   unit_price?: number;
   qty_pending: number;  // Remaining to fulfill
@@ -834,6 +835,7 @@ export interface StagedEdit {
   quantity?: number;
   unit_price?: number;
   description?: string;
+  description_override?: string;  // Per-quote display description override (issue #178)
   markup_percent?: number;
   base_cost?: number;  // Unit cost override
 }

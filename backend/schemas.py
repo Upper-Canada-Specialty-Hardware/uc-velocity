@@ -432,6 +432,7 @@ class QuoteLineItemBase(BaseModel):
     part_id: Optional[int] = None
     misc_id: Optional[int] = None
     description: Optional[str] = None
+    description_override: Optional[str] = None  # Per-quote display description override (issue #178)
     quantity: int = 1  # Must be a positive whole number
     unit_price: Optional[float] = None
     is_pms: bool = False  # True for PMS items (Project Management Services)
@@ -458,6 +459,7 @@ class QuoteLineItemCreate(QuoteLineItemBase):
 class QuoteLineItemUpdate(BaseModel):
     quantity: Optional[int] = None  # Must be a positive whole number
     unit_price: Optional[float] = None
+    description_override: Optional[str] = None  # Per-quote display description override (issue #178)
 
     @validator('quantity', pre=True)
     def quantity_must_be_positive_integer(cls, v) -> Optional[int]:
@@ -972,6 +974,7 @@ class QuoteLineItemSnapshotBase(BaseModel):
     part_id: Optional[int] = None
     misc_id: Optional[int] = None
     description: Optional[str] = None
+    description_override: Optional[str] = None  # Per-quote display description override (issue #178)
     quantity: int  # Must be whole number
     unit_price: Optional[float] = None
     qty_pending: int  # Must be whole number
@@ -1051,6 +1054,7 @@ class StagedLineItemChange(BaseModel):
     part_id: Optional[int] = None
     misc_id: Optional[int] = None
     description: Optional[str] = None
+    description_override: Optional[str] = None  # Per-quote display description override (issue #178)
     quantity: Optional[int] = None  # Must be a positive whole number
     unit_price: Optional[float] = None
     is_pms: bool = False
