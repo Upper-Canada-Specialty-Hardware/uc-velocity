@@ -19,6 +19,7 @@ export function LaborForm({ labor, onSuccess, onCancel }: LaborFormProps) {
 
   // Form state - use strings for number fields to allow empty while editing
   const [description, setDescription] = useState("")
+  const [productCode, setProductCode] = useState("")
   const [hours, setHours] = useState("")
   const [rate, setRate] = useState("")
   // New labour defaults to 50% markup; edit mode loads the item's real value below.
@@ -28,6 +29,7 @@ export function LaborForm({ labor, onSuccess, onCancel }: LaborFormProps) {
   useEffect(() => {
     if (labor) {
       setDescription(labor.description)
+      setProductCode(labor.product_code || "")
       setHours(labor.hours.toString())
       setRate(labor.rate.toString())
       setMarkupPercent(labor.markup_percent.toString())
@@ -61,6 +63,7 @@ export function LaborForm({ labor, onSuccess, onCancel }: LaborFormProps) {
 
     const laborData: LaborCreate = {
       description,
+      product_code: productCode.trim() || undefined,
       hours: hoursValue,
       rate: parseFloat(rate) || 0,
       markup_percent: parseFloat(markupPercent) || 0,
@@ -97,6 +100,16 @@ export function LaborForm({ labor, onSuccess, onCancel }: LaborFormProps) {
           onChange={(e) => setDescription(e.target.value)}
           placeholder="e.g., Install HVAC System"
           required
+        />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="product_code">Product Code</Label>
+        <Input
+          id="product_code"
+          value={productCode}
+          onChange={(e) => setProductCode(e.target.value)}
+          placeholder="e.g., LAB-001 (optional)"
         />
       </div>
 
