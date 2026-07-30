@@ -3,8 +3,13 @@ Database seeding for system items and company settings.
 Run this at application startup to ensure system items exist.
 """
 from sqlalchemy.orm import Session
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import inspect as sa_inspect, text
 from models import Miscellaneous, CompanySettings, SystemRate
+
+# Advisory-lock key that serializes seed_system_items() across gunicorn workers
+# (2 workers, no --preload → concurrent seeds on cold start). Arbitrary constant;
+# nothing else in the app uses advisory locks.
+_SEED_LOCK_KEY = 20260729
 
 SYSTEM_MISC_ITEMS = [
     # Parking
@@ -74,7 +79,24 @@ def seed_system_items(db: Session) -> None:
     """
     Seed system miscellaneous items and company settings if they don't exist.
     Called at application startup.
+
+    Serializes across gunicorn workers with a Postgres advisory lock: without
+    --preload each worker imports main and runs this concurrently on cold start;
+    on a fresh DB that race duplicated the system items/rates (issue #186). Only
+    one worker holds the lock and seeds; the others block, then re-read and find
+    everything already present. The lock lives on a dedicated connection so it
+    spans the commits below and is released before that connection is pooled.
     """
+    with db.get_bind().connect() as lock_conn:
+        lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _SEED_LOCK_KEY})
+        try:
+            _seed_system_items_locked(db)
+        finally:
+            lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _SEED_LOCK_KEY})
+
+
+def _seed_system_items_locked(db: Session) -> None:
+    """Do the actual seeding; the caller holds the advisory lock."""
     # Fast path: if the count matches what we expect to seed, nothing to do.
     # Avoids N filter().first() queries on every cold start (× every worker).
     expected_count = len(SYSTEM_MISC_ITEMS)
