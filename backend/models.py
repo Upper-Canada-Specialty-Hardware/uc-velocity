@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum, Table, DateTime, Boolean, UniqueConstraint, Text
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum, Table, DateTime, Boolean, UniqueConstraint, Text, Index, text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -459,6 +459,19 @@ class QuoteSnapshot(Base):
 
 class SystemRate(Base):
     __tablename__ = "system_rates"
+
+    # At most one ACTIVE rate per (rate_type, description). Partial index so the
+    # soft-delete workflow (is_active=false) can keep historical rows with the
+    # same description. Existing duplicates are deduped first by migration 027.
+    __table_args__ = (
+        Index(
+            "uq_system_rates_active_rate_desc",
+            "rate_type",
+            "description",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     rate_type = Column(String, nullable=False)  # "parking" or "travel_distance"

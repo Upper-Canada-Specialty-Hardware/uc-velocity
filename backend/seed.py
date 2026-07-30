@@ -128,10 +128,19 @@ def seed_system_items(db: Session) -> None:
                 Miscellaneous.is_system_item == True
             ).all()
 
+            seen_rate_keys = set()
             for misc in misc_items:
                 mapping = rate_map.get(misc.description)
                 if mapping:
                     rate_type, sort_order = mapping
+                    # Skip duplicate misc system-items (e.g. a duplicated catalog
+                    # block) so we never create more than one active rate per
+                    # tier — keeps seed compatible with the partial unique index
+                    # on system_rates(rate_type, description) WHERE is_active.
+                    rate_key = (rate_type, misc.description)
+                    if rate_key in seen_rate_keys:
+                        continue
+                    seen_rate_keys.add(rate_key)
                     db.add(SystemRate(
                         rate_type=rate_type,
                         description=misc.description,

@@ -88,6 +88,20 @@ def get_travel_distance_tiers(response: Response, db: Session = Depends(get_db))
 @router.post("/travel-distance", response_model=SystemRateSchema)
 def create_travel_distance_tier(data: SystemRateCreate, db: Session = Depends(get_db)):
     """Add a new travel distance tier."""
+    # Idempotency guard: at most one ACTIVE tier per description (also enforced
+    # at the DB level by a partial unique index on system_rates). Return a clean
+    # 409 rather than letting the insert raise a raw IntegrityError.
+    existing = db.query(SystemRate).filter(
+        SystemRate.rate_type == "travel_distance",
+        SystemRate.description == data.description,
+        SystemRate.is_active == True,
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="An active travel distance tier with this description already exists.",
+        )
+
     rate = SystemRate(
         rate_type="travel_distance",
         description=data.description,
@@ -116,6 +130,19 @@ def update_travel_distance_tier(rate_id: int, data: SystemRateUpdate, db: Sessio
         raise HTTPException(status_code=404, detail="Travel distance tier not found")
 
     if data.description is not None:
+        # Guard: block a rename that collides with another ACTIVE tier's
+        # description (the partial unique index would otherwise raise a raw 500).
+        conflict = db.query(SystemRate).filter(
+            SystemRate.rate_type == "travel_distance",
+            SystemRate.description == data.description,
+            SystemRate.is_active == True,
+            SystemRate.id != rate_id,
+        ).first()
+        if conflict:
+            raise HTTPException(
+                status_code=409,
+                detail="An active travel distance tier with this description already exists.",
+            )
         rate.description = data.description
     if data.unit_price is not None:
         rate.unit_price = data.unit_price
