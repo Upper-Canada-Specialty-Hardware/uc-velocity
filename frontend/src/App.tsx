@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
-import { Show, SignInButton, UserButton } from "@clerk/react"
+import { Show, SignInButton, UserButton, useUser } from "@clerk/react"
+import { tel } from "@/lib/tel"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import {
@@ -128,6 +129,20 @@ function App() {
       navigate("/projects", { replace: true })
     }
   }, [currentView, isAdmin, navigate])
+
+  // Browser telemetry (source="velocity"): announce app start, flush the queue on
+  // tab-hide (tabs close without a clean exit), and attach the signed-in user's
+  // opaque Clerk id (never an email/token). Inert unless the telemetry env is set.
+  const { user } = useUser()
+  useEffect(() => {
+    tel.lifecycle("app_start")
+    const onHide = () => { if (document.hidden) void tel.flush() }
+    document.addEventListener("visibilitychange", onHide)
+    return () => document.removeEventListener("visibilitychange", onHide)
+  }, [])
+  useEffect(() => {
+    if (user) tel.identify(user.id, user.fullName)
+  }, [user])
 
   // Inventory state
   const [parts, setParts] = useState<Part[]>([])
