@@ -130,19 +130,15 @@ function App() {
     }
   }, [currentView, isAdmin, navigate])
 
-  // Browser telemetry (source="velocity"): announce app start, flush the queue on
-  // tab-hide (tabs close without a clean exit), and attach the signed-in user's
-  // opaque Clerk id (never an email/token). Inert unless the telemetry env is set.
-  const { user } = useUser()
+  // Browser telemetry: attach the signed-in user (opaque Clerk id + display name,
+  // never an email/token) to every event, and clear to anonymous on sign-out.
+  // app_start + tab-hide flush live in lib/tel.ts. Inert unless telemetry env is set.
+  const { isLoaded: telUserLoaded, isSignedIn: telSignedIn, user: telUser } = useUser()
   useEffect(() => {
-    tel.lifecycle("app_start")
-    const onHide = () => { if (document.hidden) void tel.flush() }
-    document.addEventListener("visibilitychange", onHide)
-    return () => document.removeEventListener("visibilitychange", onHide)
-  }, [])
-  useEffect(() => {
-    if (user) tel.identify(user.id, user.fullName)
-  }, [user])
+    if (!telUserLoaded) return
+    if (telSignedIn && telUser) tel.identify(telUser.id, telUser.fullName ?? telUser.username ?? null)
+    else tel.identify(null)
+  }, [telUserLoaded, telSignedIn, telUser])
 
   // Inventory state
   const [parts, setParts] = useState<Part[]>([])

@@ -41,6 +41,9 @@ async function request<T>(
   }
 
   const method = (options.method ?? 'GET').toUpperCase();
+  // Group by path in telemetry: strip the query string (the service further
+  // templates ids, e.g. /quotes/42 -> /quotes/:id).
+  const telemetryPath = endpoint.split('?')[0];
   const started = Date.now();
   let response: Response;
   try {
@@ -60,7 +63,7 @@ async function request<T>(
     // Network/abort failure — the attempt never reached a status. Record it and
     // rethrow; telemetry is non-blocking and inert unless its env is set.
     tel.error('backend_call', {
-      endpoint,
+      endpoint: telemetryPath,
       http_method: method,
       error_class: (e as Error).name,
       error_message: String(e),
