@@ -249,7 +249,7 @@ export interface Profile {
   id: number;
   name: string;
   type: ProfileType;
-  pst?: string;
+  pst?: string | null;
   address: string;
   postal_code: string;
   default_discount_percent?: number;

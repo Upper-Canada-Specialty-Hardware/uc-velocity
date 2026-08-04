@@ -31,8 +31,12 @@ def upgrade():
 
 
 def downgrade():
-    # Restore the NOT NULL constraint. Any staff rows with a null pst must be
-    # cleaned up before downgrading; on an empty schema this is a no-op.
+    # Backfill NULL pst (staff rows) to '' BEFORE restoring NOT NULL, so a
+    # downgrade on a LIVE DB that already has staff profiles doesn't abort with
+    # "column pst contains null values". pst has no format/CHECK constraint, so
+    # '' satisfies the restored constraint. (The empty-schema CI job never has
+    # staff rows, so this path was previously untested.)
+    op.execute("UPDATE profiles SET pst = '' WHERE pst IS NULL")
     op.alter_column('profiles', 'pst', existing_type=sa.String(), nullable=False)
 
     # Note: Postgres cannot drop a single value from an enum without recreating
