@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from typing import List
 
 from database import get_db
@@ -111,10 +112,20 @@ def create_travel_distance_tier(data: SystemRateCreate, db: Session = Depends(ge
         is_active=True,
     )
     db.add(rate)
-    db.flush()
-
-    _sync_misc_shadow(db, rate)
-    db.commit()
+    try:
+        db.flush()
+        _sync_misc_shadow(db, rate)
+        db.commit()
+    except IntegrityError:
+        # SettingsPage saves all tiers concurrently (Promise.all), so two requests
+        # can both pass the pre-check above and still collide on the partial unique
+        # index. Let the DB be the source of truth and return a clean 409 instead
+        # of the raw 500 this PR set out to eliminate.
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="An active travel distance tier with this description already exists.",
+        )
     db.refresh(rate)
     return rate
 
@@ -151,8 +162,17 @@ def update_travel_distance_tier(rate_id: int, data: SystemRateUpdate, db: Sessio
     if data.sort_order is not None:
         rate.sort_order = data.sort_order
 
-    _sync_misc_shadow(db, rate)
-    db.commit()
+    try:
+        _sync_misc_shadow(db, rate)
+        db.commit()
+    except IntegrityError:
+        # A concurrent rename can pass the conflict pre-check and still collide on
+        # the partial unique index; return a clean 409 instead of a raw 500.
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="An active travel distance tier with this description already exists.",
+        )
     db.refresh(rate)
     return rate
 
