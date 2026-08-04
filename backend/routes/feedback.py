@@ -1,13 +1,17 @@
 """Feedback thread proxy: relays a signed-in Velocity user's feedback to the shared
 UCSH telemetry service and reads their thread back.
 
-Why a proxy rather than calling the service from the browser:
-  * the ingest key stays server-side (never shipped in the JS bundle), and the
-    telemetry service needs no CORS origin for Velocity;
+Why a proxy for feedback (note: the browser analytics/error client in ``lib/tel.ts``
+is a SEPARATE path that DOES ship the write-only ingest key and needs CORS, by design):
+  * the feedback path keeps the ingest key server-side and needs no CORS origin;
   * the browser can't be trusted to pick the thread key, so the backend derives a
     stable, opaque per-user key from the Clerk id (see ``feedback_thread_key``). That
-    key follows the user across devices and can't be guessed, which is exactly the
-    isolation the telemetry service assumes of its per-install threads.
+    key follows the user across devices and can't be guessed, matching the
+    per-install-thread isolation the telemetry service assumes.
+
+Identity sent to the (internal, GitHub-org-gated) telemetry dashboard: the opaque
+thread key, plus the user's Clerk id and email as the feedback author label so a dev
+knows who to reply to.
 
 Flow: user types a note in-app -> POST /feedback/submit -> lands on the telemetry
 dashboard's board -> a dev replies there (signed in via the org GitHub OAuth app) ->
