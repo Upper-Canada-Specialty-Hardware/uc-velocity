@@ -385,7 +385,8 @@ function App() {
           const term = inventorySearchTerm.toLowerCase()
           if (!term) return true
           return (
-            labor.description.toLowerCase().includes(term)
+            labor.description.toLowerCase().includes(term) ||
+            (labor.product_code?.toLowerCase().includes(term) ?? false)
           )
         })
 
@@ -525,10 +526,11 @@ function App() {
                       items={filteredLaborItems}
                       rowHeight={52}
                       height="calc(100vh - 360px)"
-                      gridCols="grid-cols-[3fr_1fr_1fr_1fr_1fr_minmax(110px,auto)]"
+                      gridCols="grid-cols-[2.5fr_1fr_1fr_1fr_1fr_1fr_minmax(110px,auto)]"
                       header={
                         <>
                           <div className={headerCellClass}>Labour Description</div>
+                          <div className={headerCellClass}>Product Code</div>
                           <div className={`${headerCellClass} text-right`}>Hours</div>
                           <div className={`${headerCellClass} text-right`}>Rate</div>
                           <div className={`${headerCellClass} text-right`}>Markup</div>
@@ -543,6 +545,7 @@ function App() {
                       renderRow={(labor) => (
                         <>
                           <div className={`${cellClass} font-medium truncate`}>{labor.description}</div>
+                          <div className={`${cellClass} text-muted-foreground truncate`}>{labor.product_code || "—"}</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.hours}</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{formatCurrency(labor.rate)}/hr</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.markup_percent}%</div>
