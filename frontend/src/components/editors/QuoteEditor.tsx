@@ -2240,7 +2240,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                             Deleted
                           </Badge>
                         )}
-                        {item.item_type === "part" && item.part && (
+                        {item.item_type === "part" && item.part && !(item.description_override && item.description_override.trim()) && (
                           <span className="text-muted-foreground ml-2">- {item.part.description}</span>
                         )}
                       </div>
