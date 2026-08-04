@@ -33,6 +33,7 @@ def create_labor(labor_data: LaborCreate, db: Session = Depends(get_db)):
 
     db_labor = Labor(
         description=labor_data.description,
+        product_code=labor_data.product_code,
         hours=labor_data.hours,
         rate=labor_data.rate,
         markup_percent=formatted_markup,
@@ -56,6 +57,8 @@ def update_labor(labor_id: int, labor_data: LaborUpdate, db: Session = Depends(g
     # Update fields if provided
     if labor_data.description is not None:
         db_labor.description = labor_data.description
+    if labor_data.product_code is not None:
+        db_labor.product_code = labor_data.product_code
     if labor_data.hours is not None:
         db_labor.hours = labor_data.hours
     if labor_data.rate is not None:
