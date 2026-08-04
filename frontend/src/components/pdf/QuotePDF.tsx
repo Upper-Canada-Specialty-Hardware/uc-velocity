@@ -135,6 +135,9 @@ function LineItemTable({
 }
 
 function getItemDescription(item: QuoteLineItem): string {
+  // A per-quote description override (issue #178) wins over the catalog label
+  // when set. Migrated lines leave this empty, so they print exactly as before.
+  if (item.description_override && item.description_override.trim()) return item.description_override
   if (item.item_type === 'labor' && item.labor) return item.labor.description
   if (item.item_type === 'part' && item.part)
     return `${item.part.part_number} - ${item.part.description}`

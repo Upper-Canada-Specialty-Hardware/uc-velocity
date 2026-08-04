@@ -200,6 +200,7 @@ class QuoteLineItem(Base):
     part_id = Column(Integer, ForeignKey('parts.id'), nullable=True)
     misc_id = Column(Integer, ForeignKey('miscellaneous.id'), nullable=True)
     description = Column(String)  # For misc items or override
+    description_override = Column(String, nullable=True)  # Per-quote display description override (issue #178)
     quantity = Column(Integer, default=1)  # Qty Ordered (must be whole number)
     unit_price = Column(Float)  # Override price if needed
     qty_pending = Column(Integer, default=0)  # Remaining to fulfill (must be whole number)
@@ -498,6 +499,7 @@ class QuoteLineItemSnapshot(Base):
     part_id = Column(Integer)
     misc_id = Column(Integer)
     description = Column(String)
+    description_override = Column(String, nullable=True)  # Per-quote display description override (issue #178)
     quantity = Column(Integer)  # qty_ordered (must be whole number)
     unit_price = Column(Float)
     qty_pending = Column(Integer)  # Must be whole number

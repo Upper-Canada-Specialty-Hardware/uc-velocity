@@ -710,6 +710,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       (staged.quantity === undefined || staged.quantity === item.quantity) &&
       (staged.unit_price === undefined || staged.unit_price === item.unit_price) &&
       (staged.description === undefined || staged.description === item.description) &&
+      (staged.description_override === undefined || staged.description_override === (item.description_override ?? "")) &&
       (staged.markup_percent === undefined || staged.markup_percent === item.markup_percent) &&
       (staged.base_cost === undefined || staged.base_cost === item.base_cost)
 
@@ -805,6 +806,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           quantity: edit.quantity,
           unit_price: edit.unit_price,
           description: edit.description,
+          description_override: edit.description_override,
           markup_percent: edit.markup_percent,
           base_cost: edit.base_cost,
         })
@@ -1075,6 +1077,11 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   }
 
   const getLineItemDescription = (item: QuoteLineItem): string => {
+    // A per-quote description override (issue #178) wins over the catalog label
+    // when set. Migrated lines leave this empty, so they render exactly as before.
+    if (item.description_override && item.description_override.trim()) {
+      return item.description_override
+    }
     if (item.item_type === "labor") {
       if (item.labor) {
         return item.labor.description
@@ -2279,10 +2286,23 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                             Deleted
                           </Badge>
                         )}
-                        {item.item_type === "part" && item.part && (
+                        {item.item_type === "part" && item.part && !(item.description_override && item.description_override.trim()) && (
                           <span className="text-muted-foreground ml-2">- {item.part.description}</span>
                         )}
                       </div>
+                      {/* Per-quote description override (issue #178) — edit mode only.
+                          Changes only this quote line's printed description, never inventory. */}
+                      {editorMode === "edit" && !isDeleted && (
+                        <Input
+                          type="text"
+                          className="mt-1 h-7 text-sm"
+                          placeholder="Custom description for this quote (optional)"
+                          value={editedItem?.description_override ?? item.description_override ?? ""}
+                          onChange={(e) => stageEdit(item, { description_override: e.target.value })}
+                          disabled={hasBeenInvoiced}
+                          title="Overrides this line's printed description for this quote only — does not change the inventory item"
+                        />
+                      )}
                     </TableCell>
 
                     {/* Qty Ordered Column — inline-editable in edit mode (non-PMS) */}
