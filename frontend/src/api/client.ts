@@ -73,9 +73,10 @@ async function request<T>(
   }
 
   // Every completed call is an attempt — record it with its status (the error-rate
-  // denominator). Raw endpoint + real ids; the service templates them for grouping.
+  // denominator). Use telemetryPath (query stripped, real ids kept) so success and
+  // failure group identically and no query-string content (e.g. search text) leaks.
   tel.action('backend_call', undefined, {
-    endpoint,
+    endpoint: telemetryPath,
     http_method: method,
     status_code: response.status,
     duration_ms: Date.now() - started,
