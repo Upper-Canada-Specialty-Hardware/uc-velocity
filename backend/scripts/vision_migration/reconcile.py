@@ -29,6 +29,14 @@ from typing import Any, Optional
 from . import config
 from .transform import (
     opt_int,
+    transform_category,
+    transform_labor,
+    transform_misc,
+    transform_part,
+    transform_po,
+    transform_po_line,
+    transform_profile,
+    transform_project,
     transform_workorder,
     transform_workorder_line,
     workorder_source_closed,
@@ -54,6 +62,10 @@ _REF_FIELD = {"labor": "labor_legacy_id", "part": "part_legacy_id", "misc": "mis
 _PROJECT_TABLE = ("tblProjects", "ProjectID")
 _PROJECT_CLIENT_COL = "ClientID"             # tblProjects -> client FK (importer drops if unresolved)
 _CLIENT_TABLE = ("tblClients", "Client ID")  # importer's customer_map source (note the space)
+_VENDOR_TABLE = ("tblVendors", "VendorID")
+_CATEGORY_TABLE = ("tblPartsCategories", "CategoryID")
+_PO_TABLE = ("tblPurchaseOrders", "PurchaseOrderID")
+_PO_LINE_TABLE = "tblPurchaseOrdersMaterial"
 
 # The G1 fields we expect and want to confirm actually exist in the staged schema.
 _WORKORDER_STATUS_FIELDS = ["chrStatus", "blnForceClosed", "blnLocked", "blnAllShipped"]
@@ -137,6 +149,33 @@ def _fetch_lm_part_ids(cur: Any) -> set[int]:
     return out
 
 
+def _surviving_projects(cur: Any) -> tuple[set[int], set[int], bool, bool]:
+    """(all_project_ids, surviving_project_ids, project_modeled, client_modeled).
+
+    Mirrors the importer's client->project drop: a project survives only if its
+    ClientID resolves to a staged client (or, if clients aren't staged, falls
+    back to "the project exists"). Shared by the quote, project, and PO reports
+    so the survivor rule lives in exactly one place.
+    """
+    ctab, ccol = _CLIENT_TABLE
+    client_modeled = _table_exists(cur, SCHEMA, ctab) and ccol in _columns(cur, SCHEMA, ctab)
+    client_ids = _fetch_id_set(cur, SCHEMA, ctab, ccol) if client_modeled else set()
+    proj_table, proj_col = _PROJECT_TABLE
+    project_modeled = _table_exists(cur, SCHEMA, proj_table) and proj_col in _columns(cur, SCHEMA, proj_table)
+    all_ids: set[int] = set()
+    surviving: set[int] = set()
+    if project_modeled:
+        for prow in _fetch_dicts(cur, SCHEMA, proj_table):
+            pid = opt_int(prow.get(proj_col))
+            if pid is None:
+                continue
+            all_ids.add(pid)
+            cid = opt_int(prow.get(_PROJECT_CLIENT_COL))
+            if not client_modeled or (cid is not None and cid in client_ids):
+                surviving.add(pid)
+    return all_ids, surviving, project_modeled, client_modeled
+
+
 def _pct(n: int, total: int) -> str:
     return f"{(100.0 * n / total):.1f}%" if total else "n/a"
 
@@ -165,6 +204,10 @@ def run_reconciliation(url: str) -> dict[str, Any]:
 
         _report_schema_presence(cur, summary)
         _report_quote_domain(cur, summary)
+        _report_catalog(cur, summary)
+        _report_profiles(cur, summary)
+        _report_projects(cur, summary)
+        _report_po_domain(cur, summary)
         _report_diff_b_slot(cur, summary)
 
         print("\n" + "=" * 72)
@@ -212,31 +255,10 @@ def _report_quote_domain(cur: Any, summary: dict[str, Any]) -> None:
         print(f"  {_WORKORDER_TABLE} not staged -- skipping quote domain.")
         return
 
-    # Reproduce the importer's TRANSITIVE survivor set: a quote imports only if
-    # its project survives, and a project survives only if its client resolves.
-    # routes/migration.py drops a project whose ClientID is not in customer_map
-    # (lines 575-577), then drops that project's workorders (631-633), then those
-    # workorders' lines. Modelling client -> project -> quote makes the parity
-    # counts match what actually migrates, not merely what exists in the source.
-    ctab, ccol = _CLIENT_TABLE
-    client_modeled = _table_exists(cur, SCHEMA, ctab) and ccol in _columns(cur, SCHEMA, ctab)
-    client_ids: set[int] = _fetch_id_set(cur, SCHEMA, ctab, ccol) if client_modeled else set()
-
-    proj_table, proj_col = _PROJECT_TABLE
-    project_modeled = _table_exists(cur, SCHEMA, proj_table) and proj_col in _columns(cur, SCHEMA, proj_table)
-    all_project_ids: set[int] = set()
-    surviving_project_ids: set[int] = set()
-    if project_modeled:
-        for prow in _fetch_dicts(cur, SCHEMA, proj_table):
-            pid = opt_int(prow.get(proj_col))
-            if pid is None:
-                continue
-            all_project_ids.add(pid)
-            cid = opt_int(prow.get(_PROJECT_CLIENT_COL))
-            # Survives if we can't model clients (fall back to "exists"), or if
-            # its client resolves -- mirroring the importer's project_map.
-            if not client_modeled or (cid is not None and cid in client_ids):
-                surviving_project_ids.add(pid)
+    # Reproduce the importer's transitive survivor set (client -> project ->
+    # quote -> line): a quote imports only if its project survives, and a project
+    # survives only if its client resolves. See _surviving_projects.
+    all_project_ids, surviving_project_ids, project_modeled, client_modeled = _surviving_projects(cur)
 
     workorders = _fetch_dicts(cur, SCHEMA, _WORKORDER_TABLE)
     total = len(workorders)
@@ -394,6 +416,227 @@ def _report_quote_domain(cur: Any, summary: dict[str, Any]) -> None:
         "lines": {"total": total_lines, "ship_known": ship_known, "ship_unknown": ship_unknown,
                   "by_type": line_counts, "orphan_ref": orphan_ref, "null_ref": null_ref,
                   "orphan_wo_lines": orphan_wo_lines, "lm_detached_lines": lm_detached_lines},
+    }
+
+
+def _report_catalog(cur: Any, summary: dict[str, Any]) -> None:
+    print("\n-- Catalog (categories / parts / labour / misc) " + "-" * 23)
+    vtab, vcol = _VENDOR_TABLE
+    vendor_ids = (_fetch_id_set(cur, SCHEMA, vtab, vcol)
+                  if _table_exists(cur, SCHEMA, vtab) and vcol in _columns(cur, SCHEMA, vtab) else set())
+    # Categories resolve by TYPE, exactly like the importer: cat_map_part holds
+    # Material + 'Application & Material'; cat_map_labor holds Application + both.
+    # A part pointing at a labour-only category imports detached (category NULL),
+    # so a single flat set would under-count orphan categories.
+    ctab, ccol = _CATEGORY_TABLE
+    part_cat_ids: set[int] = set()
+    labor_cat_ids: set[int] = set()
+    cat_velocity_rows = 0
+    crows = _fetch_dicts(cur, SCHEMA, ctab) if _table_exists(cur, SCHEMA, ctab) else []
+    for cr in crows:
+        for c in transform_category(cr):
+            cat_velocity_rows += 1
+            cid = c["category_legacy_id"]
+            if cid is None:
+                continue
+            (part_cat_ids if c["type"] == "part" else labor_cat_ids).add(cid)
+    if crows:
+        print(f"  categories (tblPartsCategories): {len(crows)} source -> {cat_velocity_rows} "
+              "Velocity rows ('Application & Material' splits into two)")
+
+    part_tab = _CATALOG["part"][0]
+    if _table_exists(cur, SCHEMA, part_tab):
+        total = mapped = lm = empty = orphan_v = orphan_c = 0
+        for r in _fetch_dicts(cur, SCHEMA, part_tab):
+            p = transform_part(r)
+            total += 1
+            if not p["part_legacy_id"] or not p["part_number"]:
+                empty += 1  # importer skips empty ProductID / part number
+                continue
+            if p["skipped_lm"]:
+                lm += 1
+                continue
+            mapped += 1
+            if vendor_ids and p["vendor_legacy_id"] is not None and p["vendor_legacy_id"] not in vendor_ids:
+                orphan_v += 1
+            if part_cat_ids and p["category_legacy_id"] is not None and p["category_legacy_id"] not in part_cat_ids:
+                orphan_c += 1
+        print(f"  parts (tblMaterial): {total} source -> {mapped} imported, {lm} LM- skipped (G7), "
+              f"{empty} blank-key skipped; orphan vendor {orphan_v}, orphan category {orphan_c}")
+
+    lab_tab = _CATALOG["labor"][0]
+    if _table_exists(cur, SCHEMA, lab_tab):
+        total = mapped = empty = orphan_c = 0
+        for r in _fetch_dicts(cur, SCHEMA, lab_tab):
+            lab = transform_labor(r)
+            total += 1
+            if not lab["labor_legacy_id"] or not lab["description"]:
+                empty += 1  # importer skips empty ProductID / description
+                continue
+            mapped += 1
+            if labor_cat_ids and lab["category_legacy_id"] is not None and lab["category_legacy_id"] not in labor_cat_ids:
+                orphan_c += 1
+        print(f"  labour (tblApplication): {total} source -> {mapped} imported, "
+              f"{empty} blank-key skipped; orphan category {orphan_c}")
+
+    misc_tab = _CATALOG["misc"][0]
+    if _table_exists(cur, SCHEMA, misc_tab):
+        total = mapped = empty = 0
+        for r in _fetch_dicts(cur, SCHEMA, misc_tab):
+            m = transform_misc(r)
+            total += 1
+            if not m["misc_legacy_id"]:
+                empty += 1
+                continue
+            mapped += 1
+        print(f"  misc (tblZones): {total} source -> {mapped} imported, {empty} blank-key skipped")
+
+
+def _report_profiles(cur: Any, summary: dict[str, Any]) -> None:
+    print("\n-- Profiles (customers / vendors) " + "-" * 37)
+    for ptype, (tab, _key) in (("customer", _CLIENT_TABLE), ("vendor", _VENDOR_TABLE)):
+        if not _table_exists(cur, SCHEMA, tab):
+            print(f"  {ptype}s: {tab} not staged")
+            continue
+        id_field = "customer_legacy_id" if ptype == "customer" else "vendor_legacy_id"
+        total = profiles = contacts = blank = empty = 0
+        for r in _fetch_dicts(cur, SCHEMA, tab):
+            prof, cts = transform_profile(r, ptype)
+            total += 1
+            if not prof[id_field]:
+                empty += 1  # importer skips rows with an empty legacy id
+                continue
+            profiles += 1
+            contacts += len(cts)
+            if prof["name"].startswith("Unknown "):
+                blank += 1
+        print(f"  {ptype}s ({tab}): {total} source -> {profiles} imported, {contacts} contacts"
+              + (f", {blank} blank-name fallback" if blank else "")
+              + (f", {empty} empty-id skipped" if empty else ""))
+
+
+def _report_projects(cur: Any, summary: dict[str, Any]) -> None:
+    print("\n-- Projects " + "-" * 59)
+    proj_tab = _PROJECT_TABLE[0]
+    if not _table_exists(cur, SCHEMA, proj_tab):
+        print(f"  {proj_tab} not staged")
+        return
+    all_ids, surviving, _pm, _cm = _surviving_projects(cur)
+    rows = _fetch_dicts(cur, SCHEMA, proj_tab)
+    archived = active = dropped_client = 0
+    uca_seen: dict[str, int] = {}
+    for r in rows:
+        p = transform_project(r)
+        pid = p["project_legacy_id"]
+        if pid is not None and pid in surviving:
+            # Only surviving (migrating) projects count toward the split + UCA
+            # dedup -- the importer dedups seen_uca only after the client check.
+            if p["status"] == "archived":
+                archived += 1
+            else:
+                active += 1
+            uca = p["uca_project_number"]
+            if uca:
+                uca_seen[uca] = uca_seen.get(uca, 0) + 1
+        elif pid is not None and pid in all_ids:
+            dropped_client += 1  # project exists but its client didn't resolve
+    uca_dups = sum(c - 1 for c in uca_seen.values() if c > 1)
+    print(f"  projects (tblProjects): {len(rows)}  ->  migrate {len(surviving)}, "
+          f"drop (client unresolved) {dropped_client}")
+    print(f"    active {active}, archived {archived}; duplicate UCA numbers {uca_dups}")
+
+
+def _report_po_domain(cur: Any, summary: dict[str, Any]) -> None:
+    print("\n-- Purchase orders (G2: close-state) " + "-" * 33)
+    po_tab, _po_key = _PO_TABLE
+    if not _table_exists(cur, SCHEMA, po_tab):
+        print(f"  {po_tab} not staged")
+        return
+    _all, surviving, project_modeled, _cm = _surviving_projects(cur)
+    vtab, vcol = _VENDOR_TABLE
+    vendor_ids = (_fetch_id_set(cur, SCHEMA, vtab, vcol)
+                  if _table_exists(cur, SCHEMA, vtab) and vcol in _columns(cur, SCHEMA, vtab) else set())
+
+    valid_po_ids: set[int] = set()
+    src = {"received_all": 0, "open": 0, "unknown": 0}
+    total = dropped_no_id = dropped_project = vendor_placeholder = 0
+    for r in _fetch_dicts(cur, SCHEMA, po_tab):
+        po = transform_po(r)
+        total += 1
+        pid = po["po_legacy_id"]
+        if not pid:
+            dropped_no_id += 1
+            continue
+        proj = po["project_legacy_id"]
+        if project_modeled and (proj is None or proj not in surviving):
+            dropped_project += 1
+            continue
+        valid_po_ids.add(pid)
+        v = po["vendor_legacy_id"]
+        if vendor_ids and (v is None or v not in vendor_ids):
+            vendor_placeholder += 1  # importer substitutes a placeholder vendor, keeps the PO
+        ra = po["legacy_received_all"]
+        if ra is True:
+            src["received_all"] += 1
+        elif ra is False:
+            src["open"] += 1
+        else:
+            src["unknown"] += 1
+
+    part_cat = _CATALOG["part"]
+    part_ids = (_fetch_id_set(cur, SCHEMA, part_cat[0], part_cat[1])
+                if _table_exists(cur, SCHEMA, part_cat[0]) and part_cat[1] in _columns(cur, SCHEMA, part_cat[0]) else set())
+    lm_part_ids = _fetch_lm_part_ids(cur)  # LM- parts detach PO lines too (G7), like quote lines
+    po_pending: dict[int, bool] = {}
+    line_total = orphan_po_lines = orphan_part = lm_detached = 0
+    if _table_exists(cur, SCHEMA, _PO_LINE_TABLE):
+        for r in _fetch_dicts(cur, SCHEMA, _PO_LINE_TABLE):
+            ln = transform_po_line(r)
+            line_total += 1
+            po_id = ln["po_legacy_id"]
+            if po_id is not None and po_id in valid_po_ids:
+                if ln["qty_pending"] > 0:
+                    po_pending[po_id] = True
+                else:
+                    po_pending.setdefault(po_id, False)
+            else:
+                orphan_po_lines += 1
+            ref = ln["part_legacy_id"]
+            if ref is not None:
+                if ref in lm_part_ids:
+                    lm_detached += 1  # importer drops LM- from the catalog -> null part_id
+                elif part_ids and ref not in part_ids:
+                    orphan_part += 1
+
+    migrate = len(valid_po_ids)
+    derived_open = sum(1 for v in po_pending.values() if v)
+    derived_closed = sum(1 for v in po_pending.values() if not v)
+    no_lines = len(valid_po_ids - set(po_pending.keys()))
+
+    print(f"  POs (tblPurchaseOrders): {total}  ->  migrate {migrate}, drop no-id {dropped_no_id}, "
+          f"drop unknown/orphaned project {dropped_project}")
+    print(f"    vendor missing -> placeholder: {vendor_placeholder}")
+    print("  Source's own label (blnRecievedAll):")
+    print(f"    received-all (closed): {src['received_all']:>6}")
+    print(f"    not received (open):   {src['open']:>6}")
+    print(f"    unknown:               {src['unknown']:>6}")
+    print("  Derived from real PO-line receipts:")
+    print(f"    open (>=1 pending line): {derived_open:>6}")
+    print(f"    closed (all received):   {derived_closed:>6}")
+    print(f"    no line items:           {no_lines:>6}")
+    print(f"\n  >>> G2 HEADLINE: a correct migration derives {derived_open} POs as OPEN.")
+    print("      The current CSV importer stamps ALL of them 'closed'.")
+    print(f"  PO lines: {line_total} total, orphan (missing PO) {orphan_po_lines}, "
+          f"orphan part ref {orphan_part}, LM- detached {lm_detached}")
+
+    summary["purchase_orders"] = {
+        "total": total, "migrate": migrate,
+        "dropped_no_id": dropped_no_id, "dropped_project": dropped_project,
+        "vendor_placeholder": vendor_placeholder,
+        "source_received_all": src,
+        "derived": {"open": derived_open, "closed": derived_closed, "no_lines": no_lines},
+        "lines": {"total": line_total, "orphan_po_lines": orphan_po_lines,
+                  "orphan_part": orphan_part, "lm_detached": lm_detached},
     }
 
 

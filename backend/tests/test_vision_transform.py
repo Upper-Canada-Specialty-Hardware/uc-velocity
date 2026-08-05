@@ -216,3 +216,130 @@ def test_workorder_source_closed_reads_flags_and_status():
     assert t.workorder_source_closed({"chrStatus": "Open"}) is False
     assert t.workorder_source_closed({"chrStatus": "???"}) is None
     assert t.workorder_source_closed({}) is None
+
+
+# --------------------------------------------------------------------------- #
+# Catalog domain
+# --------------------------------------------------------------------------- #
+
+def test_category_type_split():
+    assert t.transform_category({"CategoryID": 1, "chrCategoryName": "Locks", "chrCategoryType": "Application"}) == \
+        [{"category_legacy_id": 1, "name": "Locks", "type": "labor"}]
+    assert t.transform_category({"CategoryID": 2, "chrCategoryName": "Doors", "chrCategoryType": "Material"}) == \
+        [{"category_legacy_id": 2, "name": "Doors", "type": "part"}]
+    both = t.transform_category({"CategoryID": 3, "chrCategoryName": "X", "chrCategoryType": "Application & Material"})
+    assert [c["type"] for c in both] == ["part", "labor"]
+    assert t.transform_category({"CategoryID": 4, "chrCategoryName": "Y", "chrCategoryType": "???"}) == []
+    assert t.transform_category({"CategoryID": None, "chrCategoryName": "Z", "chrCategoryType": "Material"}) == []
+
+
+def test_part_flags_lm_and_carries_pricing_verbatim():
+    normal = t.transform_part({"ProductID": 10, "chrProductName": "HN-100",
+                               "chrProductDescription": "Hinge", "curNetPrice": Decimal("12.50"),
+                               "intMarkup": 40, "intVendor": 3, "intCategory": 2})
+    assert normal["part_legacy_id"] == 10
+    assert normal["cost"] == 12.5
+    assert normal["markup_percent"] == 40.0
+    assert normal["skipped_lm"] is False
+    lm = t.transform_part({"ProductID": 11, "chrProductName": "LM-COMBO", "curNetPrice": "5"})
+    assert lm["skipped_lm"] is True  # importer drops these from the catalog (G7)
+
+
+def test_labor_rate_derivation():
+    with_hours = t.transform_labor({"ProductID": 1, "chrProductDescription": "Install",
+                                    "intTime": 2, "curNetPrice": Decimal("100.00"), "intMarkup": 0})
+    assert with_hours["hours"] == 2.0
+    assert with_hours["rate"] == 50.0  # net / hours
+    zero_hours = t.transform_labor({"ProductID": 2, "chrProductDescription": "Flat",
+                                    "intTime": 0, "curNetPrice": Decimal("75.00")})
+    assert zero_hours["hours"] == 1.0
+    assert zero_hours["rate"] == 75.0  # net treated as the rate
+
+
+def test_misc_description_assembly():
+    assert t.transform_misc({"ZoneRateID": 1, "chrZones": "A", "chrDistance": "0-50km",
+                             "curNetPrice": Decimal("40")})["description"] == "A - 0-50km"
+    assert t.transform_misc({"ZoneRateID": 2, "chrDistance": "50-100km"})["description"] == "50-100km"
+    assert t.transform_misc({"ZoneRateID": 3})["description"] == "Zone 3"
+
+
+# --------------------------------------------------------------------------- #
+# Profiles
+# --------------------------------------------------------------------------- #
+
+def test_customer_profile_with_two_contacts_and_address():
+    profile, contacts = t.transform_profile({
+        "Client ID": 5, "chrCompanyName": "Acme", "chrProvincialTax": "12345",
+        "chrAddress": "1 Main", "chrCity": "Town", "chrProvince": "ON", "chrPostalCode": "A1A1A1",
+        "chrFirstName": "Jane", "chrLastName": "Doe", "chrTitle": "Buyer",
+        "chrEmailAddress": "j@x.com", "chrPhoneNumber": "555-1", "chrCell": "555-2",
+        "chrFirstName2": "Sam", "chrLastName2": "Roe",
+    }, "customer")
+    assert profile["customer_legacy_id"] == 5
+    assert profile["type"] == "customer"
+    assert profile["pst"] == "12345"
+    assert profile["address"] == "1 Main, Town, ON"
+    assert len(contacts) == 2
+    assert contacts[0]["name"] == "Jane Doe"
+    assert contacts[0]["phone"] == "555-1" and contacts[0]["cell"] == "555-2"
+    assert contacts[1]["name"] == "Sam Roe"
+
+
+def test_vendor_profile_blank_name_fallback_single_contact():
+    profile, contacts = t.transform_profile({
+        "VendorID": 9, "chrCompanyName": "", "chrFirstName": "Pat", "chrLastName": "Lee",
+    }, "vendor")
+    assert profile["vendor_legacy_id"] == 9
+    assert profile["name"] == "Unknown Vendor 9"
+    assert profile["type"] == "vendor"
+    assert len(contacts) == 1 and contacts[0]["name"] == "Pat Lee"
+
+
+def test_profile_unknown_type_raises():
+    try:
+        t.transform_profile({}, "staff")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown profile_type")
+
+
+# --------------------------------------------------------------------------- #
+# Projects
+# --------------------------------------------------------------------------- #
+
+def test_project_uca_padding_and_archive_status():
+    p = t.transform_project({"ProjectID": 7, "ProjectName": "Job", "ClientID": 5,
+                             "UCAProjectNr": "42", "blnArchive": True})
+    assert p["uca_project_number"] == "A0042"
+    assert p["client_legacy_id"] == 5
+    assert p["status"] == "archived"
+    # non-numeric UCA passes through; not archived
+    p2 = t.transform_project({"ProjectID": 8, "UCAProjectNr": "A9999", "blnArchive": 0})
+    assert p2["uca_project_number"] == "A9999"
+    assert p2["status"] == "active"
+
+
+# --------------------------------------------------------------------------- #
+# Purchase orders (G2)
+# --------------------------------------------------------------------------- #
+
+def test_po_header_does_not_hardcode_status():
+    po = t.transform_po({"PurchaseOrderID": 3, "intProjectID": 7, "intVendorID": 9,
+                         "memNote": "rush", "blnRecievedAll": False})
+    assert "status" not in po  # G2: never hardcoded closed
+    assert po["po_legacy_id"] == 3
+    assert po["legacy_received_all"] is False
+
+
+def test_po_line_sums_receipts_and_computes_pending():
+    line = t.transform_po_line({"intPurchaseOrderID": 3, "intProductID": 10,
+                                "intQtyOrdered": 10, "curUnitPrice": Decimal("4.00"),
+                                "intQtyReceived1": 2, "intQtyReceived2": 3, "intQtyReceived3": 0})
+    assert line["quantity"] == 10
+    assert line["qty_received"] == 5
+    assert line["qty_pending"] == 5
+    # fully received -> no pending
+    full = t.transform_po_line({"intPurchaseOrderID": 3, "intQtyOrdered": 4,
+                                "intQtyReceived1": 4})
+    assert full["qty_received"] == 4 and full["qty_pending"] == 0

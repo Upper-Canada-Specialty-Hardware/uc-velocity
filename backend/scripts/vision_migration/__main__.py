@@ -17,6 +17,7 @@ import sys
 from . import config
 from . import reconcile
 from . import stage_raw
+from . import survey
 from . import verify_staging
 
 
@@ -48,6 +49,13 @@ def main(argv: list[str] | None = None) -> int:
     p_reconcile.add_argument("--database-url", default=None,
                              help="Target Postgres URL (or set MIGRATION_DATABASE_URL).")
 
+    p_survey = sub.add_parser(
+        "survey",
+        help="Read-only survey: staged tables, row counts, migrated vs. remaining.",
+    )
+    p_survey.add_argument("--database-url", default=None,
+                          help="Target Postgres URL (or set MIGRATION_DATABASE_URL).")
+
     args = parser.parse_args(argv)
 
     try:
@@ -67,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
             # reconcile only reads staged data; refuse blocked hosts, no confirm needed.
             config.assert_scratch_target(target, confirmed=True)
             reconcile.run_reconciliation(target)
+            return 0
+        if args.command == "survey":
+            # survey only reads staged data; refuse blocked hosts, no confirm needed.
+            config.assert_scratch_target(target, confirmed=True)
+            survey.run_survey(target)
             return 0
     except config.MigrationConfigError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

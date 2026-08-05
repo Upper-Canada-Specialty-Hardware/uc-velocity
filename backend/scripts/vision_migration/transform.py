@@ -323,3 +323,232 @@ def transform_workorder(row: dict[str, Any]) -> dict[str, Any]:
         "legacy_force_closed": to_bool(row.get("blnForceClosed")),
         "legacy_all_shipped": to_bool(row.get("blnAllShipped")),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Catalog domain (categories / parts / labour / misc)
+# --------------------------------------------------------------------------- #
+
+def transform_category(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """tblPartsCategories -> Category(s). ``chrCategoryType`` selects the
+    Velocity catalog type: Application -> labor, Material -> part, and
+    "Application & Material" -> BOTH (the importer creates two Category rows).
+    Returns a list (0, 1, or 2 dicts) so the both-case is faithful.
+    """
+    legacy_id = opt_int(row.get("CategoryID"))
+    name = to_str(row.get("chrCategoryName")) or None
+    ctype = to_str(row.get("chrCategoryType"))
+    if not legacy_id or not name:
+        return []
+    if ctype == "Application":
+        return [{"category_legacy_id": legacy_id, "name": name, "type": "labor"}]
+    if ctype == "Material":
+        return [{"category_legacy_id": legacy_id, "name": name, "type": "part"}]
+    if ctype == "Application & Material":
+        return [
+            {"category_legacy_id": legacy_id, "name": name, "type": "part"},
+            {"category_legacy_id": legacy_id, "name": name, "type": "labor"},
+        ]
+    return []  # unknown type -> importer skips
+
+
+def transform_part(row: dict[str, Any]) -> dict[str, Any]:
+    """tblMaterial -> Part. ``skipped_lm`` flags an ``LM-`` combo part, which the
+    importer drops from the catalog (G7) -- workorder lines referencing it then
+    import detached (null part_id). Pricing (cost/markup) carried verbatim.
+    """
+    part_number = to_str(row.get("chrProductName")) or None
+    is_lm = bool(part_number and part_number.upper().startswith("LM-"))
+    return {
+        "part_legacy_id": opt_int(row.get("ProductID")),
+        "part_number": part_number,
+        "description": to_str(row.get("chrProductDescription")) or part_number,
+        "cost": to_float(row.get("curNetPrice")),
+        "markup_percent": to_float(row.get("intMarkup")),
+        "vendor_legacy_id": opt_int(row.get("intVendor")),
+        "category_legacy_id": opt_int(row.get("intCategory")),
+        "skipped_lm": is_lm,
+    }
+
+
+def transform_labor(row: dict[str, Any]) -> dict[str, Any]:
+    """tblApplication -> Labor. Rate is derived as net_price / hours when hours
+    are present (else the net price is treated as the rate for a 1-hour unit),
+    mirroring the importer."""
+    hours_raw = to_float(row.get("intTime"))
+    net_price = to_float(row.get("curNetPrice"))
+    if hours_raw > 0:
+        rate, hours = net_price / hours_raw, hours_raw
+    else:
+        rate, hours = net_price, 1.0
+    return {
+        "labor_legacy_id": opt_int(row.get("ProductID")),
+        "description": to_str(row.get("chrProductDescription")) or None,
+        "hours": hours,
+        "rate": rate,
+        "markup_percent": to_float(row.get("intMarkup")),
+        "category_legacy_id": opt_int(row.get("intCategory")),
+    }
+
+
+def transform_misc(row: dict[str, Any]) -> dict[str, Any]:
+    """tblZones -> Miscellaneous. Description is assembled from zone + distance."""
+    legacy_id = opt_int(row.get("ZoneRateID"))
+    zone = to_str(row.get("chrZones"))
+    distance = to_str(row.get("chrDistance"))
+    if zone and distance:
+        desc = f"{zone} - {distance}"
+    elif distance:
+        desc = distance
+    elif zone:
+        desc = zone
+    else:
+        desc = f"Zone {legacy_id}"
+    return {
+        "misc_legacy_id": legacy_id,
+        "description": desc,
+        "unit_price": to_float(row.get("curNetPrice")),
+        "markup_percent": to_float(row.get("intMarkup")),
+        "is_system_item": False,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Profiles (customers / vendors) + contacts
+# --------------------------------------------------------------------------- #
+
+def _contact(name: str, title: Any, email: Any, phone: Any, cell: Any) -> dict[str, Any]:
+    return {
+        "name": name,
+        "job_title": to_str(title) or None,
+        "email": to_str(email) or None,
+        "phone": to_str(phone) or None,   # -> ContactPhone(work)
+        "cell": to_str(cell) or None,     # -> ContactPhone(mobile)
+    }
+
+
+def transform_profile(row: dict[str, Any], profile_type: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """tblClients ('customer') / tblVendors ('vendor') -> (profile_dict, contacts).
+
+    Mirrors the importer: PST from chrProvincialTax, address assembled from
+    address/city/province, blank company name -> "Unknown {Type} {id}". Customers
+    can carry a second contact; vendors carry one.
+    """
+    if profile_type == "customer":
+        legacy_id = opt_int(row.get("Client ID"))
+        id_field = "customer_legacy_id"
+        fallback = f"Unknown Customer {legacy_id}"
+    elif profile_type == "vendor":
+        legacy_id = opt_int(row.get("VendorID"))
+        id_field = "vendor_legacy_id"
+        fallback = f"Unknown Vendor {legacy_id}"
+    else:
+        raise ValueError(f"unknown profile_type {profile_type!r}")
+
+    name = to_str(row.get("chrCompanyName")) or fallback
+    address = ", ".join(p for p in (
+        to_str(row.get("chrAddress")), to_str(row.get("chrCity")), to_str(row.get("chrProvince")),
+    ) if p)
+    profile = {
+        id_field: legacy_id,
+        "type": profile_type,
+        "name": name,
+        "pst": to_str(row.get("chrProvincialTax")),
+        "address": address,
+        "postal_code": to_str(row.get("chrPostalCode")),
+    }
+
+    contacts: list[dict[str, Any]] = []
+    name1 = f"{to_str(row.get('chrFirstName'))} {to_str(row.get('chrLastName'))}".strip()
+    if name1:
+        if profile_type == "customer":
+            contacts.append(_contact(name1, row.get("chrTitle"), row.get("chrEmailAddress"),
+                                     row.get("chrPhoneNumber"), row.get("chrCell")))
+        else:
+            # Vendors get a REDUCED contact, mirroring the importer: name +
+            # quote-stripped email + work phone only (no job_title, no mobile).
+            contacts.append({
+                "name": name1,
+                "job_title": None,
+                "email": to_str(row.get("chrEmailAddress")).strip("'") or None,
+                "phone": to_str(row.get("chrPhoneNumber")) or None,
+                "cell": None,
+            })
+    if profile_type == "customer":
+        name2 = f"{to_str(row.get('chrFirstName2'))} {to_str(row.get('chrLastName2'))}".strip()
+        if name2:
+            contacts.append(_contact(name2, row.get("chrTitle2"), row.get("chrEmailAddress2"),
+                                     row.get("chrPhoneNumber2"), row.get("chrCell2")))
+    return profile, contacts
+
+
+# --------------------------------------------------------------------------- #
+# Projects
+# --------------------------------------------------------------------------- #
+
+def transform_project(row: dict[str, Any]) -> dict[str, Any]:
+    """tblProjects -> Project. UCA number is reformatted to A#### (padded) when
+    numeric; blnArchive -> status. Duplicate-UCA and client-resolution handling
+    is stateful, so it stays in the reconciler/sync, not this per-row function.
+
+    Status reads the real staged BOOLEAN via ``to_bool`` (staging maps Access
+    boolean -> Postgres BOOLEAN). The importer compared the CSV string
+    ``== "1"``, which is fragile for other boolean encodings; reading the actual
+    boolean is the correct source semantics -- a deliberate, documented divergence.
+    """
+    legacy_id = opt_int(row.get("ProjectID"))
+    uca_raw = to_str(row.get("UCAProjectNr")) or (str(legacy_id) if legacy_id else "")
+    try:
+        uca = f"A{int(uca_raw):04d}"
+    except ValueError:
+        uca = uca_raw  # already prefixed or non-numeric
+    return {
+        "project_legacy_id": legacy_id,
+        "name": to_str(row.get("ProjectName")) or (f"Project {legacy_id}" if legacy_id else None),
+        "client_legacy_id": opt_int(row.get("ClientID")),
+        "uca_project_number": uca or None,
+        "ucsh_project_number": to_str(row.get("UCSHProjectNr")) or None,
+        "created_on": to_datetime(row.get("dtmStartDate")),
+        "status": "archived" if to_bool(row.get("blnArchive")) else "active",
+        "project_lead": to_str(row.get("EmployeeID")) or None,  # a name string, not an FK
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Purchase orders (G2: derive close-state instead of hardcoding closed)
+# --------------------------------------------------------------------------- #
+
+def transform_po(row: dict[str, Any]) -> dict[str, Any]:
+    """tblPurchaseOrders -> PurchaseOrder header. Status is NOT hardcoded closed
+    (G2): the source's ``blnRecievedAll`` (sic -- Vision's misspelling) is carried
+    as ``legacy_received_all``, and the true open/closed state is derived from the
+    PO lines' received quantities by the reconciler/sync.
+    """
+    return {
+        "po_legacy_id": opt_int(row.get("PurchaseOrderID")),
+        "project_legacy_id": opt_int(row.get("intProjectID")),
+        "vendor_legacy_id": opt_int(row.get("intVendorID")),
+        "created_at": to_datetime(row.get("dtmOrderDate")),
+        "work_description": to_str(row.get("memNote")) or None,
+        "legacy_received_all": to_bool(row.get("blnRecievedAll")),
+    }
+
+
+def transform_po_line(row: dict[str, Any]) -> dict[str, Any]:
+    """tblPurchaseOrdersMaterial -> POLineItem. qty_received sums the three Vision
+    receipt columns; qty_pending is the shortfall (mirrors the importer, which
+    already reads these -- unlike the PO status)."""
+    quantity = max(1, to_int(row.get("intQtyOrdered"), default=1))
+    received = (to_int(row.get("intQtyReceived1"))
+                + to_int(row.get("intQtyReceived2"))
+                + to_int(row.get("intQtyReceived3")))
+    return {
+        "po_legacy_id": opt_int(row.get("intPurchaseOrderID")),
+        "item_type": "part",
+        "part_legacy_id": opt_int(row.get("intProductID")),
+        "description": to_str(row.get("chrProductDescription")) or None,
+        "quantity": quantity,
+        "unit_price": to_float(row.get("curUnitPrice")),
+        "qty_received": received,
+        "qty_pending": max(0, quantity - received),
+    }
