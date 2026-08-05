@@ -12,7 +12,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { api } from "@/api/client"
-import type { Profile, ProfileCreate, ProfileType, ContactCreate, PhoneType, ContactPhoneCreate } from "@/types"
+import type { Profile, ProfileCreate, ProfileType, ContactCreate, PhoneType } from "@/types"
 import { Plus, Trash2, Phone, User } from "lucide-react"
 
 // Helper to generate temporary IDs for new items

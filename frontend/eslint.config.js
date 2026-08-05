@@ -20,4 +20,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // shadcn UI primitives and the theme provider intentionally co-export
+    // helpers/hooks alongside their component (cva variants, useTheme); Fast
+    // Refresh isn't a concern for these library-style files.
+    files: ['src/components/ui/**/*.{ts,tsx}', 'src/components/theme-provider.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

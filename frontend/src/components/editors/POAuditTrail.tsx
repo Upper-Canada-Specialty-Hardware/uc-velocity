@@ -240,7 +240,7 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
                               v{snapshot.version}
                             </span>
                             <Badge
-                              variant={getActionBadgeVariant(snapshot.action_type) as any}
+                              variant={getActionBadgeVariant(snapshot.action_type) as "default" | "secondary" | "destructive" | "outline"}
                               className={getActionBadgeClass(snapshot.action_type)}
                             >
                               {snapshot.action_type}

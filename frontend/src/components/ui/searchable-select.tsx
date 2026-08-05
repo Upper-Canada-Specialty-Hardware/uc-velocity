@@ -173,7 +173,7 @@ export function SearchableSelect<T>({
             <DialogHeader>
               <DialogTitle>{createDialogTitle}</DialogTitle>
             </DialogHeader>
-            {React.cloneElement(createForm as React.ReactElement<any>, {
+            {React.cloneElement(createForm as React.ReactElement<Record<string, unknown>>, {
               onSuccess: handleCreateFormSuccess,
               onCancel: () => setCreateDialogOpen(false),
             })}
