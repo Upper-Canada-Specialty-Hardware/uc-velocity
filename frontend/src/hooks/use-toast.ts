@@ -12,6 +12,7 @@ type ToasterToast = {
   duration?: number
 }
 
+// The set of toast action-type string literals.
 type ActionType = {
   ADD_TOAST: "ADD_TOAST"
   UPDATE_TOAST: "UPDATE_TOAST"

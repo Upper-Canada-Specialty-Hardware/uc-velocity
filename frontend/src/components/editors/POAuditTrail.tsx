@@ -111,8 +111,7 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
     }
   }
 
-  // Returns one of the four Badge `variant` values, so the call site casts to
-  // that union (not `any`).
+  // Maps an action type to its Badge `variant`.
   const getActionBadgeVariant = (actionType: string) => {
     switch (actionType) {
       case "create":
