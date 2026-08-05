@@ -1,8 +1,9 @@
 """CLI entry point.
 
 Run from `backend/scripts`:
-    python -m vision_migration stage  --mdb "<path.mdb>" --workgroup "<path.mdw>" --i-understand-scratch-db
-    python -m vision_migration verify --mdb "<path.mdb>" --workgroup "<path.mdw>"
+    python -m vision_migration stage     --mdb "<path.mdb>" --workgroup "<path.mdw>" --i-understand-scratch-db
+    python -m vision_migration verify    --mdb "<path.mdb>" --workgroup "<path.mdw>"
+    python -m vision_migration reconcile
 
 The target Postgres comes from --database-url or MIGRATION_DATABASE_URL.
 See README.md for full setup.
@@ -14,6 +15,7 @@ import os
 import sys
 
 from . import config
+from . import reconcile
 from . import stage_raw
 from . import verify_staging
 
@@ -39,6 +41,13 @@ def main(argv: list[str] | None = None) -> int:
     p_verify = sub.add_parser("verify", help="Compare source vs staged row counts.")
     _common_args(p_verify)
 
+    p_reconcile = sub.add_parser(
+        "reconcile",
+        help="Read-only parity report (Diff A): transform staged data and quantify gaps.",
+    )
+    p_reconcile.add_argument("--database-url", default=None,
+                             help="Target Postgres URL (or set MIGRATION_DATABASE_URL).")
+
     args = parser.parse_args(argv)
 
     try:
@@ -54,6 +63,11 @@ def main(argv: list[str] | None = None) -> int:
             config.assert_scratch_target(target, confirmed=True)
             ok = verify_staging.verify(args.mdb, args.workgroup, target)
             return 0 if ok else 1
+        if args.command == "reconcile":
+            # reconcile only reads staged data; refuse blocked hosts, no confirm needed.
+            config.assert_scratch_target(target, confirmed=True)
+            reconcile.run_reconciliation(target)
+            return 0
     except config.MigrationConfigError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
