@@ -199,6 +199,7 @@ export function SearchableMultiSelect<T>({
             <DialogHeader>
               <DialogTitle>{createDialogTitle}</DialogTitle>
             </DialogHeader>
+            {/* Inject onSuccess/onCancel into the create form; typed as Record<string, unknown> rather than `any`. */}
             {React.cloneElement(createForm as React.ReactElement<Record<string, unknown>>, {
               onSuccess: handleCreateFormSuccess,
               onCancel: () => setCreateDialogOpen(false),
