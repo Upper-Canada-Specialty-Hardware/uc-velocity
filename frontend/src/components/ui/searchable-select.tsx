@@ -173,7 +173,7 @@ export function SearchableSelect<T>({
             <DialogHeader>
               <DialogTitle>{createDialogTitle}</DialogTitle>
             </DialogHeader>
-            {/* Clone the create form with onSuccess/onCancel injected. */}
+            {/* Clone the create form with onSuccess/onCancel injected; typed Record<string, unknown> so the props inject without `any`. */}
             {React.cloneElement(createForm as React.ReactElement<Record<string, unknown>>, {
               onSuccess: handleCreateFormSuccess,
               onCancel: () => setCreateDialogOpen(false),
