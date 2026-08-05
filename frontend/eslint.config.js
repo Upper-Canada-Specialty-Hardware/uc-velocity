@@ -22,7 +22,8 @@ export default defineConfig([
   },
   {
     // Turns off react-refresh/only-export-components for the shadcn UI
-    // primitives and the theme-provider.
+    // primitives + theme-provider -- they intentionally co-export variants/hooks
+    // beside their component, so this Fast-Refresh guard doesn't apply.
     files: ['src/components/ui/**/*.{ts,tsx}', 'src/components/theme-provider.tsx'],
     rules: {
       'react-refresh/only-export-components': 'off',
