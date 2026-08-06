@@ -21,6 +21,11 @@ from urllib.parse import urlparse
 # The isolated schema that holds the verbatim Vision copy. Never the app tables.
 STAGING_SCHEMA = "vision_legacy"
 
+# The isolated schema that holds a read-only copy of live Velocity, for Diff B.
+# Like STAGING_SCHEMA it is never the app's own tables -- it lives on the same
+# throwaway staging DB and is written only by the `load-velocity` command.
+VELOCITY_CURRENT_SCHEMA = "velocity_current"
+
 # Hosts we refuse to write to, ever. Extend via MIGRATION_BLOCKED_HOSTS (comma-sep).
 # Covers Railway's private host (`railway.internal`, unreachable off-Railway) AND
 # the reachable public endpoints (`rlwy.net` proxy, `railway.app`) so a prod URL
@@ -90,6 +95,34 @@ def resolve_target_url(cli_url: str | None) -> str:
         raise MigrationConfigError(
             "No target database. Pass --database-url or set MIGRATION_DATABASE_URL "
             "to a SCRATCH/preview Postgres (never production)."
+        )
+    return url
+
+
+def resolve_velocity_source_url(cli_url: str | None) -> str:
+    """Resolve the READ-ONLY live-Velocity source url for Diff B.
+
+    Kept deliberately as a THIRD variable, distinct from both the app's
+    DATABASE_URL and the staging *target* url, so the loader can never confuse
+    "where I read live data" with "where I write the copy". It is never run
+    through the prod-host guard -- that guard protects write *targets*; reading
+    live Velocity is fine and the loader only issues SELECTs.
+
+    Args:
+        cli_url: The value of ``--velocity-source-url`` (or ``None`` if omitted).
+
+    Returns:
+        The source url: the CLI value if given, else ``MIGRATION_VELOCITY_SOURCE_URL``.
+
+    Raises:
+        MigrationConfigError: If neither the CLI arg nor the env var is set.
+    """
+    url = cli_url or os.getenv("MIGRATION_VELOCITY_SOURCE_URL")   # CLI wins, else env var
+    if not url:                                                    # nothing to read from -> fail loud
+        raise MigrationConfigError(
+            "No Velocity source. Pass --velocity-source-url or set "
+            "MIGRATION_VELOCITY_SOURCE_URL to the live Velocity Postgres "
+            "(read-only; e.g. the Railway public URL)."
         )
     return url
 
