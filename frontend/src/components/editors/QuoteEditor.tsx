@@ -52,7 +52,7 @@ import { api } from "@/api/client"
 import type {
   Quote, QuoteLineItem, QuoteLineItemCreate,
   LineItemType, Part, Labor, Miscellaneous, CostCode,
-  StagedFulfillment, InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
+  InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
 import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
@@ -69,11 +69,8 @@ import { toast } from "@/hooks/use-toast"
 import {
   getLineItemBaseCost,
   getLineItemUnitPrice as _getLineItemUnitPrice,
-  getLineItemSubtotal as _getLineItemSubtotal,
-  getLineItemTotal as _getLineItemTotal,
   calculateNonPmsTotal as _calculateNonPmsTotal,
   getEffectiveUnitPrice as _getEffectiveUnitPrice,
-  getEffectiveLineItemTotal as _getEffectiveLineItemTotal,
   getFulfilledLineItemValue as _getFulfilledLineItemValue,
   calculateSectionTotals as _calculateSectionTotals,
   calculateQuoteTotal,
@@ -576,17 +573,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     }
   }
 
-  const handleDeleteLine = async (lineId: number) => {
-    if (!confirm("Delete this line item?")) return
-    try {
-      await api.quotes.deleteLine(quoteId, lineId)
-      fetchQuote()
-      onUpdate?.()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete line item")
-    }
-  }
-
   // ===== Edit Mode Handlers (Issue #8: Commit-based workflow) =====
 
   const enterEditMode = () => {
@@ -726,10 +712,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     setStagedAdds(prev => [...prev, { ...newItem, tempId }])
   }
 
-  const unstageAdd = (tempId: number) => {
-    setStagedAdds(prev => prev.filter(item => item.tempId !== tempId))
-  }
-
   const updateStagedAdd = (
     tempId: number,
     changes: Partial<Pick<StagedAdd, "quantity" | "base_cost" | "markup_percent" | "description">>
@@ -852,20 +834,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       setIsCommitting(false)
     }
   }
-
-  // Helper to get display value considering staged edits
-  const getDisplayQuantity = (item: QuoteLineItem): number => {
-    const staged = stagedEdits.get(item.id)
-    return staged?.quantity ?? item.quantity
-  }
-
-  const getDisplayUnitPrice = (item: QuoteLineItem): number | undefined => {
-    const staged = stagedEdits.get(item.id)
-    return staged?.unit_price ?? item.unit_price
-  }
-
-  // Check if controls should be enabled based on mode
-  const canEdit = editorMode === "edit" && !hasBeenInvoiced
 
   // These per-field "Save" buttons only close the inline editor; the value is held
   // in local state and persisted together on Commit (see handleCommitChanges).
@@ -1091,16 +1059,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     return item.description || ""
   }
 
-  const getDescriptionLabel = (item: QuoteLineItem): string => {
-    if (item.item_type === "labor") return "Labour Description"
-    if (item.item_type === "part") return "Part Number"
-    return "Misc Description"
-  }
-
   // Pricing functions — delegate to shared @/lib/pricing module
   const getLineItemUnitPrice = (item: QuoteLineItem): number => _getLineItemUnitPrice(item)
-  const getLineItemSubtotal = (item: QuoteLineItem): number => _getLineItemSubtotal(item)
-  const getLineItemTotal = (item: QuoteLineItem): number => _getLineItemTotal(item)
 
   const calculateNonPmsTotal = (): number => {
     if (!quote) return 0
@@ -1109,9 +1069,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
 
   const getEffectiveUnitPrice = (item: QuoteLineItem): number =>
     _getEffectiveUnitPrice(item, calculateNonPmsTotal())
-
-  const getEffectiveLineItemTotal = (item: QuoteLineItem): number =>
-    _getEffectiveLineItemTotal(item, calculateNonPmsTotal())
 
   const calculateTotal = (): number => {
     if (!quote) return 0
@@ -1821,9 +1778,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     newStepperValues.delete(item.id)
     setStepperValues(newStepperValues)
   }
-
-  // Get total staged items count
-  const stagedCount = stagedFulfillments.size
 
   // Create invoice from staged fulfillments
   const handleCreateInvoice = async () => {

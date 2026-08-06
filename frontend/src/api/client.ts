@@ -57,7 +57,8 @@ async function request<T>(
     if (typeof error.detail === 'string') {
       message = error.detail;
     } else if (Array.isArray(error.detail)) {
-      message = error.detail.map((e: any) => e.msg).join('; ');
+      // Join each validation error's msg into one string (FastAPI `detail` is an array of { msg }).
+      message = error.detail.map((e: { msg?: string }) => e.msg).join('; ');
     }
     throw new Error(message);
   }
@@ -377,7 +378,8 @@ export const api = {
         if (typeof error.detail === 'string') {
           message = error.detail;
         } else if (Array.isArray(error.detail)) {
-          message = error.detail.map((e: any) => e.msg).join('; ');
+          // Join each validation error's msg into one string (FastAPI `detail` is an array of { msg }).
+      message = error.detail.map((e: { msg?: string }) => e.msg).join('; ');
         }
         throw new Error(message);
       }
@@ -401,7 +403,8 @@ export const api = {
         if (typeof error.detail === 'string') {
           message = error.detail;
         } else if (Array.isArray(error.detail)) {
-          message = error.detail.map((e: any) => e.msg).join('; ');
+          // Join each validation error's msg into one string (FastAPI `detail` is an array of { msg }).
+      message = error.detail.map((e: { msg?: string }) => e.msg).join('; ');
         }
         throw new Error(message);
       }

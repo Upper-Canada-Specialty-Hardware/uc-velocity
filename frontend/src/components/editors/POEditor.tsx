@@ -51,7 +51,7 @@ import { Calendar as CalendarWidget } from "@/components/ui/calendar"
 import type { SearchableSelectOption } from "@/components/ui/searchable-select"
 import { api } from "@/api/client"
 import type {
-  PurchaseOrder, POLineItem, POLineItemCreate, POLineItemType, POStatus, Part, CostCode,
+  PurchaseOrder, POLineItem, POLineItemType, POStatus, Part, CostCode,
   POEditorMode, StagedPOEdit, StagedPOAdd,
   StagedPOLineItemChange, POCommitEditsRequest, POReceiving, POReceivingCreate, POReceivingLineItemCreate,
   CompanySettings, Project
@@ -171,7 +171,6 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
   const hasStagedChanges = stagedEdits.size > 0 || stagedAdds.length > 0 || stagedDeletes.size > 0
   const stagedChangesCount = stagedEdits.size + stagedAdds.length + stagedDeletes.size
   const hasAnyUnsavedChanges = editorMode === "edit" && hasStagedChanges
-  const canEdit = editorMode === "edit" && po?.status === "Draft"
   const hasPendingItems = po?.line_items.some(item => item.qty_pending > 0) ?? false
   const canReceive = (po?.status === "Sent" || po?.status === "Received") && hasPendingItems
   const stagedReceivingsCount = Array.from(stagedReceivings.values()).filter(r => r.qty_received > 0).length
@@ -950,15 +949,6 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
         return <Package className="h-4 w-4" />
       case "misc":
         return <FileText className="h-4 w-4" />
-    }
-  }
-
-  const getTypeBadgeVariant = (type: POLineItemType) => {
-    switch (type) {
-      case "part":
-        return "secondary"
-      case "misc":
-        return "outline"
     }
   }
 
