@@ -710,7 +710,7 @@ export interface MigrationResult {
 }
 
 // ===== Quote Snapshots =====
-export type SnapshotActionType = 'create' | 'edit' | 'delete' | 'invoice' | 'date_edit' | 'revert';
+export type SnapshotActionType = 'create' | 'edit' | 'delete' | 'invoice' | 'date_edit' | 'revert' | 'reopen';
 
 export interface QuoteSnapshot {
   id: number;
