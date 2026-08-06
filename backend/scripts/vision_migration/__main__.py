@@ -15,6 +15,7 @@ import os
 import sys
 
 from . import config
+from . import load_velocity
 from . import reconcile
 from . import stage_raw
 from . import survey
@@ -56,6 +57,18 @@ def main(argv: list[str] | None = None) -> int:
     p_survey.add_argument("--database-url", default=None,
                           help="Target Postgres URL (or set MIGRATION_DATABASE_URL).")
 
+    p_load = sub.add_parser(
+        "load-velocity",
+        help="Copy live Velocity (read-only) into velocity_current, for Diff B.",
+    )
+    p_load.add_argument("--database-url", default=None,
+                        help="Target staging Postgres URL (or MIGRATION_DATABASE_URL).")
+    p_load.add_argument("--velocity-source-url", default=None,
+                        help="Live Velocity Postgres URL, read-only (or "
+                             "MIGRATION_VELOCITY_SOURCE_URL); e.g. the Railway public URL.")
+    p_load.add_argument("--i-understand-scratch-db", action="store_true",
+                        help="Confirm the TARGET is a throwaway/preview DB, not production.")
+
     args = parser.parse_args(argv)
 
     try:
@@ -80,6 +93,17 @@ def main(argv: list[str] | None = None) -> int:
             # survey only reads staged data; refuse blocked hosts, no confirm needed.
             config.assert_scratch_target(target, confirmed=True)
             survey.run_survey(target)
+            return 0
+        if args.command == "load-velocity":
+            # Writes into velocity_current on the TARGET -> guard the target like
+            # 'stage'. The SOURCE (live Velocity) is read-only and NOT guarded.
+            host = config.assert_scratch_target(target, args.i_understand_scratch_db)
+            source = config.resolve_velocity_source_url(args.velocity_source_url)
+            print(f"Target host: {host} (loading into schema "
+                  f"'{config.VELOCITY_CURRENT_SCHEMA}')")
+            print("Source: live Velocity (opened read-only).")
+            load_velocity.load_velocity(source, target)
+            print("Velocity load complete. Run 'reconcile' to see Diff B.")
             return 0
     except config.MigrationConfigError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

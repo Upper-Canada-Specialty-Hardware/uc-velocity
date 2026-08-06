@@ -24,11 +24,13 @@ module never fails on a machine without them.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from . import config
 from .transform import (
     opt_int,
+    to_str,
     transform_category,
     transform_labor,
     transform_misc,
@@ -71,7 +73,11 @@ _PO_LINE_TABLE = "tblPurchaseOrdersMaterial"
 _WORKORDER_STATUS_FIELDS = ["chrStatus", "blnForceClosed", "blnLocked", "blnAllShipped"]
 _LINE_SHIP_FIELDS = ["intTotalShippedQuantity", "intShipQuantity", "intQuantityBO"]
 
-_VELOCITY_CURRENT_SCHEMA = "velocity_current"  # Diff B target, when an export is loaded
+_VELOCITY_CURRENT_SCHEMA = config.VELOCITY_CURRENT_SCHEMA  # Diff B target schema
+
+# Velocity quote status strings treated as "closed/terminal" when Diff B checks
+# which live quotes the G1 fix would re-open. Compared lower-cased.
+_CLOSEDISH = frozenset({"closed", "invoiced", "complete", "completed", "done"})
 
 
 # --------------------------------------------------------------------------- #
@@ -208,11 +214,11 @@ def run_reconciliation(url: str) -> dict[str, Any]:
         _report_profiles(cur, summary)
         _report_projects(cur, summary)
         _report_po_domain(cur, summary)
-        _report_diff_b_slot(cur, summary)
+        _report_diff_b(cur, summary)
 
         print("\n" + "=" * 72)
-        print("Diff A complete. (Diff B -- vs. live Velocity -- needs a read-only "
-              f"export in schema '{_VELOCITY_CURRENT_SCHEMA}'.)")
+        print("Reconciliation complete. (Diff B needs 'load-velocity' to have "
+              f"populated schema '{_VELOCITY_CURRENT_SCHEMA}'.)")
         print("=" * 72)
         return summary
     finally:
@@ -640,13 +646,140 @@ def _report_po_domain(cur: Any, summary: dict[str, Any]) -> None:
     }
 
 
-def _report_diff_b_slot(cur: Any, summary: dict[str, Any]) -> None:
+def _staged_wo_derived_status(cur: Any) -> tuple[dict[int, str], int]:
+    """Derive each staged Vision workorder's real close-state from its ship data.
+
+    The same close-state signal Diff A reports, but keyed by ``WorkorderID`` so Diff B
+    can line each *live* Velocity quote up against what its real fulfillment implies.
+
+    Args:
+        cur: Read-only cursor on the staging DB (reads the ``vision_legacy`` schema).
+
+    Returns:
+        ``(status_by_wo, staged_max_wo)`` where ``status_by_wo`` maps a Vision
+        WorkorderID to ``"open"`` (a line still has quantity pending), ``"closed"``
+        (all lines shipped), or ``"no_lines"``; and ``staged_max_wo`` is the highest
+        WorkorderID we staged -- it lets Diff B tell "newer than anything we have"
+        apart from "a real gap".
+    """
+    # Every WorkorderID present in staging -> the set a live WO# can match against.
+    wo_ids: set[int] = set()
+    if _table_exists(cur, SCHEMA, _WORKORDER_TABLE):
+        for row in _fetch_dicts(cur, SCHEMA, _WORKORDER_TABLE):
+            wo = opt_int(row.get("WorkorderID"))   # the workorder's own id
+            if wo is not None:
+                wo_ids.add(wo)
+
+    # Walk every workorder line (labour/part/misc); a workorder is "open" if ANY
+    # line still has quantity pending, else "closed".
+    pending: dict[int, bool] = {}            # wo# -> does it have an unshipped line?
+    for item_type, table in _LINE_TABLES.items():
+        if not _table_exists(cur, SCHEMA, table):
+            continue                         # this line table wasn't staged -> skip it
+        for row in _fetch_dicts(cur, SCHEMA, table):
+            line = transform_workorder_line(row, item_type)   # -> qty_pending etc.
+            wo = line["workorder_legacy_id"]
+            if wo is None or wo not in wo_ids:
+                continue                     # orphan line (no parent workorder) -> ignore
+            if line["qty_pending"] > 0:
+                pending[wo] = True           # at least one line still open
+            else:
+                pending.setdefault(wo, False)   # seen + fully shipped (unless flipped True elsewhere)
+
+    # Fold the two facts (has-lines? any-pending?) into one status per workorder.
+    status: dict[int, str] = {}
+    for wo in wo_ids:
+        status[wo] = "no_lines" if wo not in pending else ("open" if pending[wo] else "closed")
+    return status, (max(wo_ids) if wo_ids else 0)   # also hand back the highest staged WO#
+
+
+def _report_diff_b(cur: Any, summary: dict[str, Any]) -> None:
+    """Print Diff B: the migration's derived state vs. what live Velocity stores.
+
+    Headline = how many *live* quotes read ``closed`` in Velocity but the real
+    Vision ship data derives OPEN -- exactly the quotes a correct migration re-opens.
+    Read-only; only runs once ``load-velocity`` has populated ``velocity_current``.
+
+    Args:
+        cur: Read-only cursor on the staging DB (holds both ``vision_legacy`` and,
+            when loaded, ``velocity_current``).
+        summary: Machine-readable result dict; a ``"diff_b"`` block is added to it.
+    """
+    vc = _VELOCITY_CURRENT_SCHEMA
     print("\n-- Diff B (vs. live Velocity) " + "-" * 41)
-    present = _schema_exists(cur, _VELOCITY_CURRENT_SCHEMA)
-    summary["diff_b_available"] = present
-    if present:
-        print(f"  schema '{_VELOCITY_CURRENT_SCHEMA}' present -- live diff can be built "
-              "(not implemented in this increment).")
-    else:
-        print(f"  schema '{_VELOCITY_CURRENT_SCHEMA}' absent -- SKIPPED. Load a read-only "
-              "Velocity export there to enable it.")
+    # Diff B needs the live copy loaded first; skip cleanly (not error) if absent.
+    if not _schema_exists(cur, vc) or not _table_exists(cur, vc, "quotes"):
+        print(f"  schema '{vc}' (or its quotes table) absent -- SKIPPED. Run "
+              "'load-velocity' to pull a read-only copy of live Velocity there.")
+        summary["diff_b_available"] = False
+        return
+    summary["diff_b_available"] = True
+
+    derived, staged_max = _staged_wo_derived_status(cur)   # WO# -> real close-state
+    has_status = "status" in _columns(cur, vc, "quotes")   # tolerate a missing column
+
+    # We DEDUPE by WorkorderID rather than count per live quote-row: a user can
+    # Clone a migrated quote, and clone_quote copies work_description verbatim, so
+    # every clone carries the same [WO ####] tag -- counting per row would double-
+    # count clones. (We can't use the `legacy_imported` flag to exclude them: on
+    # the live data it is FALSE on every row, so it's no discriminator here.)
+    matched_wos: set[int] = set()            # distinct staged WO#s that appear in live
+    should_open_wos: set[int] = set()        # matched WO#s: derive open AND a live quote reads closed-ish
+    velo_status: dict[str, int] = {}         # live status distribution (per row, for visibility)
+    matched_rows = 0                         # live quote ROWS matched (rows > WO#s reveals clones)
+    unmatched_newer = unmatched_other = untagged = 0
+    for r in _fetch_dicts(cur, vc, "quotes"):
+        # The [WO ####] tag is the Vision WorkorderID the importer stamped in.
+        m = re.search(r"\[WO (\d+)\]", to_str(r.get("work_description")))
+        if not m:
+            untagged += 1                    # Velocity-native quote (no legacy tag)
+            continue
+        wo = int(m.group(1))
+        d = derived.get(wo)                  # this WO#'s staged close-state, or None
+        if d is None:
+            # A live WO# we don't have staged: newer than our source (expected --
+            # the staged .mdb is older/smaller) vs. an unexpected in-range gap.
+            if wo > staged_max:
+                unmatched_newer += 1
+            else:
+                unmatched_other += 1
+            continue
+        matched_rows += 1                    # count the row (clones included) for the clone tally
+        matched_wos.add(wo)                  # headline metrics dedupe on the WO# itself
+        vstatus = to_str(r.get("status")) if has_status else ""
+        velo_status[vstatus] = velo_status.get(vstatus, 0) + 1   # tally live status
+        # THE headline case: Velocity stores it closed, real ship data says open.
+        if d == "open" and vstatus.lower() in _CLOSEDISH:
+            should_open_wos.add(wo)
+
+    matched = len(matched_wos)               # distinct migrated workorders present in live
+    matched_closed_should_open = len(should_open_wos)
+    clones = matched_rows - matched          # extra live rows sharing a matched WO# (clones)
+    total = matched_rows + unmatched_newer + unmatched_other + untagged   # == all live quotes
+    print(f"  live Velocity quotes:                          {total:>7}")
+    print(f"    matched to a staged Vision WO#:              {matched:>7}  (distinct workorders)")
+    if clones:                               # surface clones instead of hiding them in the count
+        print(f"      (+{clones} cloned live quote(s) share a matched WO#)")
+    print(f"    unmatched -- newer than staged (WO# > {staged_max}):  {unmatched_newer:>7}"
+          "  (expected: staged source is older/smaller)")
+    print(f"    unmatched -- WO# <= staged max, not staged:  {unmatched_other:>7}")
+    print(f"    no [WO] tag (Velocity-native):               {untagged:>7}")
+    if has_status and velo_status:
+        dist = ", ".join(f"{k or '(blank)'}={v}" for k, v in sorted(velo_status.items()))
+        print(f"  matched-quote Velocity status: {dist}")
+    print(f"\n  >>> DIFF B HEADLINE: {matched_closed_should_open} matched workorders read "
+          "'closed' in Velocity but the real")
+    print("      Vision ship data derives OPEN -- the quotes a correct migration re-opens on live data.")
+
+    # Machine-readable mirror of the printed numbers, for callers/tests.
+    summary["diff_b"] = {
+        "velocity_quotes": total,
+        "matched": matched,                  # distinct workorders present in live
+        "matched_rows": matched_rows,        # live rows incl. clones (rows > matched => clones)
+        "clones": clones,
+        "unmatched_newer": unmatched_newer,
+        "unmatched_other": unmatched_other,
+        "untagged": untagged,
+        "matched_closed_should_open": matched_closed_should_open,
+        "velocity_status_matched": velo_status,
+    }
