@@ -1319,14 +1319,21 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
         : "border-2 border-transparent"
     }`}>
 
-      {/* Received Banner */}
+      {/* Received banner — shown once receiving has started (edits are then restricted).
+          Label must reflect the REAL state (fully vs partially received), not a fixed string. */}
       {hasBeenReceived && (
         <Card className="border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950">
           <CardContent className="py-3">
             <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
               <Check className="h-4 w-4" />
-              <span className="font-medium">Partially Received</span>
-              <span className="text-sm">— Some items on this PO have been received. Line item edits are restricted.</span>
+              {/* hasPendingItems = any line still has qty_pending > 0 -> a partial receive.
+                  When false, everything is received; the banner said "Partially" regardless — the bug. */}
+              <span className="font-medium">{hasPendingItems ? "Partially Received" : "Fully Received"}</span>
+              <span className="text-sm">
+                {hasPendingItems
+                  ? "— Some items on this PO have been received. Line item edits are restricted."
+                  : "— All items on this PO have been received. Line item edits are restricted."}
+              </span>
             </div>
           </CardContent>
         </Card>
