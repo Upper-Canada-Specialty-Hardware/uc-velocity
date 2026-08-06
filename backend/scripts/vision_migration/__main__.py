@@ -69,6 +69,14 @@ def main(argv: list[str] | None = None) -> int:
     p_load.add_argument("--i-understand-scratch-db", action="store_true",
                         help="Confirm the TARGET is a throwaway/preview DB, not production.")
 
+    p_dryrun = sub.add_parser(
+        "dryrun",
+        help="Read-only: what the quote import would do (adopt/insert/update/skip) "
+             "vs velocity_current.",
+    )
+    p_dryrun.add_argument("--database-url", default=None,
+                          help="Staging Postgres URL (or set MIGRATION_DATABASE_URL).")
+
     args = parser.parse_args(argv)
 
     try:
@@ -104,6 +112,13 @@ def main(argv: list[str] | None = None) -> int:
             print("Source: live Velocity (opened read-only).")
             load_velocity.load_velocity(source, target)
             print("Velocity load complete. Run 'reconcile' to see Diff B.")
+            return 0
+        if args.command == "dryrun":
+            # Read-only: plans the quote import against velocity_current and writes
+            # nothing. Refuse blocked (prod-looking) hosts; no confirm needed.
+            config.assert_scratch_target(target, confirmed=True)
+            from .sync import dry_run
+            dry_run.run_quote_dry_run(target)
             return 0
     except config.MigrationConfigError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
