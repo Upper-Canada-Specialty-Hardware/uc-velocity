@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum, Table, DateTime, Boolean, UniqueConstraint, Text
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum, Table, DateTime, Boolean, UniqueConstraint, Text, Index, text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -32,12 +32,66 @@ class POStatus(str, enum.Enum):
     closed = "Closed"
 
 
+# --------------------------------------------------------------------------- #
+# Vision-migration keys
+# --------------------------------------------------------------------------- #
+# Tables whose rows can be imported from the legacy UC Vision database carry a
+# stable "which Vision table + which Vision row" key. The importer matches on it
+# so re-running the import finds the existing row and UPDATEs it instead of
+# inserting a duplicate. Both columns are nullable -- rows a user creates directly
+# in Velocity have neither and are never touched by the importer. Factored into
+# helpers because every such table carries the identical pair + guard.
+
+def _legacy_source_col():
+    """Column holding which Vision table a row came from (e.g. 'tblServiceRecords').
+
+    Returns:
+        A fresh nullable String Column (a NEW instance per call -- a Column can't
+        be shared across tables). NULL means "created in Velocity, not migrated".
+    """
+    return Column(String, nullable=True)
+
+
+def _legacy_id_col():
+    """Column holding the Vision row's own primary key.
+
+    Returns:
+        A fresh nullable Integer Column. NULL means the row is user-created.
+    """
+    return Column(Integer, nullable=True)
+
+
+def _legacy_unique_index(table_name: str) -> Index:
+    """Partial unique index: one Velocity row per Vision row.
+
+    Enforces uniqueness of ``(legacy_source, legacy_id)`` ONLY where
+    ``legacy_id IS NOT NULL`` -- so a re-run can't duplicate a migrated row, while
+    user-created rows (both keys NULL) stay unconstrained. Partial keeps the index
+    small: it covers only migrated rows, not every user row.
+
+    Args:
+        table_name: The owning table's name; used only to name the index.
+
+    Returns:
+        A partial-unique ``Index`` for the table's ``__table_args__``.
+    """
+    return Index(
+        f"uq_{table_name}_legacy",
+        "legacy_source", "legacy_id",
+        unique=True,
+        postgresql_where=text("legacy_id IS NOT NULL"),
+    )
+
+
 class Category(Base):
     __tablename__ = "categories"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     type = Column(String, nullable=False)  # "part" or "labor"
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
+    __table_args__ = (_legacy_unique_index("categories"),)
 
     parts = relationship("Part", back_populates="category")
     labor_items = relationship("Labor", back_populates="category")
@@ -53,6 +107,9 @@ class Profile(Base):
     address = Column(String, nullable=False)
     postal_code = Column(String, nullable=False)
     default_discount_percent = Column(Float, nullable=True)  # Default vendor discount %
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
+    __table_args__ = (_legacy_unique_index("profiles"),)
 
     # Relationships
     contacts = relationship("Contact", back_populates="profile", cascade="all, delete-orphan")
@@ -98,6 +155,9 @@ class Part(Base):
     vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=True, index=True)
     list_price = Column(Float, nullable=True)
     discount_percent = Column(Float, nullable=True)  # Per-part discount override (nullable)
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
+    __table_args__ = (_legacy_unique_index("parts"),)
 
     # Relationships
     category = relationship("Category", back_populates="parts")
@@ -114,6 +174,9 @@ class Labor(Base):
     rate = Column(Float, nullable=False)
     markup_percent = Column(Float, default=50.0)
     category_id = Column(Integer, ForeignKey('categories.id'))
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
+    __table_args__ = (_legacy_unique_index("labor"),)
 
     # Relationships
     category = relationship("Category", back_populates="labor_items")
@@ -129,6 +192,9 @@ class Miscellaneous(Base):
     markup_percent = Column(Float, default=50.0)
     category_id = Column(Integer, ForeignKey('categories.id'))
     is_system_item = Column(Boolean, default=False)
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
+    __table_args__ = (_legacy_unique_index("miscellaneous"),)
 
     # Relationships
     category = relationship("Category")
@@ -153,6 +219,9 @@ class Project(Base):
     ucsh_project_number = Column(String, nullable=True)
     uca_project_number = Column(String, unique=True, nullable=False)
     project_lead = Column(String, nullable=True)  # Static contact name
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
+    __table_args__ = (_legacy_unique_index("projects"),)
 
     # Relationships
     customer = relationship("Profile", back_populates="projects")
@@ -164,6 +233,7 @@ class Quote(Base):
     __tablename__ = "quotes"
     __table_args__ = (
         UniqueConstraint('project_id', 'quote_sequence', name='uq_quote_project_sequence'),
+        _legacy_unique_index("quotes"),  # at most one quote per source Vision workorder
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -181,6 +251,8 @@ class Quote(Base):
     misc_markup_percent = Column(Float, nullable=True)  # Section-level markup for misc
     cost_code_id = Column(Integer, ForeignKey('cost_codes.id'), nullable=True)
     legacy_imported = Column(Boolean, nullable=False, server_default='false')
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
 
     # Relationships
     project = relationship("Project", back_populates="quotes")
@@ -209,6 +281,9 @@ class QuoteLineItem(Base):
     original_markup_percent = Column(Float, nullable=True)  # Individual markup before global override
     base_cost = Column(Float, nullable=True)  # Base cost used for recalculation
     markup_percent = Column(Float, nullable=True)  # Per-line-item markup (when global OFF)
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
+    __table_args__ = (_legacy_unique_index("quote_line_items"),)
 
     # Relationships
     quote = relationship("Quote", back_populates="line_items")
@@ -221,6 +296,7 @@ class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
     __table_args__ = (
         UniqueConstraint('project_id', 'po_sequence', name='uq_po_project_sequence'),
+        _legacy_unique_index("purchase_orders"),  # at most one PO per source Vision PO
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -235,6 +311,8 @@ class PurchaseOrder(Base):
     status = Column(Enum(POStatus), default=POStatus.draft)
     cost_code_id = Column(Integer, ForeignKey('cost_codes.id'), nullable=True)
     legacy_imported = Column(Boolean, nullable=False, server_default='false')
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
 
     # Relationships
     project = relationship("Project", back_populates="purchase_orders")
@@ -258,6 +336,9 @@ class POLineItem(Base):
     qty_pending = Column(Integer, default=0)
     qty_received = Column(Integer, default=0)
     actual_unit_price = Column(Float, nullable=True)
+    legacy_source = _legacy_source_col()  # Vision import: which source table
+    legacy_id = _legacy_id_col()          # Vision import: source row's id
+    __table_args__ = (_legacy_unique_index("po_line_items"),)
 
     # Relationships
     purchase_order = relationship("PurchaseOrder", back_populates="line_items")
