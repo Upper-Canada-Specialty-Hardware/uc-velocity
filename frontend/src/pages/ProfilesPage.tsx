@@ -24,12 +24,12 @@ import { Input } from "@/components/ui/input"
 import { api } from "@/api/client"
 import type { Profile, Part, PricebookImportResult } from "@/types"
 import {
-  Plus, Trash2, Pencil, Users, Building, Phone, Mail, MapPin, Upload, Search,
+  Plus, Trash2, Pencil, Users, Building, User, Phone, Mail, MapPin, Upload, Search,
 } from "lucide-react"
 import { EMPTY_VALUE } from "@/lib/format"
 import { VirtualizedTable, headerCellClass, cellClass } from "@/components/ui/virtualized-table"
 
-type ProfileTab = "customers" | "vendors"
+type ProfileTab = "customers" | "vendors" | "staff"
 
 function getPrimaryPhone(profile: Profile): string | null {
   const phone = profile.contacts?.[0]?.phone_numbers?.[0]?.number
@@ -48,6 +48,7 @@ export function ProfilesPage() {
   const [activeTab, setActiveTab] = useState<ProfileTab>("customers")
   const [customerSearch, setCustomerSearch] = useState("")
   const [vendorSearch, setVendorSearch] = useState("")
+  const [staffSearch, setStaffSearch] = useState("")
 
   // Pricebook state (vendor detail view)
   const [vendorParts, setVendorParts] = useState<Part[]>([])
@@ -138,6 +139,7 @@ export function ProfilesPage() {
 
   const customers = useMemo(() => profiles.filter((p) => p.type === "customer"), [profiles])
   const vendors = useMemo(() => profiles.filter((p) => p.type === "vendor"), [profiles])
+  const staff = useMemo(() => profiles.filter((p) => p.type === "staff"), [profiles])
 
   const filteredCustomers = useMemo(() => {
     const n = customerSearch.trim().toLowerCase()
@@ -167,12 +169,26 @@ export function ProfilesPage() {
     })
   }, [vendors, vendorSearch])
 
+  const filteredStaff = useMemo(() => {
+    const n = staffSearch.trim().toLowerCase()
+    if (!n) return staff
+    return staff.filter((p) => {
+      const hay = [
+        p.name,
+        p.address,
+        p.postal_code,
+        ...p.contacts.flatMap((c) => [c.name, c.email ?? "", ...c.phone_numbers.map((ph) => ph.number)]),
+      ].join(" ").toLowerCase()
+      return hay.includes(n)
+    })
+  }, [staff, staffSearch])
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold">Profiles</h1>
-          <p className="text-muted-foreground">Manage customers and vendors</p>
+          <p className="text-muted-foreground">Manage customers, vendors, and staff</p>
         </div>
         <Button onClick={handleAdd} className="gap-2">
           <Plus className="h-4 w-4" />
@@ -198,6 +214,10 @@ export function ProfilesPage() {
             <TabsTrigger value="vendors" className="gap-2">
               <Building className="h-4 w-4" />
               Vendors ({vendors.length})
+            </TabsTrigger>
+            <TabsTrigger value="staff" className="gap-2">
+              <User className="h-4 w-4" />
+              Staff ({staff.length})
             </TabsTrigger>
           </TabsList>
 
@@ -238,6 +258,25 @@ export function ProfilesPage() {
               onDelete={handleDelete}
             />
           </TabsContent>
+
+          <TabsContent value="staff" className="space-y-4">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search staff by name, address, contact..."
+                value={staffSearch}
+                onChange={(e) => setStaffSearch(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <ProfileTable
+              profiles={filteredStaff}
+              emptyMessage={staffSearch ? "No staff match your search." : "No staff yet. Add your first staff profile."}
+              onRowClick={handleRowClick}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+            />
+          </TabsContent>
         </Tabs>
       )}
 
@@ -247,11 +286,12 @@ export function ProfilesPage() {
           <DialogHeader>
             <DialogTitle>{editingProfile ? "Edit Profile" : "Add New Profile"}</DialogTitle>
             <DialogDescription>
-              {editingProfile ? "Update the profile details below." : "Create a new customer or vendor with at least one contact."}
+              {editingProfile ? "Update the profile details below." : "Create a new customer, vendor, or staff profile with at least one contact."}
             </DialogDescription>
           </DialogHeader>
           <ProfileForm
             profile={editingProfile ?? undefined}
+            defaultType={activeTab === "staff" ? "staff" : activeTab === "vendors" ? "vendor" : "customer"}
             onSuccess={() => {
               handleEditDialogClose(false)
               fetchData()
@@ -268,6 +308,8 @@ export function ProfilesPage() {
             <DialogTitle className="flex items-center gap-2">
               {viewingProfile?.type === 'customer' ? (
                 <Users className="h-5 w-5" />
+              ) : viewingProfile?.type === 'staff' ? (
+                <User className="h-5 w-5" />
               ) : (
                 <Building className="h-5 w-5" />
               )}
