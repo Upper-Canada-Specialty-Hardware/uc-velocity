@@ -80,6 +80,7 @@ def create_snapshot(
             part_id=item.part_id,
             misc_id=item.misc_id,
             description=item.description,
+            description_override=item.description_override,
             quantity=item.quantity,
             unit_price=item.unit_price,
             qty_pending=item.qty_pending,
@@ -530,6 +531,7 @@ def clone_quote(quote_id: int, db: Session = Depends(get_db)):
             part_id=item.part_id,
             misc_id=item.misc_id,
             description=item.description,
+            description_override=item.description_override,
             quantity=item.quantity,
             unit_price=item.unit_price,
             qty_pending=item.quantity,  # Reset: pending = quantity
@@ -922,6 +924,10 @@ def update_quote_line(
         if db_line.unit_price != line_data.unit_price:
             changes.append(f"unit_price: ${db_line.unit_price or 0:.2f} → ${line_data.unit_price:.2f}")
         db_line.unit_price = line_data.unit_price
+    if line_data.description_override is not None:
+        if db_line.description_override != line_data.description_override:
+            changes.append("description override updated")
+        db_line.description_override = line_data.description_override
 
     # Create snapshot if there were actual changes
     if changes:
@@ -1001,6 +1007,7 @@ def delete_quote_line(quote_id: int, line_id: int, db: Session = Depends(get_db)
             part_id=item.part_id,
             misc_id=item.misc_id,
             description=item.description,
+            description_override=item.description_override,
             quantity=item.quantity,
             unit_price=item.unit_price,
             qty_pending=item.qty_pending,
@@ -1184,6 +1191,11 @@ def commit_edits(
             if change.description is not None and change.description != line_item.description:
                 item_changes.append("updated description")
                 line_item.description = change.description
+
+            # Update per-quote description override if provided (issue #178)
+            if change.description_override is not None and change.description_override != line_item.description_override:
+                item_changes.append("updated description override")
+                line_item.description_override = change.description_override
 
             # Update base_cost (unit cost) if provided
             if change.base_cost is not None and change.base_cost != line_item.base_cost:
@@ -1390,7 +1402,9 @@ def create_invoice(
             invoice_id=invoice.id,
             quote_line_item_id=line_item.id,
             item_type=line_item.item_type,
-            description=line_item.description or item_desc,
+            # Freeze the customer-facing description: a per-quote override (issue #178)
+            # wins over the catalog/original label, so the invoice matches the quote.
+            description=line_item.description_override or line_item.description or item_desc,
             unit_price=line_item.unit_price,
             qty_ordered=line_item.quantity,
             qty_fulfilled_this_invoice=fulfill_qty,
@@ -1573,6 +1587,7 @@ def revert_to_snapshot(quote_id: int, version: int, db: Session = Depends(get_db
                 part_id=item_state.part_id,
                 misc_id=item_state.misc_id,
                 description=item_state.description,
+                description_override=item_state.description_override,
                 quantity=item_state.quantity,
                 unit_price=item_state.unit_price,
                 qty_pending=item_state.qty_pending,
@@ -1613,6 +1628,7 @@ def revert_to_snapshot(quote_id: int, version: int, db: Session = Depends(get_db
             part_id=item.part_id,
             misc_id=item.misc_id,
             description=item.description,
+            description_override=item.description_override,
             quantity=item.quantity,
             unit_price=item.unit_price,
             qty_pending=item.qty_pending,
