@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
-import { Show, SignInButton, UserButton } from "@clerk/react"
+import { Show, SignInButton, UserButton, useUser } from "@clerk/react"
+import { tel } from "@/lib/tel"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,6 +17,7 @@ import { PartForm } from "@/components/forms/PartForm"
 import { LaborForm } from "@/components/forms/LaborForm"
 import { MiscForm } from "@/components/forms/MiscForm"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { FeedbackWidget } from "@/components/FeedbackWidget"
 import { ProjectsPage } from "@/pages/ProjectsPage"
 import { api } from "@/api/client"
 import { useIsAdmin } from "@/hooks/use-is-admin"
@@ -127,6 +129,16 @@ function App() {
       navigate("/projects", { replace: true })
     }
   }, [currentView, isAdmin, navigate])
+
+  // Browser telemetry: attach the signed-in user (opaque Clerk id + display name,
+  // never an email/token) to every event, and clear to anonymous on sign-out.
+  // app_start + tab-hide flush live in lib/tel.ts. Inert unless telemetry env is set.
+  const { isLoaded: telUserLoaded, isSignedIn: telSignedIn, user: telUser } = useUser()
+  useEffect(() => {
+    if (!telUserLoaded) return
+    if (telSignedIn && telUser) tel.identify(telUser.id, telUser.fullName ?? telUser.username ?? null)
+    else tel.identify(null)
+  }, [telUserLoaded, telSignedIn, telUser])
 
   // Inventory state
   const [parts, setParts] = useState<Part[]>([])
@@ -820,6 +832,9 @@ function App() {
           )}
         </Suspense>
       </main>
+
+      {/* In-app feedback thread (hidden unless telemetry is configured). */}
+      <FeedbackWidget />
 
       {/* Part Dialog */}
       <Dialog open={partDialogOpen} onOpenChange={handlePartDialogClose}>
