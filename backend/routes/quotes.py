@@ -1402,7 +1402,9 @@ def create_invoice(
             invoice_id=invoice.id,
             quote_line_item_id=line_item.id,
             item_type=line_item.item_type,
-            description=line_item.description or item_desc,
+            # Freeze the customer-facing description: a per-quote override (issue #178)
+            # wins over the catalog/original label, so the invoice matches the quote.
+            description=line_item.description_override or line_item.description or item_desc,
             unit_price=line_item.unit_price,
             qty_ordered=line_item.quantity,
             qty_fulfilled_this_invoice=fulfill_qty,

@@ -825,6 +825,7 @@ export interface StagedLineItemChange {
   part_id?: number;
   misc_id?: number;
   description?: string;
+  description_override?: string;  // Per-quote display description override (issue #178)
   quantity?: number;
   unit_price?: number;
   is_pms?: boolean;
