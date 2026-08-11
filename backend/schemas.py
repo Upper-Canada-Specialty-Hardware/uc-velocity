@@ -230,6 +230,7 @@ class Part(PartBase):
 # ===== Labor Schemas =====
 class LaborBase(BaseModel):
     description: str
+    product_code: Optional[str] = None  # Product code, mirrors Part.part_number (issue #179)
     hours: float = 1
     rate: float
     markup_percent: float = 50.0
@@ -252,6 +253,7 @@ class LaborCreate(LaborBase):
 
 class LaborUpdate(BaseModel):
     description: Optional[str] = None
+    product_code: Optional[str] = None  # Product code, mirrors Part.part_number (issue #179)
     hours: Optional[float] = None
     rate: Optional[float] = None
     markup_percent: Optional[float] = None
