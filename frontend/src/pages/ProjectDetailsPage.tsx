@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDate } from "@/lib/format"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
   Dialog,
@@ -631,9 +630,11 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                     />
                   </div>
                 </div>
-                <div className="flex-1 min-h-0 px-3 pb-3" onKeyDown={onSidebarKeyDown}>
-                  <ScrollArea className="h-full">
-                    <div className="space-y-1 pr-2">
+                {/* The document list owns its own always-visible native scrollbar (like the
+                    page's) so long Quotes/POs/Invoices lists are clearly scrollable; the prior
+                    Radix ScrollArea auto-hid its bar, which read as "no scrollbar". */}
+                <div className="flex-1 min-h-0 px-3 pb-3 overflow-y-auto" onKeyDown={onSidebarKeyDown}>
+                    <div className="space-y-1 pr-1">
                       {activeTab === "quotes" && (
                         filteredQuotes.length === 0 ? (
                           <EmptyListMessage
@@ -691,7 +692,6 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                         )
                       )}
                     </div>
-                  </ScrollArea>
                 </div>
               </Tabs>
             </>
