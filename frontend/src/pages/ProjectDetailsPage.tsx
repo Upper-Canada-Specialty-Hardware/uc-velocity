@@ -506,7 +506,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-screen flex flex-col">
       {/* Header */}
       <div className="border-b bg-card p-4">
         <Button variant="ghost" size="sm" onClick={() => guardedNavigate(onBack)} className="mb-2">
@@ -630,12 +630,13 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                     />
                   </div>
                 </div>
-                {/* Document list scroll container. Explicit viewport-relative height + native
-                    overflow — the same pattern the inventory VirtualizedTable uses (a fixed
-                    height + overflow:auto) — so the list is its OWN bounded scroll region with a
-                    visible scrollbar, independent of the page's scrollbar. Flexbox height
-                    (flex-1) did not constrain it here, so it never overflowed and showed no bar. */}
-                <div className="px-3 pb-3 overflow-y-auto h-[calc(100vh-270px)]" onKeyDown={onSidebarKeyDown}>
+                {/* Document list scroll container. The page root is now h-screen
+                    (viewport-locked), so this flex-1 min-h-0 region gets a real bounded height:
+                    it fills the sidebar to the bottom and scrolls on its own with a visible
+                    scrollbar, independent of the editor pane. (Previously the root was h-full
+                    under a min-h-screen shell, which never resolved to a definite height, so the
+                    list couldn't bound or overflow — hence no scrollbar.) */}
+                <div className="flex-1 min-h-0 px-3 pb-3 overflow-y-auto" onKeyDown={onSidebarKeyDown}>
                     <div className="space-y-1 pr-2">
                       {activeTab === "quotes" && (
                         filteredQuotes.length === 0 ? (
