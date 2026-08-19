@@ -80,6 +80,7 @@ interface QuoteEditorProps {
   quoteId: number
   onUpdate?: () => void
   onSelectQuote?: (quoteId: number) => void
+  onMoved?: () => void  // after a move the quote left this project; parent closes the editor + refreshes (#209)
   /** Reports unsaved-changes state up so a parent navigation guard can prompt before
    * this editor unmounts, e.g. when switching to another quote (Issue #204). */
   onDirtyStateChange?: (dirty: boolean) => void
@@ -94,7 +95,7 @@ export interface QuoteEditorHandle {
 }
 
 export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(function QuoteEditor(
-  { quoteId, onUpdate, onSelectQuote, onDirtyStateChange },
+  { quoteId, onUpdate, onSelectQuote, onMoved, onDirtyStateChange },
   ref,
 ) {
   const [quote, setQuote] = useState<Quote | null>(null)
@@ -2072,11 +2073,14 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     try {
       const moved = await api.quotes.move(quote.id, parseInt(moveTargetId, 10))
       setMoveDialogOpen(false)
-      onUpdate?.()  // refresh the parent's project/quote lists
-      if (onSelectQuote) {
-        onSelectQuote(moved.id)  // re-open the quote (its number changed)
+      // A move keeps the same quote id, so the parent can't reload by re-selecting it.
+      // Confirm the new number, then let the parent close this editor + refresh the list
+      // (the quote now lives under the target project, not this one).
+      toast({ title: "Quote moved", description: `Now ${moved.quote_number} in the selected project.` })
+      if (onMoved) {
+        onMoved()
       } else {
-        alert(`Quote moved. New number: ${moved.quote_number}`)
+        onUpdate?.()
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to move quote")

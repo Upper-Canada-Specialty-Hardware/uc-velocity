@@ -71,10 +71,11 @@ interface POEditorProps {
   poId: number
   onUpdate?: () => void
   onSelectPO?: (poId: number) => void
+  onMoved?: () => void  // after a move the PO left this project; parent closes the editor + refreshes (#209)
   onDirtyStateChange?: (isDirty: boolean) => void
 }
 
-export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POEditorProps) {
+export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChange }: POEditorProps) {
   // ===== Core State =====
   const [po, setPO] = useState<PurchaseOrder | null>(null)
   const [loading, setLoading] = useState(true)
@@ -721,11 +722,14 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     try {
       const moved = await api.purchaseOrders.move(po.id, parseInt(moveTargetId, 10))
       setMoveDialogOpen(false)
-      onUpdate?.()  // refresh the parent's project/PO lists
-      if (onSelectPO) {
-        onSelectPO(moved.id)  // re-open the PO (its number changed)
+      // A move keeps the same PO id, so the parent can't reload by re-selecting it.
+      // Confirm the new number, then let the parent close this editor + refresh the list
+      // (the PO now lives under the target project, not this one).
+      alert(`Purchase order moved. New number: ${moved.po_number}`)
+      if (onMoved) {
+        onMoved()
       } else {
-        alert(`Purchase order moved. New number: ${moved.po_number}`)
+        onUpdate?.()
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to move purchase order")

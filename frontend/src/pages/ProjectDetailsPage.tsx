@@ -359,6 +359,15 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
     })
   }, [guardedNavigate, navigate, projectId])
 
+  // A moved quote/PO has left this project. Its id is unchanged, so the editor can't
+  // reload by re-selecting it — close the editor, drop the doc from the URL, and refresh
+  // the list (the moved doc now lives under the target project). Issue #209.
+  const handleDocMoved = () => {
+    setSelectedDoc(null)
+    navigate(`/projects/${projectId}?tab=${activeTab}`)
+    fetchProject()
+  }
+
   const handleCreateQuote = async () => {
     try {
       const quote = await api.quotes.create({ project_id: projectId })
@@ -751,6 +760,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                     fetchProject()
                     if (project?.quotes) fetchInvoices(project.quotes)
                   }}
+                  onMoved={handleDocMoved}
                   onDirtyStateChange={handleEditorDirtyChange}
                 />
               ) : selectedDoc.type === "po" ? (
@@ -758,6 +768,7 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                   poId={selectedDoc.id}
                   onUpdate={fetchProject}
                   onSelectPO={(newPoId) => setSelectedDoc({ type: "po", id: newPoId })}
+                  onMoved={handleDocMoved}
                   onDirtyStateChange={handleEditorDirtyChange}
                 />
               ) : (
