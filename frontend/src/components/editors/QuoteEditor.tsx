@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -80,9 +80,23 @@ interface QuoteEditorProps {
   quoteId: number
   onUpdate?: () => void
   onSelectQuote?: (quoteId: number) => void
+  /** Reports unsaved-changes state up so a parent navigation guard can prompt before
+   * this editor unmounts, e.g. when switching to another quote (Issue #204). */
+  onDirtyStateChange?: (dirty: boolean) => void
 }
 
-export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorProps) {
+/** Imperative surface a parent can drive to commit staged edits, then navigate (Issue #204). */
+export interface QuoteEditorHandle {
+  /** True when there are committable edit-mode staged changes (not staged invoicing). */
+  canCommit: boolean
+  /** Commits staged edits; resolves true on success, false if nothing committed or it failed. */
+  commit: () => Promise<boolean>
+}
+
+export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(function QuoteEditor(
+  { quoteId, onUpdate, onSelectQuote, onDirtyStateChange },
+  ref,
+) {
   const [quote, setQuote] = useState<Quote | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -233,7 +247,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // expectedVersion: when this refetch follows an edit WE just made that bumped the
   // version (e.g. a created-date edit), pass the new version so it isn't mistaken for an
   // external change. Defaults to the captured edit/invoicing baseline from state.
-  const fetchQuote = async (expectedVersion?: number) => {
+  const fetchQuote = async (expectedVersion?: number, isFreshLoad = false) => {
     setLoading(true)
     setError(null)
     try {
@@ -243,13 +257,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       const editBaseline = expectedVersion ?? editModeStartVersion
 
       // Flow 7E: Detect external changes during invoicing or edit mode
-      if (editorMode === "invoicing" && invoicingBaseline !== null && data.current_version !== invoicingBaseline) {
+      if (!isFreshLoad && editorMode === "invoicing" && invoicingBaseline !== null && data.current_version !== invoicingBaseline) {
         // Quote was modified externally - clear staging and warn user
         clearInvoicingState()
         setQuoteChangedDialogOpen(true)
         // Update the version to the new value so subsequent fetches don't re-trigger
         setInitialQuoteVersion(data.current_version)
-      } else if (editorMode === "edit" && editBaseline !== null && data.current_version !== editBaseline) {
+      } else if (!isFreshLoad && editorMode === "edit" && editBaseline !== null && data.current_version !== editBaseline) {
         // Quote was modified externally while editing - clear staging and warn user
         clearEditModeState()
         setQuoteChangedDialogOpen(true)
@@ -284,7 +298,21 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   }
 
   useEffect(() => {
-    fetchQuote()
+    // Switching to a different quote is a fresh start: drop any staged edits/invoicing
+    // and return to view mode, so the previous quote's unsaved state can't bleed into
+    // this one (Issue #204 — the leave-guard's Discard path relies on this reset).
+    setEditorMode("view")
+    setStagedEdits(new Map())
+    setStagedAdds([])
+    setStagedDeletes(new Set())
+    setStagedFulfillments(new Map())
+    setEditModeStartVersion(null)
+    setInitialQuoteVersion(null)
+    // Fresh load of a different quote: skip the Flow 7E external-change check. The
+    // view/null resets above aren't visible to fetchQuote's closure yet (setState is
+    // async), so without this flag it compares the NEW quote against the PREVIOUS
+    // quote's stale edit/invoicing baseline and wrongly shows "Quote Data Changed" (#204).
+    fetchQuote(undefined, true)
     fetchResources()
     api.companySettings.get().then(setCompanySettings).catch(() => {})
     api.costCodes.getAll().then(setCostCodes).catch(() => {})
@@ -312,6 +340,30 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       window.removeEventListener("beforeunload", handleBeforeUnload)
     }
   }, [hasAnyUnsavedChanges])
+
+  // --- Unsaved-changes guard wiring (Issue #204) ---
+  // Report unsaved state up so a parent navigation guard (ProjectDetailsPage) can
+  // prompt before this editor unmounts, e.g. when switching to another quote. Mirrors
+  // POEditor's onDirtyStateChange; hasAnyUnsavedChanges covers edit + invoicing.
+  useEffect(() => {
+    onDirtyStateChange?.(hasAnyUnsavedChanges)   // push current dirty state to the parent
+  }, [hasAnyUnsavedChanges, onDirtyStateChange])
+  useEffect(() => {
+    return () => onDirtyStateChange?.(false)     // clear the parent's flag if we unmount
+  }, [onDirtyStateChange])
+
+  // Stable holder for the latest commit fn + committability, so the imperative handle
+  // below keeps a stable identity while always delegating to the current values (the
+  // holder is refreshed after handleCommitChanges is defined, further down).
+  const commitApiRef = useRef<{ canCommit: boolean; commit: () => Promise<boolean> }>({
+    canCommit: false,
+    commit: async () => false,
+  })
+  // Expose commit() to the parent so its "Commit & leave" action can commit, then navigate.
+  useImperativeHandle(ref, () => ({
+    get canCommit() { return commitApiRef.current.canCommit },   // read the latest committability
+    commit: () => commitApiRef.current.commit(),                 // delegate to the latest handler
+  }), [])
 
   const openAddDialog = (type: LineItemType) => {
     setAddDialogType(type)
@@ -738,8 +790,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     })
   }
 
-  const handleCommitChanges = async () => {
-    if (!hasStagedChanges) return
+  const handleCommitChanges = async (): Promise<boolean> => {
+    if (!hasStagedChanges) return false
 
     setIsCommitting(true)
     setCommitConfirmOpen(false)
@@ -758,7 +810,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           setEditModeStartVersion(freshQuote.current_version)
           setQuoteChangedDialogOpen(true)
           setIsCommitting(false)
-          return
+          return false
         }
       }
 
@@ -830,13 +882,22 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       // Refresh quote data
       fetchQuote()
       onUpdate?.()
+      return true                     // success -> a "Commit & leave" caller may navigate
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to commit changes")
+      return false                    // failure -> the caller should stay put
     } finally {
       setIsCommitting(false)
     }
   }
 
+  // Keep the imperative handle (Issue #204) pointing at the latest commit fn and
+  // committability. Plain assignment (not a hook) so it stays order-safe; on the
+  // loading/error early-return paths it simply keeps the safe defaults above.
+  commitApiRef.current = {
+    canCommit: editorMode === "edit" && hasStagedChanges,   // only offer Commit for staged edits
+    commit: handleCommitChanges,                            // resolves true on success
+  }
   // These per-field "Save" buttons only close the inline editor; the value is held
   // in local state and persisted together on Commit (see handleCommitChanges).
   const handleSaveClientPoNumber = () => setIsEditingClientPo(false)
@@ -4477,4 +4538,4 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       </Dialog>
     </div>
   )
-}
+})
