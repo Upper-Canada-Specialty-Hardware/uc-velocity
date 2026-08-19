@@ -28,6 +28,7 @@ export interface CompanySettings {
   hst_rate: number;
   default_pms_percent?: number | null;
   logo_data_url?: string | null;
+  usd_to_cad_rate: number;  // Live USD→CAD rate for USD-priced parts
 }
 
 export interface CompanySettingsUpdate {
@@ -39,6 +40,7 @@ export interface CompanySettingsUpdate {
   hst_rate?: number;
   default_pms_percent?: number | null;
   logo_data_url?: string | null;
+  usd_to_cad_rate?: number;  // Live USD→CAD rate for USD-priced parts
 }
 
 // ===== System Rates =====
@@ -174,6 +176,7 @@ export interface Part {
   vendor_id?: number;
   list_price?: number;
   discount_percent?: number;  // Per-part discount override
+  is_usd_priced: boolean;  // Cost is in USD; converted to CAD on the quote
 }
 
 export interface PartCreate {
@@ -186,6 +189,7 @@ export interface PartCreate {
   vendor_id?: number;
   list_price?: number;
   discount_percent?: number;
+  is_usd_priced?: boolean;  // Cost is in USD; converted to CAD on the quote
 }
 
 // ===== Miscellaneous =====
