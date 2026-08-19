@@ -95,7 +95,7 @@ def get_backlog_quotes(db: Session = Depends(get_db)):
         quote_number = format_quote_number(
             project.uca_project_number,
             quote.quote_sequence,
-            quote.current_version,
+            quote.item_list_version,  # visible version: line-item changes only (#202)
         )
 
         result.append(BacklogQuoteItem(

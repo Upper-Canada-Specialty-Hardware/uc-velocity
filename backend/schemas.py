@@ -35,6 +35,7 @@ class CompanySettingsBase(BaseModel):
     hst_rate: float = 13.0
     default_pms_percent: Optional[float] = None
     logo_data_url: Optional[str] = None
+    usd_to_cad_rate: float = 1.38  # Live USD→CAD rate for USD-priced parts
 
 
 class CompanySettingsUpdate(BaseModel):
@@ -46,6 +47,7 @@ class CompanySettingsUpdate(BaseModel):
     hst_rate: Optional[float] = None
     default_pms_percent: Optional[float] = None
     logo_data_url: Optional[str] = None
+    usd_to_cad_rate: Optional[float] = None  # Live USD→CAD rate for USD-priced parts
 
 
 class CompanySettings(CompanySettingsBase):
@@ -202,6 +204,7 @@ class PartBase(BaseModel):
     vendor_id: Optional[int] = None
     list_price: Optional[float] = None
     discount_percent: Optional[float] = None  # Per-part discount override
+    is_usd_priced: bool = False  # Cost is in USD; converted to CAD on the quote
 
 
 class PartCreate(PartBase):
@@ -218,6 +221,7 @@ class PartUpdate(BaseModel):
     vendor_id: Optional[int] = None
     list_price: Optional[float] = None
     discount_percent: Optional[float] = None
+    is_usd_priced: Optional[bool] = None  # Cost is in USD; converted to CAD on the quote
 
 
 class Part(PartBase):

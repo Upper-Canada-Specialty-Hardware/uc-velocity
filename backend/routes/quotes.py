@@ -8,7 +8,8 @@ from auth import current_actor
 from utils import to_naive_utc
 from models import (
     Quote, QuoteLineItem, Project, Labor, Part, Miscellaneous,
-    QuoteSnapshot, QuoteLineItemSnapshot, Invoice, InvoiceLineItem, CostCode
+    QuoteSnapshot, QuoteLineItemSnapshot, Invoice, InvoiceLineItem, CostCode,
+    CompanySettings
 )
 from datetime import datetime
 
@@ -24,6 +25,11 @@ from schemas import (
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 10000
+
+# Snapshot action types that represent a change to the Parts/Labour/Misc line
+# list. Only these advance the visible item-list version (issue #202); "invoice"
+# and "date_edit" snapshot + bump the internal counter but leave the number alone.
+ITEM_LIST_ACTION_TYPES = {"create", "edit", "delete"}
 
 
 def create_snapshot(
@@ -46,9 +52,13 @@ def create_snapshot(
     Returns:
         The created QuoteSnapshot
     """
-    # Increment version for change detection
+    # Increment the internal audit counter on every snapshot.
     new_version = quote.current_version + 1
     quote.current_version = new_version
+
+    # Advance the visible item-list version only for line-item changes (#202).
+    if action_type in ITEM_LIST_ACTION_TYPES:
+        quote.item_list_version = (quote.item_list_version or 0) + 1
 
     # Create the snapshot (record the acting user from the request context)
     actor = current_actor.get()
@@ -149,6 +159,47 @@ def calculate_base_cost(item: QuoteLineItem, db: Session) -> float:
             return item.unit_price or 0
 
     return 0
+
+
+def _get_usd_to_cad_rate(db: Session) -> float:
+    """Read the current USD→CAD exchange rate from company settings.
+
+    Args:
+        db: Database session.
+
+    Returns:
+        The configured usd_to_cad_rate; 1.0 as a fail-safe when settings or the
+        rate are missing (no conversion rather than a wrong one).
+    """
+    settings = db.query(CompanySettings).first()  # singleton row
+    if not settings or settings.usd_to_cad_rate is None:
+        return 1.0  # fail-safe: leave cost unchanged
+    return settings.usd_to_cad_rate  # live rate
+
+
+def apply_currency_conversion(item: QuoteLineItem, base_cost: float, db: Session) -> float:
+    """Convert a USD-priced part's base cost to CAD at the live company rate.
+
+    Additive step layered on top of calculate_base_cost's output — it does not
+    touch the off-limits base-cost/markup math. Only part line items whose
+    linked Part is flagged is_usd_priced are converted; every other item type
+    and all CAD parts pass through unchanged.
+
+    Args:
+        item: The line item whose base cost was just computed.
+        base_cost: The base cost returned by calculate_base_cost.
+        db: Database session.
+
+    Returns:
+        base_cost multiplied by the USD→CAD rate for USD parts; base_cost as-is otherwise.
+    """
+    if item.item_type != "part" or not item.part_id:
+        return base_cost  # only parts can be USD-priced
+    part = db.query(Part).filter(Part.id == item.part_id).first()  # look up the flag
+    if not part or not part.is_usd_priced:
+        return base_cost  # CAD part → no conversion
+    rate = _get_usd_to_cad_rate(db)  # live rate at commit time
+    return base_cost * rate  # USD cost → CAD
 
 
 def check_quote_not_frozen(quote_id: int, db: Session) -> None:
@@ -278,7 +329,7 @@ def populate_quote_number(quote: Quote, uca_project_number: str) -> QuoteSchema:
     response.quote_number = format_quote_number(
         uca_project_number,
         quote.quote_sequence,
-        quote.current_version
+        quote.item_list_version  # visible version: line-item changes only (#202)
     )
     return response
 
@@ -434,8 +485,9 @@ def update_quote_created_at(quote_id: int, payload: CreatedAtUpdate, db: Session
     """
     Edit the 'created on' date/time of a quote.
 
-    Bumps current_version by 1 (which changes the visible quote number) and records
-    the change in the audit trail. Rejected if the quote is frozen (invoiced), matching
+    Records the change in the audit trail (bumps the internal current_version) but
+    leaves the visible item-list version — and therefore the quote number —
+    unchanged (issue #202). Rejected if the quote is frozen (invoiced), matching
     the line-item edit guard.
     """
     db_quote = (
@@ -678,7 +730,8 @@ def toggle_markup_control(
 
                 # Store original markup and base cost
                 item.original_markup_percent = get_original_markup(item, db)
-                item.base_cost = calculate_base_cost(item, db)
+                # Convert USD-priced parts to CAD after the base cost is computed.
+                item.base_cost = apply_currency_conversion(item, calculate_base_cost(item, db), db)
 
                 # Apply section-appropriate markup
                 section_markup = _get_section_markup_from_quote(item.item_type, quote)
@@ -838,7 +891,8 @@ def add_quote_line(quote_id: int, line_data: QuoteLineItemCreate, db: Session = 
 
     # Always compute and store base_cost and markup_percent (Issue #60)
     if not line_data.is_pms:
-        db_line.base_cost = calculate_base_cost(db_line, db)
+        # Convert USD-priced parts to CAD after the base cost is computed.
+        db_line.base_cost = apply_currency_conversion(db_line, calculate_base_cost(db_line, db), db)
         db_line.original_markup_percent = get_original_markup(db_line, db)
 
         if quote.markup_control_enabled:
@@ -981,6 +1035,8 @@ def delete_quote_line(quote_id: int, line_id: int, db: Session = Depends(get_db)
     # Create snapshot BEFORE deleting - we need to manually include the deleted item
     new_version = quote.current_version + 1
     quote.current_version = new_version
+    # Deleting a line changes the item list, so advance the visible version too (#202).
+    quote.item_list_version = (quote.item_list_version or 0) + 1
 
     snapshot = QuoteSnapshot(
         quote_id=quote.id,
@@ -1130,7 +1186,8 @@ def commit_edits(
 
             # Always compute and store base_cost and markup_percent (Issue #60)
             if not change.is_pms:
-                new_item.base_cost = calculate_base_cost(new_item, db)
+                # Convert USD-priced parts to CAD after the base cost is computed.
+                new_item.base_cost = apply_currency_conversion(new_item, calculate_base_cost(new_item, db), db)
                 new_item.original_markup_percent = get_original_markup(new_item, db)
 
                 if quote.markup_control_enabled:
@@ -1215,7 +1272,8 @@ def commit_edits(
             # Recalculate unit_price whenever base_cost or markup_percent changed
             if change.base_cost is not None or change.markup_percent is not None:
                 if line_item.base_cost is None:
-                    line_item.base_cost = calculate_base_cost(line_item, db)
+                    # Convert USD-priced parts to CAD after the base cost is computed.
+                    line_item.base_cost = apply_currency_conversion(line_item, calculate_base_cost(line_item, db), db)
                 if line_item.base_cost:
                     line_item.unit_price = line_item.base_cost * (1 + (line_item.markup_percent or 0) / 100)
 
@@ -1429,8 +1487,10 @@ def create_invoice(
         invoice_id=invoice.id
     )
 
-    # Capture the quote version at invoice time for the structured invoice number
-    invoice.quote_version = quote.current_version
+    # Capture the visible item-list version at invoice time for the structured
+    # invoice number (issue #202): the invoice records the line-item revision it was
+    # cut against, and creating it does not advance that version.
+    invoice.quote_version = quote.item_list_version
 
     db.commit()
     db.refresh(invoice)
@@ -1607,6 +1667,9 @@ def revert_to_snapshot(quote_id: int, version: int, db: Session = Depends(get_db
 
     new_version = quote.current_version + 1
     quote.current_version = new_version
+    # A revert restores a different line-item state, so advance the visible version
+    # too (#202) — two distinct item lists never share a number.
+    quote.item_list_version = (quote.item_list_version or 0) + 1
 
     revert_snapshot = QuoteSnapshot(
         quote_id=quote.id,
