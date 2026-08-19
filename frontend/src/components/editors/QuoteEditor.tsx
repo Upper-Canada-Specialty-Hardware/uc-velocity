@@ -247,7 +247,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
   // expectedVersion: when this refetch follows an edit WE just made that bumped the
   // version (e.g. a created-date edit), pass the new version so it isn't mistaken for an
   // external change. Defaults to the captured edit/invoicing baseline from state.
-  const fetchQuote = async (expectedVersion?: number) => {
+  const fetchQuote = async (expectedVersion?: number, isFreshLoad = false) => {
     setLoading(true)
     setError(null)
     try {
@@ -257,13 +257,13 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
       const editBaseline = expectedVersion ?? editModeStartVersion
 
       // Flow 7E: Detect external changes during invoicing or edit mode
-      if (editorMode === "invoicing" && invoicingBaseline !== null && data.current_version !== invoicingBaseline) {
+      if (!isFreshLoad && editorMode === "invoicing" && invoicingBaseline !== null && data.current_version !== invoicingBaseline) {
         // Quote was modified externally - clear staging and warn user
         clearInvoicingState()
         setQuoteChangedDialogOpen(true)
         // Update the version to the new value so subsequent fetches don't re-trigger
         setInitialQuoteVersion(data.current_version)
-      } else if (editorMode === "edit" && editBaseline !== null && data.current_version !== editBaseline) {
+      } else if (!isFreshLoad && editorMode === "edit" && editBaseline !== null && data.current_version !== editBaseline) {
         // Quote was modified externally while editing - clear staging and warn user
         clearEditModeState()
         setQuoteChangedDialogOpen(true)
@@ -307,7 +307,12 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     setStagedDeletes(new Set())
     setStagedFulfillments(new Map())
     setEditModeStartVersion(null)
-    fetchQuote()
+    setInitialQuoteVersion(null)
+    // Fresh load of a different quote: skip the Flow 7E external-change check. The
+    // view/null resets above aren't visible to fetchQuote's closure yet (setState is
+    // async), so without this flag it compares the NEW quote against the PREVIOUS
+    // quote's stale edit/invoicing baseline and wrongly shows "Quote Data Changed" (#204).
+    fetchQuote(undefined, true)
     fetchResources()
     api.companySettings.get().then(setCompanySettings).catch(() => {})
     api.costCodes.getAll().then(setCostCodes).catch(() => {})
