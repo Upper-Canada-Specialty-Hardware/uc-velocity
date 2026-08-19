@@ -19,7 +19,7 @@ from schemas import (
     POReceivingLineItem as POReceivingLineItemSchema,
     POSnapshot as POSnapshotSchema, POLineItemSnapshot as POLineItemSnapshotSchema,
     PORevertPreview, POCommitEditsRequest, POCommitEditsResponse, StagedPOLineItemChange,
-    CreatedAtUpdate
+    CreatedAtUpdate, ProjectMove
 )
 
 DEFAULT_LIMIT = 50
@@ -49,10 +49,11 @@ def create_po_snapshot(
         The created POSnapshot
     """
     # Increment version for substantive changes only
-    # Version stays unchanged for: initial creation, status changes
+    # Version stays unchanged for: initial creation, status changes, move (#209)
     # Version increments for: edit, delete, receive, revert (substantive changes)
-    if action_type in ["create", "status_change"]:
-        # Keep version unchanged - these don't affect PO number
+    if action_type in ["create", "status_change", "move"]:
+        # Keep version unchanged - these don't change the PO's line items, so the
+        # PO number's version component is untouched (a move only changes UCA + seq).
         new_version = po.current_version
     else:
         # Increment version for substantive changes to line items or receivings
@@ -1448,3 +1449,81 @@ def clone_purchase_order(po_id: int, db: Session = Depends(get_db)):
     )
 
     return populate_po_number(new_po, project.uca_project_number)
+
+
+@router.post("/{po_id}/move", response_model=PurchaseOrderSchema)
+def move_purchase_order(po_id: int, payload: ProjectMove, db: Session = Depends(get_db)):
+    """Move a purchase order to a different project, re-parenting it in place (issue #209).
+
+    Like the quote move: the PO itself is kept (id, receivings, snapshots, history);
+    it gets a fresh po_sequence in the target project, so the number's UCA +
+    sequence change while the version component stays (a move is not a line-item
+    change — see create_po_snapshot). A "move" snapshot records it in the audit trail.
+
+    Args:
+        po_id: The purchase order to move.
+        payload: Target project id.
+        db: Database session.
+
+    Returns:
+        The moved PO with its new computed po_number.
+
+    Raises:
+        HTTPException: 404 if the PO is missing; 400 if the target project is
+            missing or is the PO's current project.
+    """
+    po = (
+        db.query(PurchaseOrder)
+        .options(joinedload(PurchaseOrder.project))
+        .filter(PurchaseOrder.id == po_id)
+        .first()
+    )
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+
+    if payload.project_id == po.project_id:  # no-op move
+        raise HTTPException(status_code=400, detail="Purchase order is already in that project")
+
+    source_uca = po.project.uca_project_number
+    old_number = format_po_number(source_uca, po.po_sequence, po.current_version)
+
+    # Lock the TARGET project and take the next PO sequence there.
+    target = (
+        db.query(Project)
+        .filter(Project.id == payload.project_id)
+        .with_for_update()
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=400, detail="Target project not found")
+
+    new_sequence = get_next_po_sequence(db, target.id)  # fresh sequence in target
+
+    # Re-parent in place: new project + new sequence (the visible number changes).
+    po.project_id = target.id
+    po.po_sequence = new_sequence
+
+    # Audit the move. "move" keeps the version unchanged (create_po_snapshot), so
+    # only UCA + sequence move in the number.
+    create_po_snapshot(
+        db,
+        po,
+        "move",
+        f"Moved from {source_uca} ({old_number}) to {target.uca_project_number}",
+    )
+
+    db.commit()
+
+    # Reload with relationships for the response.
+    po = (
+        db.query(PurchaseOrder)
+        .options(
+            joinedload(PurchaseOrder.vendor),
+            joinedload(PurchaseOrder.line_items).joinedload(POLineItem.part),
+            joinedload(PurchaseOrder.project),
+            joinedload(PurchaseOrder.cost_code),
+        )
+        .filter(PurchaseOrder.id == po_id)
+        .first()
+    )
+    return populate_po_number(po, po.project.uca_project_number)
