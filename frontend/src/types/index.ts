@@ -70,6 +70,7 @@ export interface SystemRateUpdate {
 // ===== Invoice Summary (for Reports) =====
 export interface InvoiceSummaryItem {
   invoice_id: number;
+  invoice_number: string; // Canonical number shown on the invoice document (Issue #205)
   invoice_date: string;
   uca_project_number: string;
   project_name: string;

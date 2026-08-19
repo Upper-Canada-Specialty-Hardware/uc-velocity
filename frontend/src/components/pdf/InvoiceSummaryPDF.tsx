@@ -74,7 +74,7 @@ export function InvoiceSummaryPDF({ invoices, dateRange, companySettings, projec
             style={[styles.tableRow, idx % 2 === 1 ? styles.tableRowAlt : {}]}
             wrap={false}
           >
-            <Text style={col.invoiceNum}>{inv.invoice_id}</Text>
+            <Text style={col.invoiceNum}>{inv.invoice_number}</Text>
             <Text style={col.invoiceDate}>{formatDate(inv.invoice_date)}</Text>
             <Text style={col.ucaProject}>{inv.uca_project_number}</Text>
             <Text style={col.poNumber}>{inv.client_po_number || ''}</Text>

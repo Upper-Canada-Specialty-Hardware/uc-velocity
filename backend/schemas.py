@@ -90,6 +90,7 @@ class SystemRate(SystemRateBase):
 # ===== Invoice Summary (for Reports) =====
 class InvoiceSummaryItem(BaseModel):
     invoice_id: int
+    invoice_number: str  # Canonical number shown on the invoice document (Issue #205): "{invoice_seq}-{UCA}-{quote_seq:04d}-{quote_version}"
     invoice_date: datetime
     uca_project_number: str
     project_name: str
