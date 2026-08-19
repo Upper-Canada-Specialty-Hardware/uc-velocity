@@ -20,7 +20,7 @@ from schemas import (
     QuoteSnapshot as QuoteSnapshotSchema,
     Invoice as InvoiceSchema, InvoiceCreate,
     RevertPreview, MarkupControlToggleRequest, MarkupControlToggleResponse,
-    CommitEditsRequest, CommitEditsResponse, CreatedAtUpdate
+    CommitEditsRequest, CommitEditsResponse, CreatedAtUpdate, ProjectMove
 )
 
 DEFAULT_LIMIT = 50
@@ -613,6 +613,91 @@ def clone_quote(quote_id: int, db: Session = Depends(get_db)):
 
     # Return with computed quote_number
     return populate_quote_number(new_quote, project.uca_project_number)
+
+
+@router.post("/{quote_id}/move", response_model=QuoteSchema)
+def move_quote(quote_id: int, payload: ProjectMove, db: Session = Depends(get_db)):
+    """Move a quote to a different project, re-parenting it in place (issue #209).
+
+    Unlike clone, the quote itself is kept — same id, and its invoices, snapshots,
+    and version history come along. Reassigns ``project_id`` and takes a fresh
+    sequence in the target project, so the visible number changes (new UCA +
+    sequence); the item-list version is left alone, since a move is not a
+    line-item change (issue #202). A "move" snapshot records it in the audit trail.
+
+    Args:
+        quote_id: The quote to move.
+        payload: Target project id.
+        db: Database session.
+
+    Returns:
+        The moved quote with its new computed quote_number.
+
+    Raises:
+        HTTPException: 404 if the quote is missing; 400 if the target project is
+            missing or is the quote's current project.
+    """
+    # Load the quote with its current project (needed for the audit description).
+    quote = (
+        db.query(Quote)
+        .options(joinedload(Quote.project))
+        .filter(Quote.id == quote_id)
+        .first()
+    )
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+
+    if payload.project_id == quote.project_id:  # no-op move
+        raise HTTPException(status_code=400, detail="Quote is already in that project")
+
+    source_uca = quote.project.uca_project_number  # for the audit note
+    # The number as it stood before the move, for the audit description.
+    old_number = format_quote_number(source_uca, quote.quote_sequence, quote.item_list_version)
+
+    # Lock the TARGET project row and take the next sequence there — avoids
+    # colliding with uq_quote_project_sequence and races on the target's max.
+    target = (
+        db.query(Project)
+        .filter(Project.id == payload.project_id)
+        .with_for_update()
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=400, detail="Target project not found")
+
+    new_sequence = get_next_quote_sequence(db, target.id)  # fresh sequence in target
+
+    # Re-parent in place: new project + new sequence (the visible number changes).
+    quote.project_id = target.id
+    quote.quote_sequence = new_sequence
+
+    # Audit the move. action_type "move" is NOT in ITEM_LIST_ACTION_TYPES, so it
+    # bumps the internal current_version (audit) but NOT item_list_version — the
+    # number's version component is unchanged; only UCA + sequence move. Invoices
+    # on this quote follow it and re-derive their numbers from the new project.
+    create_snapshot(
+        db,
+        quote,
+        action_type="move",
+        action_description=f"Moved from {source_uca} ({old_number}) to {target.uca_project_number}",
+    )
+
+    db.commit()
+
+    # Reload with relationships for the response.
+    quote = (
+        db.query(Quote)
+        .options(
+            joinedload(Quote.project),
+            joinedload(Quote.line_items).joinedload(QuoteLineItem.labor),
+            joinedload(Quote.line_items).joinedload(QuoteLineItem.part),
+            joinedload(Quote.line_items).joinedload(QuoteLineItem.miscellaneous),
+            joinedload(Quote.cost_code),
+        )
+        .filter(Quote.id == quote_id)
+        .first()
+    )
+    return populate_quote_number(quote, quote.project.uca_project_number)
 
 
 # ==================== Markup Control ====================

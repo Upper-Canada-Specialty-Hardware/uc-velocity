@@ -269,6 +269,13 @@ export const api = {
     clone: (quoteId: number) =>
       request<Quote>(`/quotes/${quoteId}/clone`, { method: 'POST' }),
 
+    // Move to another project (issue #209) — re-parents in place; number changes.
+    move: (quoteId: number, projectId: number) =>
+      request<Quote>(`/quotes/${quoteId}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ project_id: projectId }),
+      }),
+
     // Commit Edits (Edit Mode)
     commitEdits: (quoteId: number, data: CommitEditsRequest) =>
       request<CommitEditsResponse>(`/quotes/${quoteId}/commit`, { method: 'POST', body: JSON.stringify(data) }),
@@ -374,6 +381,13 @@ export const api = {
     // Clone
     clone: (poId: number) =>
       request<PurchaseOrder>(`/purchase-orders/${poId}/clone`, { method: 'POST' }),
+
+    // Move to another project (issue #209) — re-parents in place; number changes.
+    move: (poId: number, projectId: number) =>
+      request<PurchaseOrder>(`/purchase-orders/${poId}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ project_id: projectId }),
+      }),
   },
 
   // ===== Cost Codes =====

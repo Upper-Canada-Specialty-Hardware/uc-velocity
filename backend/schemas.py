@@ -522,6 +522,11 @@ class QuoteUpdate(BaseModel):
     cost_code_id: Optional[int] = None
 
 
+class ProjectMove(BaseModel):
+    """Body for moving a quote or PO to another project (issue #209)."""
+    project_id: int  # Target project to re-parent the document into
+
+
 class Quote(QuoteBase):
     id: int
     quote_sequence: int  # Per-project sequence number (1, 2, 3...)

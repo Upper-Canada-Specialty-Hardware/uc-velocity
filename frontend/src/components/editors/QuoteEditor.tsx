@@ -55,7 +55,7 @@ import type {
   InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
-import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
+import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, FolderInput, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDateTime } from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
@@ -180,6 +180,13 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
 
   // Clone quote state
   const [isCloning, setIsCloning] = useState(false)
+
+  // Move-to-project state (issue #209): the dialog, the loaded target-project list,
+  // the chosen target, and the in-flight flag.
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+  const [isMoving, setIsMoving] = useState(false)
+  const [moveProjects, setMoveProjects] = useState<Project[]>([])
+  const [moveTargetId, setMoveTargetId] = useState<string>("")
 
   // Cost codes
   const [costCodes, setCostCodes] = useState<CostCode[]>([])
@@ -2044,6 +2051,40 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     }
   }
 
+  // Open the "move to project" dialog: load all projects except the current one.
+  const openMoveDialog = async () => {
+    if (!quote) return
+    setMoveTargetId("")
+    try {
+      const all = await api.projects.getAll()  // unbounded list of projects
+      setMoveProjects(all.filter((p) => p.id !== quote.project_id))  // exclude current
+    } catch {
+      setMoveProjects([])
+    }
+    setMoveDialogOpen(true)
+  }
+
+  // Move this quote to the chosen project. Same quote (invoices/history come along),
+  // but its number changes — reload the view via onSelectProject (same id, new number).
+  const handleMoveQuote = async () => {
+    if (!quote || !moveTargetId) return
+    setIsMoving(true)
+    try {
+      const moved = await api.quotes.move(quote.id, parseInt(moveTargetId, 10))
+      setMoveDialogOpen(false)
+      onUpdate?.()  // refresh the parent's project/quote lists
+      if (onSelectQuote) {
+        onSelectQuote(moved.id)  // re-open the quote (its number changed)
+      } else {
+        alert(`Quote moved. New number: ${moved.quote_number}`)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to move quote")
+    } finally {
+      setIsMoving(false)
+    }
+  }
+
   const runPrintQuote = async (mode: QuotePrintMode) => {
     if (!quote) return
     setPrintDialogOpen(false)
@@ -3440,8 +3481,55 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                 <Copy className="h-4 w-4" />
                 {isCloning ? "Cloning..." : "Clone"}
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openMoveDialog}
+                disabled={isMoving}
+                className="shadow-md gap-2 bg-background"
+              >
+                <FolderInput className="h-4 w-4" />
+                {isMoving ? "Moving..." : "Move"}
+              </Button>
             </div>
           )}
+
+          {/* Move-to-project dialog (issue #209) */}
+          <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Move quote to another project</DialogTitle>
+                <DialogDescription>
+                  The quote keeps its history and invoices, but its number will change to the
+                  target project's code and next sequence. Any invoices on this quote move with
+                  it and re-number too.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2 py-2">
+                <Label>Target project</Label>
+                <SearchableSelect
+                  options={moveProjects.map((p): SearchableSelectOption => ({
+                    value: p.id.toString(),
+                    label: `${p.uca_project_number} — ${p.name}`,
+                  }))}
+                  value={moveTargetId}
+                  onChange={setMoveTargetId}
+                  placeholder="Select a project..."
+                  searchPlaceholder="Search projects..."
+                  emptyMessage="No other projects found."
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={isMoving}>
+                  Cancel
+                </Button>
+                <Button onClick={handleMoveQuote} disabled={isMoving || !moveTargetId} className="gap-2">
+                  <FolderInput className="h-4 w-4" />
+                  {isMoving ? "Moving..." : "Move quote"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           <div className="flex gap-2">
             {/* View Mode: Edit Quote and Create Invoice buttons */}
