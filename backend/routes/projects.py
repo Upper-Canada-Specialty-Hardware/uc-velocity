@@ -129,7 +129,7 @@ def _build_list_view_rows(db: Session, project_ids: Optional[Set[int]] = None) -
         db.query(
             Quote.project_id.label("pid"),
             Quote.quote_sequence.label("seq"),
-            Quote.current_version.label("ver"),
+            Quote.item_list_version.label("ver"),  # visible version for the quote number (#202)
             func.count(Quote.id).over(partition_by=Quote.project_id).label("cnt"),
             func.row_number()
             .over(partition_by=Quote.project_id, order_by=Quote.quote_sequence.desc())
@@ -264,14 +264,14 @@ def search_projects(q: str = "", db: Session = Depends(get_db)):
         + literal("-")
         + func.lpad(cast(Quote.quote_sequence, String), 4, "0")
         + literal("-")
-        + cast(Quote.current_version, String)
+        + cast(Quote.item_list_version, String)  # match the visible version (#202)
     )
     quote_rows = (
         db.query(
             Quote.id,
             Quote.project_id,
             Quote.quote_sequence,
-            Quote.current_version,
+            Quote.item_list_version,  # visible version for the quote number (#202)
             Project.uca_project_number,
         )
         .join(Project, Quote.project_id == Project.id)
@@ -324,7 +324,7 @@ def search_projects(q: str = "", db: Session = Depends(get_db)):
         matched_quotes_by_pid.setdefault(r.project_id, []).append(
             MatchedQuoteRef(
                 id=r.id,
-                quote_number=format_quote_number(r.uca_project_number, r.quote_sequence, r.current_version),
+                quote_number=format_quote_number(r.uca_project_number, r.quote_sequence, r.item_list_version),
             )
         )
 
@@ -381,7 +381,7 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
         response.quotes[i].quote_number = format_quote_number(
             project.uca_project_number,
             quote.quote_sequence,
-            quote.current_version
+            quote.item_list_version  # visible version: line-item changes only (#202)
         )
     for i, po in enumerate(project.purchase_orders):
         response.purchase_orders[i].po_number = format_po_number(

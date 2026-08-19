@@ -41,6 +41,8 @@ export function PartForm({ part, onSuccess, onCancel }: PartFormProps) {
   const [vendorId, setVendorId] = useState<string>("")
   const [listPrice, setListPrice] = useState("")
   const [discountPercent, setDiscountPercent] = useState("")
+  // When true, this part's cost is in USD and is converted to CAD on the quote.
+  const [isUsdPriced, setIsUsdPriced] = useState(false)
 
   // Fetch available labor items and vendors on mount
   useEffect(() => {
@@ -73,6 +75,7 @@ export function PartForm({ part, onSuccess, onCancel }: PartFormProps) {
       setVendorId(part.vendor_id?.toString() || "")
       setListPrice(part.list_price?.toString() || "")
       setDiscountPercent(part.discount_percent?.toString() || "")
+      setIsUsdPriced(part.is_usd_priced ?? false)  // load USD flag
     }
   }, [part])
 
@@ -126,6 +129,7 @@ export function PartForm({ part, onSuccess, onCancel }: PartFormProps) {
       vendor_id: vendorId ? parseInt(vendorId, 10) : undefined,
       list_price: listPrice ? parseFloat(listPrice) : undefined,
       discount_percent: discountPercent ? parseFloat(discountPercent) : undefined,
+      is_usd_priced: isUsdPriced,  // persist USD flag
     }
 
     try {
@@ -261,6 +265,24 @@ export function PartForm({ part, onSuccess, onCancel }: PartFormProps) {
             Auto-calculated: List Price x (1 - Discount%)
           </p>
         )}
+      </div>
+
+      {/* USD pricing toggle — the cost above is treated as USD and converted to CAD on the quote */}
+      <div className="flex items-start gap-2 rounded-md border border-input p-3">
+        <input
+          id="isUsdPriced"
+          type="checkbox"
+          checked={isUsdPriced}
+          onChange={(e) => setIsUsdPriced(e.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-input accent-primary"
+        />
+        <div className="space-y-1">
+          <Label htmlFor="isUsdPriced" className="cursor-pointer">Cost is priced in USD</Label>
+          <p className="text-xs text-muted-foreground">
+            The cost above is in US dollars. It's converted to CAD at the current
+            exchange rate (set in Settings) when this part is added to a quote.
+          </p>
+        </div>
       </div>
 
       <div className="space-y-2">
