@@ -250,13 +250,13 @@ export interface ContactUpdate {
 }
 
 // ===== Profiles =====
-export type ProfileType = 'customer' | 'vendor';
+export type ProfileType = 'customer' | 'vendor' | 'staff';
 
 export interface Profile {
   id: number;
   name: string;
   type: ProfileType;
-  pst: string;
+  pst?: string | null;
   address: string;
   postal_code: string;
   default_discount_percent?: number;
@@ -266,7 +266,7 @@ export interface Profile {
 export interface ProfileCreate {
   name: string;
   type: ProfileType;
-  pst: string;
+  pst?: string;
   address: string;
   postal_code: string;
   default_discount_percent?: number;

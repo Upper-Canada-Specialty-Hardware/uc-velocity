@@ -120,6 +120,12 @@ def update_profile(profile_id: int, profile_data: ProfileUpdate, db: Session = D
     if profile_data.default_discount_percent is not None:
         db_profile.default_discount_percent = profile_data.default_discount_percent
 
+    # Staff have no Provincial Tax Number: if a profile is (converted to) staff,
+    # clear any stale pst. The frontend omits pst for staff, so the guard above
+    # would otherwise leave the previous customer/vendor pst in place.
+    if db_profile.type == ModelProfileType.staff:
+        db_profile.pst = None
+
     db.commit()
     db.refresh(db_profile)
     return db_profile

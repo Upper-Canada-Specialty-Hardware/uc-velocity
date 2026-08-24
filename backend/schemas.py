@@ -23,6 +23,7 @@ class Paginated(BaseModel, Generic[T]):
 class ProfileType(str, Enum):
     customer = "customer"
     vendor = "vendor"
+    staff = "staff"
 
 
 # ===== Company Settings Schemas =====
@@ -368,7 +369,7 @@ class Contact(ContactBase):
 class ProfileBase(BaseModel):
     name: str
     type: ProfileType
-    pst: str
+    pst: Optional[str] = None  # Not applicable to staff profiles
     address: str
     postal_code: str
     default_discount_percent: Optional[float] = None

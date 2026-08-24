@@ -18,6 +18,7 @@ part_labor_link = Table(
 class ProfileType(str, enum.Enum):
     customer = "customer"
     vendor = "vendor"
+    staff = "staff"
 
 
 class PhoneType(str, enum.Enum):
@@ -49,7 +50,7 @@ class Profile(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     type = Column(Enum(ProfileType), nullable=False)
-    pst = Column(String, nullable=False)  # Provincial Tax Number
+    pst = Column(String, nullable=True)  # Provincial Tax Number (not applicable to staff)
     address = Column(String, nullable=False)
     postal_code = Column(String, nullable=False)
     default_discount_percent = Column(Float, nullable=True)  # Default vendor discount %
