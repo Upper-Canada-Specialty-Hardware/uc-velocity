@@ -81,3 +81,7 @@ CLAUDE.md
 
 # Audit / review artifacts (screenshots, findings docs) — durable value lives in GitHub issues, not in the repo
 testing/ux-review/
+
+# Migration planning docs — local working artifacts, not shipped in PRs
+docs/MIGRATION_PARITY.md
+docs/MIGRATION_PROPOSAL.md

@@ -1,0 +1,5 @@
+# LOCAL-ONLY migration tooling dependencies (Windows).
+# Do NOT merge these into backend/requirements.txt: pywin32 is Windows-only and
+# this tooling never runs on the Linux-deployed backend.
+pywin32==306
+psycopg2-binary==2.9.9

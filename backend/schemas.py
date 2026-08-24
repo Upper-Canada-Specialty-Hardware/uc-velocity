@@ -370,8 +370,9 @@ class ProfileBase(BaseModel):
     name: str
     type: ProfileType
     pst: Optional[str] = None  # Not applicable to staff profiles
-    address: str
-    postal_code: str
+    address: Optional[str] = None  # Optional: staff imported from Vision often have none (nullable in DB)
+    postal_code: Optional[str] = None  # Optional: same as address (sparse in Vision staff)
+    staff_roles: Optional[str] = None  # Staff only: comma-joined roles ("Lead, Manager"); None otherwise
     default_discount_percent: Optional[float] = None
 
 
@@ -391,6 +392,7 @@ class ProfileUpdate(BaseModel):
     pst: Optional[str] = None
     address: Optional[str] = None
     postal_code: Optional[str] = None
+    staff_roles: Optional[str] = None  # Staff only: comma-joined roles; omitted for customer/vendor
     default_discount_percent: Optional[float] = None
 
 
