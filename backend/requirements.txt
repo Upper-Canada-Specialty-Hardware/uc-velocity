@@ -5,7 +5,7 @@ pydantic==2.5.3
 python-multipart==0.0.6
 psycopg2-binary==2.9.9
 python-dotenv==1.0.0
-gunicorn==21.2.0
+gunicorn==26.0.0
 alembic==1.13.1
 httpx==0.25.2
 PyJWT[crypto]==2.8.0
