@@ -6,8 +6,12 @@ relaxed to nullable.
 
 Note: revision id kept short - alembic_version.version_num is VARCHAR(32).
 
+Note (rebase onto master): originally forked off 024_invoice_versioning. Re-parented
+onto master's current head (028_quote_item_list_ver) so this branch chains linearly
+after the feature migrations -- a single Alembic head, no fork.
+
 Revision ID: 025_staff_profile_type
-Revises: 024_invoice_versioning
+Revises: 028_quote_item_list_ver
 Create Date: 2026-07-21
 """
 from alembic import op
@@ -15,7 +19,7 @@ import sqlalchemy as sa
 
 
 revision = '025_staff_profile_type'
-down_revision = '024_invoice_versioning'
+down_revision = '028_quote_item_list_ver'
 branch_labels = None
 depends_on = None
 
