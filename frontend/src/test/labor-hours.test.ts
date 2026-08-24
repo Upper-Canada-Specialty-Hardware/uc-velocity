@@ -34,7 +34,7 @@ describe('computeLaborHoursReport', () => {
     const items = [
       lineItem({ item_type: 'labor', quantity: 1, labor: labor({ hours: 5, rate: 80 }) }), // 5 hr, $400
       lineItem({ item_type: 'labor', quantity: 2, labor: labor({ hours: 5, rate: 80 }) }), // 10 hr, $800
-      lineItem({ item_type: 'part', quantity: 3, part: { id: 9, part_number: 'P-1', description: 'Bracket', cost: 12, markup_percent: 0 } }),
+      lineItem({ item_type: 'part', quantity: 3, part: { id: 9, part_number: 'P-1', description: 'Bracket', cost: 12, markup_percent: 0, is_usd_priced: false } }),
     ]
 
     const report = computeLaborHoursReport(items)
@@ -47,7 +47,7 @@ describe('computeLaborHoursReport', () => {
 
   it('gives parts and miscellaneous lines 0.0 hours', () => {
     const items = [
-      lineItem({ item_type: 'part', quantity: 4, part: { id: 2, part_number: 'P-2', description: 'Widget', cost: 5, markup_percent: 0 } }),
+      lineItem({ item_type: 'part', quantity: 4, part: { id: 2, part_number: 'P-2', description: 'Widget', cost: 5, markup_percent: 0, is_usd_priced: false } }),
       lineItem({ item_type: 'misc', quantity: 1, miscellaneous: { id: 3, description: 'Freight', unit_price: 50, markup_percent: 0, is_system_item: false } }),
     ]
 

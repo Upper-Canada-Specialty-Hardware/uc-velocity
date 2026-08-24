@@ -111,6 +111,38 @@ def test_quote_created_at_changes_and_bumps_version_once(db):
     _cleanup(db, refreshed, project, customer)
 
 
+def test_quote_date_edit_does_not_change_visible_version(db):
+    """Issue #202: a created-date edit advances the internal audit counter
+    (current_version) but leaves the visible item-list version — and therefore
+    the quote number — unchanged."""
+    suffix = _unique_suffix()
+    customer, project = _make_project(db, suffix)
+    quote = Quote(project_id=project.id, quote_sequence=1, current_version=0,
+                  item_list_version=0, created_at=datetime(2026, 1, 1, 12, 0, 0))
+    db.add(quote)
+    db.commit()
+    quote_id = quote.id
+
+    before = client.get(f"/quotes/{quote_id}")
+    assert before.status_code == 200, before.text
+    number_before = before.json()["quote_number"]
+
+    r = client.put(f"/quotes/{quote_id}/created-at", json={"created_at": "2026-03-15T09:30:00Z"})
+    assert r.status_code == 200, r.text
+    after = r.json()
+
+    # Internal audit counter advanced by 1...
+    assert after["current_version"] == 1
+    # ...but the visible quote number did not change (item-list version held).
+    assert after["quote_number"] == number_before
+
+    db.expire_all()
+    refreshed = db.query(Quote).filter(Quote.id == quote_id).first()
+    assert refreshed.item_list_version == 0
+
+    _cleanup(db, refreshed, project, customer)
+
+
 def test_frozen_quote_rejects_date_edit(db):
     suffix = _unique_suffix()
     customer, project = _make_project(db, suffix)

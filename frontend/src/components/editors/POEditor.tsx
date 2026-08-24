@@ -57,7 +57,7 @@ import type {
   CompanySettings, Project
 } from "@/types"
 import {
-  Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy,
+  Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy, FolderInput,
   X, GitCommit, Eye, AlertTriangle, Check, Calendar, Loader2, Hash, Printer,
   History, ChevronDown, ChevronRight, Receipt, Info, ArrowLeft
 } from "lucide-react"
@@ -71,10 +71,11 @@ interface POEditorProps {
   poId: number
   onUpdate?: () => void
   onSelectPO?: (poId: number) => void
+  onMoved?: () => void  // after a move the PO left this project; parent closes the editor + refreshes (#209)
   onDirtyStateChange?: (isDirty: boolean) => void
 }
 
-export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POEditorProps) {
+export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChange }: POEditorProps) {
   // ===== Core State =====
   const [po, setPO] = useState<PurchaseOrder | null>(null)
   const [loading, setLoading] = useState(true)
@@ -141,6 +142,12 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
 
   // ===== Clone State =====
   const [isCloning, setIsCloning] = useState(false)
+
+  // Move-to-project state (issue #209): dialog, target-project list, chosen target, in-flight.
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+  const [isMoving, setIsMoving] = useState(false)
+  const [moveProjects, setMoveProjects] = useState<Project[]>([])
+  const [moveTargetId, setMoveTargetId] = useState<string>("")
   const [cloneConfirmOpen, setCloneConfirmOpen] = useState(false)
 
   // Print PDF state
@@ -691,6 +698,43 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
       alert(err instanceof Error ? err.message : "Failed to clone purchase order")
     } finally {
       setIsCloning(false)
+    }
+  }
+
+  // Open the "move to project" dialog: load all projects except the current one.
+  const openMovePODialog = async () => {
+    if (!po) return
+    setMoveTargetId("")
+    try {
+      const all = await api.projects.getAll()  // unbounded list of projects
+      setMoveProjects(all.filter((p) => p.id !== po.project_id))  // exclude current
+    } catch {
+      setMoveProjects([])
+    }
+    setMoveDialogOpen(true)
+  }
+
+  // Move this PO to the chosen project. Same PO (receivings/history come along), but its
+  // number changes — reload via onSelectPO (same id, new number).
+  const handleMovePO = async () => {
+    if (!po || !moveTargetId) return
+    setIsMoving(true)
+    try {
+      const moved = await api.purchaseOrders.move(po.id, parseInt(moveTargetId, 10))
+      setMoveDialogOpen(false)
+      // A move keeps the same PO id, so the parent can't reload by re-selecting it.
+      // Confirm the new number, then let the parent close this editor + refresh the list
+      // (the PO now lives under the target project, not this one).
+      alert(`Purchase order moved. New number: ${moved.po_number}`)
+      if (onMoved) {
+        onMoved()
+      } else {
+        onUpdate?.()
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to move purchase order")
+    } finally {
+      setIsMoving(false)
     }
   }
 
@@ -1798,8 +1842,54 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                 <Copy className="h-4 w-4" />
                 {isCloning ? "Cloning..." : "Clone"}
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openMovePODialog}
+                disabled={isMoving}
+                className="shadow-md gap-2 bg-background"
+              >
+                <FolderInput className="h-4 w-4" />
+                {isMoving ? "Moving..." : "Move"}
+              </Button>
             </div>
           )}
+
+          {/* Move-to-project dialog (issue #209) */}
+          <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Move purchase order to another project</DialogTitle>
+                <DialogDescription>
+                  The PO keeps its history and receivings, but its number will change to the
+                  target project's code and next sequence.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2 py-2">
+                <Label>Target project</Label>
+                <SearchableSelect
+                  options={moveProjects.map((p): SearchableSelectOption => ({
+                    value: p.id.toString(),
+                    label: `${p.uca_project_number} — ${p.name}`,
+                  }))}
+                  value={moveTargetId}
+                  onChange={setMoveTargetId}
+                  placeholder="Select a project..."
+                  searchPlaceholder="Search projects..."
+                  emptyMessage="No other projects found."
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={isMoving}>
+                  Cancel
+                </Button>
+                <Button onClick={handleMovePO} disabled={isMoving || !moveTargetId} className="gap-2">
+                  <FolderInput className="h-4 w-4" />
+                  {isMoving ? "Moving..." : "Move PO"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <div className="flex gap-2">
             {/* View Mode: Enter Edit Mode button (only for Draft POs that haven't been received) */}
             {editorMode === "view" && po.status === "Draft" && !hasBeenReceived && (

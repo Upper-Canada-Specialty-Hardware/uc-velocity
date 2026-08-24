@@ -28,6 +28,7 @@ export interface CompanySettings {
   hst_rate: number;
   default_pms_percent?: number | null;
   logo_data_url?: string | null;
+  usd_to_cad_rate: number;  // Live USD→CAD rate for USD-priced parts
 }
 
 export interface CompanySettingsUpdate {
@@ -39,6 +40,7 @@ export interface CompanySettingsUpdate {
   hst_rate?: number;
   default_pms_percent?: number | null;
   logo_data_url?: string | null;
+  usd_to_cad_rate?: number;  // Live USD→CAD rate for USD-priced parts
 }
 
 // ===== System Rates =====
@@ -70,6 +72,7 @@ export interface SystemRateUpdate {
 // ===== Invoice Summary (for Reports) =====
 export interface InvoiceSummaryItem {
   invoice_id: number;
+  invoice_number: string; // Canonical number shown on the invoice document (Issue #205)
   invoice_date: string;
   uca_project_number: string;
   project_name: string;
@@ -174,6 +177,7 @@ export interface Part {
   vendor_id?: number;
   list_price?: number;
   discount_percent?: number;  // Per-part discount override
+  is_usd_priced: boolean;  // Cost is in USD; converted to CAD on the quote
 }
 
 export interface PartCreate {
@@ -186,6 +190,7 @@ export interface PartCreate {
   vendor_id?: number;
   list_price?: number;
   discount_percent?: number;
+  is_usd_priced?: boolean;  // Cost is in USD; converted to CAD on the quote
 }
 
 // ===== Miscellaneous =====
@@ -245,13 +250,13 @@ export interface ContactUpdate {
 }
 
 // ===== Profiles =====
-export type ProfileType = 'customer' | 'vendor';
+export type ProfileType = 'customer' | 'vendor' | 'staff';
 
 export interface Profile {
   id: number;
   name: string;
   type: ProfileType;
-  pst: string;
+  pst?: string | null;
   address: string;
   postal_code: string;
   default_discount_percent?: number;
@@ -261,7 +266,7 @@ export interface Profile {
 export interface ProfileCreate {
   name: string;
   type: ProfileType;
-  pst: string;
+  pst?: string;
   address: string;
   postal_code: string;
   default_discount_percent?: number;

@@ -23,6 +23,7 @@ class Paginated(BaseModel, Generic[T]):
 class ProfileType(str, Enum):
     customer = "customer"
     vendor = "vendor"
+    staff = "staff"
 
 
 # ===== Company Settings Schemas =====
@@ -35,6 +36,7 @@ class CompanySettingsBase(BaseModel):
     hst_rate: float = 13.0
     default_pms_percent: Optional[float] = None
     logo_data_url: Optional[str] = None
+    usd_to_cad_rate: float = 1.38  # Live USD→CAD rate for USD-priced parts
 
 
 class CompanySettingsUpdate(BaseModel):
@@ -46,6 +48,7 @@ class CompanySettingsUpdate(BaseModel):
     hst_rate: Optional[float] = None
     default_pms_percent: Optional[float] = None
     logo_data_url: Optional[str] = None
+    usd_to_cad_rate: Optional[float] = None  # Live USD→CAD rate for USD-priced parts
 
 
 class CompanySettings(CompanySettingsBase):
@@ -90,6 +93,7 @@ class SystemRate(SystemRateBase):
 # ===== Invoice Summary (for Reports) =====
 class InvoiceSummaryItem(BaseModel):
     invoice_id: int
+    invoice_number: str  # Canonical number shown on the invoice document (Issue #205): "{invoice_seq}-{UCA}-{quote_seq:04d}-{quote_version}"
     invoice_date: datetime
     uca_project_number: str
     project_name: str
@@ -241,6 +245,7 @@ class PartBase(BaseModel):
     vendor_id: Optional[int] = None
     list_price: Optional[float] = None
     discount_percent: Optional[float] = None  # Per-part discount override
+    is_usd_priced: bool = False  # Cost is in USD; converted to CAD on the quote
 
 
 class PartCreate(PartBase):
@@ -257,6 +262,7 @@ class PartUpdate(BaseModel):
     vendor_id: Optional[int] = None
     list_price: Optional[float] = None
     discount_percent: Optional[float] = None
+    is_usd_priced: Optional[bool] = None  # Cost is in USD; converted to CAD on the quote
 
 
 class Part(PartBase):
@@ -402,7 +408,7 @@ class Contact(ContactBase):
 class ProfileBase(BaseModel):
     name: str
     type: ProfileType
-    pst: str
+    pst: Optional[str] = None  # Not applicable to staff profiles
     address: str
     postal_code: str
     default_discount_percent: Optional[float] = None
@@ -554,6 +560,11 @@ class QuoteUpdate(BaseModel):
     work_description: Optional[str] = None
     hardware_schedule_version: Optional[str] = None
     cost_code_id: Optional[int] = None
+
+
+class ProjectMove(BaseModel):
+    """Body for moving a quote or PO to another project (issue #209)."""
+    project_id: int  # Target project to re-parent the document into
 
 
 class Quote(QuoteBase):

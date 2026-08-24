@@ -18,6 +18,7 @@ part_labor_link = Table(
 class ProfileType(str, enum.Enum):
     customer = "customer"
     vendor = "vendor"
+    staff = "staff"
 
 
 class PhoneType(str, enum.Enum):
@@ -49,7 +50,7 @@ class Profile(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     type = Column(Enum(ProfileType), nullable=False)
-    pst = Column(String, nullable=False)  # Provincial Tax Number
+    pst = Column(String, nullable=True)  # Provincial Tax Number (not applicable to staff)
     address = Column(String, nullable=False)
     postal_code = Column(String, nullable=False)
     default_discount_percent = Column(Float, nullable=True)  # Default vendor discount %
@@ -98,6 +99,9 @@ class Part(Base):
     vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=True, index=True)
     list_price = Column(Float, nullable=True)
     discount_percent = Column(Float, nullable=True)  # Per-part discount override (nullable)
+    # Flags that this part's `cost` is entered in USD; converted to CAD at the
+    # live company rate when the part is added to a quote. Non-null, defaults false.
+    is_usd_priced = Column(Boolean, nullable=False, server_default='false', default=False)
 
     # Relationships
     category = relationship("Category", back_populates="parts")
@@ -172,7 +176,10 @@ class Quote(Base):
     quote_sequence = Column(Integer, nullable=False)  # Per-project sequence number (1, 2, 3...)
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="Draft")  # "Draft", "Work Order", "Invoiced", "Closed" — computed by system
-    current_version = Column(Integer, default=0)  # Current snapshot version
+    current_version = Column(Integer, default=0)  # Internal audit counter — bumps on every snapshot
+    # Visible version shown in the quote/invoice number. Advances ONLY on line-item
+    # add/edit/delete (issue #202); invoice creation and date edits leave it unchanged.
+    item_list_version = Column(Integer, default=0, server_default='0')
     client_po_number = Column(String, nullable=True)  # Client's PO number (required for invoicing)
     work_description = Column(String, nullable=True)  # Optional work description
     hardware_schedule_version = Column(String, nullable=True)  # Optional hardware schedule version identifier
@@ -485,6 +492,9 @@ class CompanySettings(Base):
     hst_rate = Column(Float, default=13.0)
     default_pms_percent = Column(Float, nullable=True)
     logo_data_url = Column(Text, nullable=True)
+    # Live USD→CAD exchange rate used to convert USD-priced parts when they are
+    # added to a quote. Non-null, seeded to 1.38 for the existing singleton row.
+    usd_to_cad_rate = Column(Float, nullable=False, server_default='1.38', default=1.38)
 
 
 class QuoteLineItemSnapshot(Base):

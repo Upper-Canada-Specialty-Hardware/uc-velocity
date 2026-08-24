@@ -43,6 +43,7 @@ import {
   CommandList,
 } from "@/components/ui/command"
 import { api } from "@/api/client"
+import type { QuoteEditorHandle } from "@/components/editors/QuoteEditor"
 import { toast } from "@/hooks/use-toast"
 import type { ProjectFull, Profile, Invoice } from "@/types"
 import {
@@ -154,6 +155,13 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
   const editorDirtyRef = useRef(false)
   const [navConfirmOpen, setNavConfirmOpen] = useState(false)
   const pendingNavAction = useRef<(() => void) | null>(null)
+  // Imperative handle to the open quote editor, so "Commit & leave" can commit its
+  // staged edits and then continue the deferred navigation (Issue #204).
+  const quoteEditorRef = useRef<QuoteEditorHandle>(null)
+  // Whether the leave-prompt should offer "Commit & leave" (only for a quote editor
+  // with committable staged edits), and whether that commit is currently in flight.
+  const [canCommitOnLeave, setCanCommitOnLeave] = useState(false)
+  const [committingOnLeave, setCommittingOnLeave] = useState(false)
 
   const handleEditorDirtyChange = useCallback((isDirty: boolean) => {
     editorDirtyRef.current = isDirty
@@ -162,6 +170,9 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
   // Guarded navigation: checks dirty state before allowing navigation
   const guardedNavigate = useCallback((action: () => void) => {
     if (editorDirtyRef.current) {
+      // Offer "Commit & leave" only when a quote editor with committable staged edits
+      // is the open editor (the ref is null for POEditor / no editor).
+      setCanCommitOnLeave(!!quoteEditorRef.current?.canCommit)
       pendingNavAction.current = action
       setNavConfirmOpen(true)
     } else {
@@ -179,6 +190,27 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
   const handleCancelNavigation = useCallback(() => {
     setNavConfirmOpen(false)
     pendingNavAction.current = null
+  }, [])
+
+  // "Commit & leave": commit the quote editor's staged edits, then run the deferred
+  // navigation on success; on failure the editor surfaces its own error and we stay.
+  const handleCommitAndLeave = useCallback(async () => {
+    setCommittingOnLeave(true)
+    try {
+      const ok = await quoteEditorRef.current?.commit()   // commit staged edits
+      if (ok) {
+        editorDirtyRef.current = false                    // clean now -> allow the nav
+        const action = pendingNavAction.current
+        pendingNavAction.current = null
+        setNavConfirmOpen(false)
+        action?.()                                        // run the deferred navigation
+      } else {
+        pendingNavAction.current = null                   // commit failed -> stay put
+        setNavConfirmOpen(false)
+      }
+    } finally {
+      setCommittingOnLeave(false)
+    }
   }, [])
 
   // Dialog states
@@ -334,6 +366,15 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
       navigate(`/projects/${projectId}/${seg}/${id}?tab=${tab}`)
     })
   }, [guardedNavigate, navigate, projectId])
+
+  // A moved quote/PO has left this project. Its id is unchanged, so the editor can't
+  // reload by re-selecting it — close the editor, drop the doc from the URL, and refresh
+  // the list (the moved doc now lives under the target project). Issue #209.
+  const handleDocMoved = () => {
+    setSelectedDoc(null)
+    navigate(`/projects/${projectId}?tab=${activeTab}`)
+    fetchProject()
+  }
 
   const handleCreateQuote = async () => {
     try {
@@ -796,17 +837,21 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
             <Suspense fallback={<EditorFallback />}>
               {selectedDoc.type === "quote" ? (
                 <QuoteEditor
+                  ref={quoteEditorRef}
                   quoteId={selectedDoc.id}
                   onUpdate={() => {
                     fetchProject()
                     if (project?.quotes) fetchInvoices(project.quotes)
                   }}
+                  onMoved={handleDocMoved}
+                  onDirtyStateChange={handleEditorDirtyChange}
                 />
               ) : selectedDoc.type === "po" ? (
                 <POEditor
                   poId={selectedDoc.id}
                   onUpdate={fetchProject}
                   onSelectPO={(newPoId) => setSelectedDoc({ type: "po", id: newPoId })}
+                  onMoved={handleDocMoved}
                   onDirtyStateChange={handleEditorDirtyChange}
                 />
               ) : (
@@ -965,17 +1010,25 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
               Unsaved Changes
             </AlertDialogTitle>
             <AlertDialogDescription>
-              You have unsaved changes that will be lost if you navigate away. Are you sure you want to leave?
+              {canCommitOnLeave
+                ? "You have unsaved changes. Commit them before leaving, or discard them?"
+                : "You have unsaved changes that will be lost if you navigate away. Are you sure you want to leave?"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleCancelNavigation}>Stay</AlertDialogCancel>
+            <AlertDialogCancel onClick={handleCancelNavigation} disabled={committingOnLeave}>Stay</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmNavigation}
+              disabled={committingOnLeave}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Leave Without Saving
+              {canCommitOnLeave ? "Discard & leave" : "Leave Without Saving"}
             </AlertDialogAction>
+            {canCommitOnLeave && (
+              <Button onClick={handleCommitAndLeave} disabled={committingOnLeave}>
+                {committingOnLeave ? "Committing…" : "Commit & leave"}
+              </Button>
+            )}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

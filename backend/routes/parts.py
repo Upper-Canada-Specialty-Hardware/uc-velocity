@@ -113,6 +113,7 @@ def create_part(part_data: PartCreate, db: Session = Depends(get_db)):
         vendor_id=part_data.vendor_id,
         list_price=part_data.list_price,
         discount_percent=part_data.discount_percent,
+        is_usd_priced=part_data.is_usd_priced,  # persist USD-priced flag (#203)
     )
 
     # Auto-calculate cost from list_price + vendor discount
@@ -162,6 +163,8 @@ def update_part(part_id: int, part_data: PartUpdate, db: Session = Depends(get_d
         db_part.list_price = part_data.list_price
     if part_data.discount_percent is not None:
         db_part.discount_percent = part_data.discount_percent
+    if part_data.is_usd_priced is not None:
+        db_part.is_usd_priced = part_data.is_usd_priced  # persist USD-priced flag (#203)
 
     # Auto-calculate cost from list_price + vendor discount
     auto_calculate_cost(db_part, db)

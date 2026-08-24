@@ -64,6 +64,7 @@ interface WorkingState {
     gstNumber: string
     hstRate: string
     pmsDefault: string
+    usdToCadRate: string
     logoDataUrl: string | null
   }
   parking: ParkingForm | null
@@ -113,6 +114,7 @@ export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
   const [gstNumber, setGstNumber] = useState('')
   const [hstRate, setHstRate] = useState('')
   const [pmsDefault, setPmsDefault] = useState('')
+  const [usdToCadRate, setUsdToCadRate] = useState('')  // live USD→CAD exchange rate
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -148,6 +150,7 @@ export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
       gstNumber: company.gst_number || '',
       hstRate: String(company.hst_rate ?? 13.0),
       pmsDefault: company.default_pms_percent != null ? String(company.default_pms_percent) : '',
+      usdToCadRate: String(company.usd_to_cad_rate ?? 1.38),
       logoDataUrl: company.logo_data_url ?? null,
     }
     const parkingF = parkingFromServer(parking)
@@ -161,6 +164,7 @@ export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
     setGstNumber(companyForm.gstNumber)
     setHstRate(companyForm.hstRate)
     setPmsDefault(companyForm.pmsDefault)
+    setUsdToCadRate(companyForm.usdToCadRate)
     setLogoDataUrl(companyForm.logoDataUrl)
     setParkingForm(parkingF)
     setTravelRows(travelF)
@@ -207,7 +211,7 @@ export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
 
   // ----- Dirty detection -----
   const currentWorking: WorkingState = {
-    company: { name, address, phone, fax, gstNumber, hstRate, pmsDefault, logoDataUrl },
+    company: { name, address, phone, fax, gstNumber, hstRate, pmsDefault, usdToCadRate, logoDataUrl },
     parking: parkingForm,
     travel: travelRows,
     costCodes: costCodeRows,
@@ -300,6 +304,12 @@ export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
       setError('Default PMS Percentage must be a number between 0 and 100.')
       return
     }
+    // USD→CAD rate must be a positive number (a rate of 0 would zero out costs).
+    const usdRateValue = parseFloat(usdToCadRate)
+    if (isNaN(usdRateValue) || usdRateValue <= 0) {
+      setError('USD→CAD Exchange Rate must be a number greater than 0.')
+      return
+    }
 
     // Parking
     if (parkingForm) {
@@ -348,6 +358,7 @@ export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
       gstNumber !== (originalCompany.gst_number || '') ||
       hstValue !== originalCompany.hst_rate ||
       pmsValue !== (originalCompany.default_pms_percent ?? null) ||
+      usdRateValue !== originalCompany.usd_to_cad_rate ||
       (logoDataUrl ?? null) !== (originalCompany.logo_data_url ?? null)
     if (companyChanged) {
       const update: CompanySettingsUpdate = {
@@ -358,6 +369,7 @@ export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
         gst_number: gstNumber,
         hst_rate: hstValue,
         default_pms_percent: pmsValue,
+        usd_to_cad_rate: usdRateValue,
         logo_data_url: logoDataUrl,
       }
       ops.push(run('Company settings', api.companySettings.update(update)))
@@ -592,6 +604,21 @@ export function SettingsPage({ onDirtyChange }: SettingsPageProps) {
               </div>
               <p className="text-xs text-muted-foreground">
                 Pre-filled when adding PMS % items to quotes. Leave empty for no default.
+              </p>
+            </div>
+            <div className="max-w-xs space-y-2">
+              <Label htmlFor="usd-cad-rate">USD→CAD Exchange Rate</Label>
+              <Input
+                id="usd-cad-rate"
+                type="number"
+                min="0"
+                step="0.01"
+                value={usdToCadRate}
+                onChange={(e) => setUsdToCadRate(e.target.value)}
+                placeholder="e.g. 1.38"
+              />
+              <p className="text-xs text-muted-foreground">
+                Applied to USD-priced parts when they're added to a quote (1 USD = this many CAD).
               </p>
             </div>
           </div>
