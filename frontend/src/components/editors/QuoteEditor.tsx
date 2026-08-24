@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -52,13 +52,14 @@ import { api } from "@/api/client"
 import type {
   Quote, QuoteLineItem, QuoteLineItemCreate,
   LineItemType, Part, Labor, Miscellaneous, CostCode,
-  StagedFulfillment, InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
+  InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
-import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
+import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, FolderInput, Car, MapPin, X, Lock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDateTime } from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
+import type { QuotePrintMode } from "@/components/pdf/QuotePDF"
 import { QuoteAuditTrail } from "./QuoteAuditTrail"
 import { EditCreatedAtDialog } from "./EditCreatedAtDialog"
 import { PartForm } from "@/components/forms/PartForm"
@@ -68,11 +69,8 @@ import { toast } from "@/hooks/use-toast"
 import {
   getLineItemBaseCost,
   getLineItemUnitPrice as _getLineItemUnitPrice,
-  getLineItemSubtotal as _getLineItemSubtotal,
-  getLineItemTotal as _getLineItemTotal,
   calculateNonPmsTotal as _calculateNonPmsTotal,
   getEffectiveUnitPrice as _getEffectiveUnitPrice,
-  getEffectiveLineItemTotal as _getEffectiveLineItemTotal,
   getFulfilledLineItemValue as _getFulfilledLineItemValue,
   calculateSectionTotals as _calculateSectionTotals,
   calculateQuoteTotal,
@@ -82,9 +80,24 @@ interface QuoteEditorProps {
   quoteId: number
   onUpdate?: () => void
   onSelectQuote?: (quoteId: number) => void
+  onMoved?: () => void  // after a move the quote left this project; parent closes the editor + refreshes (#209)
+  /** Reports unsaved-changes state up so a parent navigation guard can prompt before
+   * this editor unmounts, e.g. when switching to another quote (Issue #204). */
+  onDirtyStateChange?: (dirty: boolean) => void
 }
 
-export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorProps) {
+/** Imperative surface a parent can drive to commit staged edits, then navigate (Issue #204). */
+export interface QuoteEditorHandle {
+  /** True when there are committable edit-mode staged changes (not staged invoicing). */
+  canCommit: boolean
+  /** Commits staged edits; resolves true on success, false if nothing committed or it failed. */
+  commit: () => Promise<boolean>
+}
+
+export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(function QuoteEditor(
+  { quoteId, onUpdate, onSelectQuote, onMoved, onDirtyStateChange },
+  ref,
+) {
   const [quote, setQuote] = useState<Quote | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -169,6 +182,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // Clone quote state
   const [isCloning, setIsCloning] = useState(false)
 
+  // Move-to-project state (issue #209): the dialog, the loaded target-project list,
+  // the chosen target, and the in-flight flag.
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+  const [isMoving, setIsMoving] = useState(false)
+  const [moveProjects, setMoveProjects] = useState<Project[]>([])
+  const [moveTargetId, setMoveTargetId] = useState<string>("")
+
   // Cost codes
   const [costCodes, setCostCodes] = useState<CostCode[]>([])
   const [savingCostCode, setSavingCostCode] = useState(false)
@@ -235,7 +255,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   // expectedVersion: when this refetch follows an edit WE just made that bumped the
   // version (e.g. a created-date edit), pass the new version so it isn't mistaken for an
   // external change. Defaults to the captured edit/invoicing baseline from state.
-  const fetchQuote = async (expectedVersion?: number) => {
+  const fetchQuote = async (expectedVersion?: number, isFreshLoad = false) => {
     setLoading(true)
     setError(null)
     try {
@@ -245,13 +265,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       const editBaseline = expectedVersion ?? editModeStartVersion
 
       // Flow 7E: Detect external changes during invoicing or edit mode
-      if (editorMode === "invoicing" && invoicingBaseline !== null && data.current_version !== invoicingBaseline) {
+      if (!isFreshLoad && editorMode === "invoicing" && invoicingBaseline !== null && data.current_version !== invoicingBaseline) {
         // Quote was modified externally - clear staging and warn user
         clearInvoicingState()
         setQuoteChangedDialogOpen(true)
         // Update the version to the new value so subsequent fetches don't re-trigger
         setInitialQuoteVersion(data.current_version)
-      } else if (editorMode === "edit" && editBaseline !== null && data.current_version !== editBaseline) {
+      } else if (!isFreshLoad && editorMode === "edit" && editBaseline !== null && data.current_version !== editBaseline) {
         // Quote was modified externally while editing - clear staging and warn user
         clearEditModeState()
         setQuoteChangedDialogOpen(true)
@@ -286,7 +306,21 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   }
 
   useEffect(() => {
-    fetchQuote()
+    // Switching to a different quote is a fresh start: drop any staged edits/invoicing
+    // and return to view mode, so the previous quote's unsaved state can't bleed into
+    // this one (Issue #204 — the leave-guard's Discard path relies on this reset).
+    setEditorMode("view")
+    setStagedEdits(new Map())
+    setStagedAdds([])
+    setStagedDeletes(new Set())
+    setStagedFulfillments(new Map())
+    setEditModeStartVersion(null)
+    setInitialQuoteVersion(null)
+    // Fresh load of a different quote: skip the Flow 7E external-change check. The
+    // view/null resets above aren't visible to fetchQuote's closure yet (setState is
+    // async), so without this flag it compares the NEW quote against the PREVIOUS
+    // quote's stale edit/invoicing baseline and wrongly shows "Quote Data Changed" (#204).
+    fetchQuote(undefined, true)
     fetchResources()
     api.companySettings.get().then(setCompanySettings).catch(() => {})
     api.costCodes.getAll().then(setCostCodes).catch(() => {})
@@ -314,6 +348,30 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       window.removeEventListener("beforeunload", handleBeforeUnload)
     }
   }, [hasAnyUnsavedChanges])
+
+  // --- Unsaved-changes guard wiring (Issue #204) ---
+  // Report unsaved state up so a parent navigation guard (ProjectDetailsPage) can
+  // prompt before this editor unmounts, e.g. when switching to another quote. Mirrors
+  // POEditor's onDirtyStateChange; hasAnyUnsavedChanges covers edit + invoicing.
+  useEffect(() => {
+    onDirtyStateChange?.(hasAnyUnsavedChanges)   // push current dirty state to the parent
+  }, [hasAnyUnsavedChanges, onDirtyStateChange])
+  useEffect(() => {
+    return () => onDirtyStateChange?.(false)     // clear the parent's flag if we unmount
+  }, [onDirtyStateChange])
+
+  // Stable holder for the latest commit fn + committability, so the imperative handle
+  // below keeps a stable identity while always delegating to the current values (the
+  // holder is refreshed after handleCommitChanges is defined, further down).
+  const commitApiRef = useRef<{ canCommit: boolean; commit: () => Promise<boolean> }>({
+    canCommit: false,
+    commit: async () => false,
+  })
+  // Expose commit() to the parent so its "Commit & leave" action can commit, then navigate.
+  useImperativeHandle(ref, () => ({
+    get canCommit() { return commitApiRef.current.canCommit },   // read the latest committability
+    commit: () => commitApiRef.current.commit(),                 // delegate to the latest handler
+  }), [])
 
   const openAddDialog = (type: LineItemType) => {
     setAddDialogType(type)
@@ -575,17 +633,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     }
   }
 
-  const handleDeleteLine = async (lineId: number) => {
-    if (!confirm("Delete this line item?")) return
-    try {
-      await api.quotes.deleteLine(quoteId, lineId)
-      fetchQuote()
-      onUpdate?.()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete line item")
-    }
-  }
-
   // ===== Edit Mode Handlers (Issue #8: Commit-based workflow) =====
 
   const enterEditMode = () => {
@@ -709,6 +756,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       (staged.quantity === undefined || staged.quantity === item.quantity) &&
       (staged.unit_price === undefined || staged.unit_price === item.unit_price) &&
       (staged.description === undefined || staged.description === item.description) &&
+      (staged.description_override === undefined || staged.description_override === (item.description_override ?? "")) &&
       (staged.markup_percent === undefined || staged.markup_percent === item.markup_percent) &&
       (staged.base_cost === undefined || staged.base_cost === item.base_cost)
 
@@ -723,10 +771,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     const tempId = nextTempId
     setNextTempId(prev => prev - 1)
     setStagedAdds(prev => [...prev, { ...newItem, tempId }])
-  }
-
-  const unstageAdd = (tempId: number) => {
-    setStagedAdds(prev => prev.filter(item => item.tempId !== tempId))
   }
 
   const updateStagedAdd = (
@@ -754,8 +798,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     })
   }
 
-  const handleCommitChanges = async () => {
-    if (!hasStagedChanges) return
+  const handleCommitChanges = async (): Promise<boolean> => {
+    if (!hasStagedChanges) return false
 
     setIsCommitting(true)
     setCommitConfirmOpen(false)
@@ -774,7 +818,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           setEditModeStartVersion(freshQuote.current_version)
           setQuoteChangedDialogOpen(true)
           setIsCommitting(false)
-          return
+          return false
         }
       }
 
@@ -804,6 +848,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           quantity: edit.quantity,
           unit_price: edit.unit_price,
           description: edit.description,
+          description_override: edit.description_override,
           markup_percent: edit.markup_percent,
           base_cost: edit.base_cost,
         })
@@ -845,27 +890,22 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       // Refresh quote data
       fetchQuote()
       onUpdate?.()
+      return true                     // success -> a "Commit & leave" caller may navigate
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to commit changes")
+      return false                    // failure -> the caller should stay put
     } finally {
       setIsCommitting(false)
     }
   }
 
-  // Helper to get display value considering staged edits
-  const getDisplayQuantity = (item: QuoteLineItem): number => {
-    const staged = stagedEdits.get(item.id)
-    return staged?.quantity ?? item.quantity
+  // Keep the imperative handle (Issue #204) pointing at the latest commit fn and
+  // committability. Plain assignment (not a hook) so it stays order-safe; on the
+  // loading/error early-return paths it simply keeps the safe defaults above.
+  commitApiRef.current = {
+    canCommit: editorMode === "edit" && hasStagedChanges,   // only offer Commit for staged edits
+    commit: handleCommitChanges,                            // resolves true on success
   }
-
-  const getDisplayUnitPrice = (item: QuoteLineItem): number | undefined => {
-    const staged = stagedEdits.get(item.id)
-    return staged?.unit_price ?? item.unit_price
-  }
-
-  // Check if controls should be enabled based on mode
-  const canEdit = editorMode === "edit" && !hasBeenInvoiced
-
   // These per-field "Save" buttons only close the inline editor; the value is held
   // in local state and persisted together on Commit (see handleCommitChanges).
   const handleSaveClientPoNumber = () => setIsEditingClientPo(false)
@@ -1074,6 +1114,11 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   }
 
   const getLineItemDescription = (item: QuoteLineItem): string => {
+    // A per-quote description override (issue #178) wins over the catalog label
+    // when set. Migrated lines leave this empty, so they render exactly as before.
+    if (item.description_override && item.description_override.trim()) {
+      return item.description_override
+    }
     if (item.item_type === "labor") {
       if (item.labor) {
         return item.labor.description
@@ -1090,16 +1135,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     return item.description || ""
   }
 
-  const getDescriptionLabel = (item: QuoteLineItem): string => {
-    if (item.item_type === "labor") return "Labour Description"
-    if (item.item_type === "part") return "Part Number"
-    return "Misc Description"
-  }
-
   // Pricing functions — delegate to shared @/lib/pricing module
   const getLineItemUnitPrice = (item: QuoteLineItem): number => _getLineItemUnitPrice(item)
-  const getLineItemSubtotal = (item: QuoteLineItem): number => _getLineItemSubtotal(item)
-  const getLineItemTotal = (item: QuoteLineItem): number => _getLineItemTotal(item)
 
   const calculateNonPmsTotal = (): number => {
     if (!quote) return 0
@@ -1108,9 +1145,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
 
   const getEffectiveUnitPrice = (item: QuoteLineItem): number =>
     _getEffectiveUnitPrice(item, calculateNonPmsTotal())
-
-  const getEffectiveLineItemTotal = (item: QuoteLineItem): number =>
-    _getEffectiveLineItemTotal(item, calculateNonPmsTotal())
 
   const calculateTotal = (): number => {
     if (!quote) return 0
@@ -1166,14 +1200,30 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
   }
 
   // Calculate total labor hours (excluding PMS items)
+  // Total non-PMS labour hours. In Edit mode this reflects staged adds/edits/
+  // deletes so that Parking and Travel (whose quantities derive from labour
+  // hours) count labour the user has added but not yet committed (issue #180).
+  // Outside Edit mode the staged collections are empty, so this returns exactly
+  // the persisted labour hours as before.
   const calculateTotalLaborHours = (): number => {
     if (!quote) return 0
-    return quote.line_items
-      .filter(item => item.item_type === "labor" && !item.is_pms && item.labor)
-      .reduce((sum, item) => {
-        const laborHours = item.labor?.hours || 0
-        return sum + (laborHours * item.quantity)
-      }, 0)
+    let hours = 0
+
+    // Persisted labour lines (skip staged deletes; honour staged-edit quantity)
+    for (const item of quote.line_items) {
+      if (stagedDeletes.has(item.id)) continue
+      if (item.item_type !== "labor" || item.is_pms || !item.labor) continue
+      const quantity = stagedEdits.get(item.id)?.quantity ?? item.quantity
+      hours += (item.labor.hours || 0) * quantity
+    }
+
+    // Staged (uncommitted) labour adds
+    for (const add of stagedAdds) {
+      if (add.item_type !== "labor" || add.is_pms || !add.labor) continue
+      hours += (add.labor.hours || 0) * add.quantity
+    }
+
+    return hours
   }
 
   // ===== Projected Calculations (for Edit Mode comparison) =====
@@ -1821,9 +1871,6 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     setStepperValues(newStepperValues)
   }
 
-  // Get total staged items count
-  const stagedCount = stagedFulfillments.size
-
   // Create invoice from staged fulfillments
   const handleCreateInvoice = async () => {
     if (stagedFulfillments.size === 0) return
@@ -2005,7 +2052,44 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
     }
   }
 
-  const runPrintQuote = async (includeBreakdown: boolean) => {
+  // Open the "move to project" dialog: load all projects except the current one.
+  const openMoveDialog = async () => {
+    if (!quote) return
+    setMoveTargetId("")
+    try {
+      const all = await api.projects.getAll()  // unbounded list of projects
+      setMoveProjects(all.filter((p) => p.id !== quote.project_id))  // exclude current
+    } catch {
+      setMoveProjects([])
+    }
+    setMoveDialogOpen(true)
+  }
+
+  // Move this quote to the chosen project. Same quote (invoices/history come along),
+  // but its number changes — reload the view via onSelectProject (same id, new number).
+  const handleMoveQuote = async () => {
+    if (!quote || !moveTargetId) return
+    setIsMoving(true)
+    try {
+      const moved = await api.quotes.move(quote.id, parseInt(moveTargetId, 10))
+      setMoveDialogOpen(false)
+      // A move keeps the same quote id, so the parent can't reload by re-selecting it.
+      // Confirm the new number, then let the parent close this editor + refresh the list
+      // (the quote now lives under the target project, not this one).
+      toast({ title: "Quote moved", description: `Now ${moved.quote_number} in the selected project.` })
+      if (onMoved) {
+        onMoved()
+      } else {
+        onUpdate?.()
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to move quote")
+    } finally {
+      setIsMoving(false)
+    }
+  }
+
+  const runPrintQuote = async (mode: QuotePrintMode) => {
     if (!quote) return
     setPrintDialogOpen(false)
     setIsPrinting(true)
@@ -2021,7 +2105,34 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
           quote={quote}
           project={project}
           companySettings={companySettings}
-          includeBreakdown={includeBreakdown}
+          mode={mode}
+        />
+      ).toBlob()
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to generate PDF")
+    } finally {
+      setIsPrinting(false)
+    }
+  }
+
+  const runPrintLaborHours = async () => {
+    if (!quote) return
+    setPrintDialogOpen(false)
+    setIsPrinting(true)
+    try {
+      const [project, companySettings, { pdf }, { LaborHoursPDF }] = await Promise.all([
+        api.projects.get(quote.project_id) as Promise<Project>,
+        api.companySettings.get(),
+        import('@react-pdf/renderer'),
+        import('@/components/pdf/LaborHoursPDF'),
+      ])
+      const blob = await pdf(
+        <LaborHoursPDF
+          quote={quote}
+          project={project}
+          companySettings={companySettings}
         />
       ).toBlob()
       const url = URL.createObjectURL(blob)
@@ -2171,6 +2282,7 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               <TableRow>
                 <TableHead>Description</TableHead>
                 <TableHead className="text-right">Qty Ordered</TableHead>
+                {type === "labor" && <TableHead className="text-right">Hours</TableHead>}
                 <TableHead className="text-right">Qty Pending</TableHead>
                 {/* Qty to Fulfill column - only in invoicing mode */}
                 {editorMode === "invoicing" && (
@@ -2235,10 +2347,23 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                             Deleted
                           </Badge>
                         )}
-                        {item.item_type === "part" && item.part && (
+                        {item.item_type === "part" && item.part && !(item.description_override && item.description_override.trim()) && (
                           <span className="text-muted-foreground ml-2">- {item.part.description}</span>
                         )}
                       </div>
+                      {/* Per-quote description override (issue #178) — edit mode only.
+                          Changes only this quote line's printed description, never inventory. */}
+                      {editorMode === "edit" && !isDeleted && (
+                        <Input
+                          type="text"
+                          className="mt-1 h-7 text-sm"
+                          placeholder="Custom description for this quote (optional)"
+                          value={editedItem?.description_override ?? item.description_override ?? ""}
+                          onChange={(e) => stageEdit(item, { description_override: e.target.value })}
+                          disabled={hasBeenInvoiced}
+                          title="Overrides this line's printed description for this quote only — does not change the inventory item"
+                        />
+                      )}
                     </TableCell>
 
                     {/* Qty Ordered Column — inline-editable in edit mode (non-PMS) */}
@@ -2263,6 +2388,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                       )}
                     </TableCell>
 
+                    {/* Hours Column — labour only (issue #181): line hours = catalog hours × qty */}
+                    {type === "labor" && (
+                      <TableCell className="text-right text-muted-foreground">
+                        {item.labor ? parseFloat((item.labor.hours * (editedItem?.quantity ?? item.quantity)).toFixed(2)) : "—"}
+                      </TableCell>
+                    )}
                     {/* Qty Pending Column - now read-only display */}
                     <TableCell className="text-right">
                       {item.qty_pending}
@@ -2602,6 +2733,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                         <span className="text-green-700 dark:text-green-300 font-medium">{add.quantity}</span>
                       )}
                     </TableCell>
+                    {/* Hours — labour only (issue #181) */}
+                    {type === "labor" && (
+                      <TableCell className="text-right text-muted-foreground">
+                        {add.labor ? parseFloat((add.labor.hours * add.quantity).toFixed(2)) : "—"}
+                      </TableCell>
+                    )}
                     {/* Qty Pending */}
                     <TableCell className="text-right text-muted-foreground">-</TableCell>
                     {/* Qty to Fulfill - only in invoicing mode */}
@@ -2699,6 +2836,12 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                   <TableCell className="font-semibold">Section Total</TableCell>
                   {/* Qty Ordered */}
                   <TableCell className="text-right font-semibold">{calculateSectionTotals(items, useEffectivePricing).qtyOrdered}</TableCell>
+                  {/* Hours total — labour only (issue #181) */}
+                  {type === "labor" && (
+                    <TableCell className="text-right font-semibold">
+                      {parseFloat(items.reduce((s, i) => s + (i.labor ? i.labor.hours * i.quantity : 0), 0).toFixed(2))}
+                    </TableCell>
+                  )}
                   {/* Qty Pending */}
                   <TableCell className="text-right font-semibold">{calculateSectionTotals(items, useEffectivePricing).qtyPending}</TableCell>
                   {/* Qty to Fulfill - only in invoicing mode */}
@@ -2763,6 +2906,8 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                     </TableCell>
                     {/* Qty Ordered */}
                     <TableCell></TableCell>
+                    {/* Hours — labour only (issue #181) */}
+                    {type === "labor" && <TableCell></TableCell>}
                     {/* Qty Pending */}
                     <TableCell></TableCell>
                     {/* Qty to Fulfill */}
@@ -3340,8 +3485,55 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
                 <Copy className="h-4 w-4" />
                 {isCloning ? "Cloning..." : "Clone"}
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openMoveDialog}
+                disabled={isMoving}
+                className="shadow-md gap-2 bg-background"
+              >
+                <FolderInput className="h-4 w-4" />
+                {isMoving ? "Moving..." : "Move"}
+              </Button>
             </div>
           )}
+
+          {/* Move-to-project dialog (issue #209) */}
+          <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Move quote to another project</DialogTitle>
+                <DialogDescription>
+                  The quote keeps its history and invoices, but its number will change to the
+                  target project's code and next sequence. Any invoices on this quote move with
+                  it and re-number too.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2 py-2">
+                <Label>Target project</Label>
+                <SearchableSelect
+                  options={moveProjects.map((p): SearchableSelectOption => ({
+                    value: p.id.toString(),
+                    label: `${p.uca_project_number} — ${p.name}`,
+                  }))}
+                  value={moveTargetId}
+                  onChange={setMoveTargetId}
+                  placeholder="Select a project..."
+                  searchPlaceholder="Search projects..."
+                  emptyMessage="No other projects found."
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={isMoving}>
+                  Cancel
+                </Button>
+                <Button onClick={handleMoveQuote} disabled={isMoving || !moveTargetId} className="gap-2">
+                  <FolderInput className="h-4 w-4" />
+                  {isMoving ? "Moving..." : "Move quote"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           <div className="flex gap-2">
             {/* View Mode: Edit Quote and Create Invoice buttons */}
@@ -3773,13 +3965,13 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
               Print Quote
             </DialogTitle>
             <DialogDescription>
-              Choose how line items appear in the printout.
+              Choose what to print for this quote.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 pt-2">
             <button
               type="button"
-              onClick={() => runPrintQuote(true)}
+              onClick={() => runPrintQuote('full')}
               className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
             >
               <div className="font-medium">Include line-item breakdown</div>
@@ -3789,12 +3981,32 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
             </button>
             <button
               type="button"
-              onClick={() => runPrintQuote(false)}
+              onClick={() => runPrintQuote('category-totals')}
+              className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
+            >
+              <div className="font-medium">Category totals only</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Show each item's description and quantity, hide per-item unit prices and totals, but keep each category's subtotal and the final Subtotal, HST, and Total.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => runPrintQuote('quantities')}
               className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
             >
               <div className="font-medium">Quantities only</div>
               <div className="text-sm text-muted-foreground mt-1">
                 Show each item's description and quantity, but hide all unit prices, line totals, and section subtotals. Only the final Subtotal, HST, and Total are shown.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={runPrintLaborHours}
+              className="w-full text-left p-4 rounded-md border bg-background hover:bg-accent transition-colors"
+            >
+              <div className="font-medium">Labour hours report</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Show the calculated labour time for each item and the total labour hours for the quote, with the estimated labour cost before markup.
               </div>
             </button>
           </div>
@@ -4418,4 +4630,4 @@ export function QuoteEditor({ quoteId, onUpdate, onSelectQuote }: QuoteEditorPro
       </Dialog>
     </div>
   )
-}
+})

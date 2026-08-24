@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
-import { Show, SignInButton, UserButton } from "@clerk/react"
+import { Show, SignInButton, UserButton, useUser } from "@clerk/react"
+import { tel } from "@/lib/tel"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,6 +17,7 @@ import { PartForm } from "@/components/forms/PartForm"
 import { LaborForm } from "@/components/forms/LaborForm"
 import { MiscForm } from "@/components/forms/MiscForm"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { FeedbackWidget } from "@/components/FeedbackWidget"
 import { ProjectsPage } from "@/pages/ProjectsPage"
 import { api } from "@/api/client"
 import { useIsAdmin } from "@/hooks/use-is-admin"
@@ -127,6 +129,16 @@ function App() {
       navigate("/projects", { replace: true })
     }
   }, [currentView, isAdmin, navigate])
+
+  // Browser telemetry: attach the signed-in user (opaque Clerk id + display name,
+  // never an email/token) to every event, and clear to anonymous on sign-out.
+  // app_start + tab-hide flush live in lib/tel.ts. Inert unless telemetry env is set.
+  const { isLoaded: telUserLoaded, isSignedIn: telSignedIn, user: telUser } = useUser()
+  useEffect(() => {
+    if (!telUserLoaded) return
+    if (telSignedIn && telUser) tel.identify(telUser.id, telUser.fullName ?? telUser.username ?? null)
+    else tel.identify(null)
+  }, [telUserLoaded, telSignedIn, telUser])
 
   // Inventory state
   const [parts, setParts] = useState<Part[]>([])
@@ -385,7 +397,8 @@ function App() {
           const term = inventorySearchTerm.toLowerCase()
           if (!term) return true
           return (
-            labor.description.toLowerCase().includes(term)
+            labor.description.toLowerCase().includes(term) ||
+            (labor.product_code?.toLowerCase().includes(term) ?? false)
           )
         })
 
@@ -525,10 +538,11 @@ function App() {
                       items={filteredLaborItems}
                       rowHeight={52}
                       height="calc(100vh - 360px)"
-                      gridCols="grid-cols-[3fr_1fr_1fr_1fr_1fr_minmax(110px,auto)]"
+                      gridCols="grid-cols-[2.5fr_1fr_1fr_1fr_1fr_1fr_minmax(110px,auto)]"
                       header={
                         <>
                           <div className={headerCellClass}>Labour Description</div>
+                          <div className={headerCellClass}>Product Code</div>
                           <div className={`${headerCellClass} text-right`}>Hours</div>
                           <div className={`${headerCellClass} text-right`}>Rate</div>
                           <div className={`${headerCellClass} text-right`}>Markup</div>
@@ -543,6 +557,7 @@ function App() {
                       renderRow={(labor) => (
                         <>
                           <div className={`${cellClass} font-medium truncate`}>{labor.description}</div>
+                          <div className={`${cellClass} text-muted-foreground truncate`}>{labor.product_code || "—"}</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.hours}</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{formatCurrency(labor.rate)}/hr</div>
                           <div className={`${cellClass} text-muted-foreground justify-end`}>{labor.markup_percent}%</div>
@@ -820,6 +835,9 @@ function App() {
           )}
         </Suspense>
       </main>
+
+      {/* In-app feedback thread (hidden unless telemetry is configured). */}
+      <FeedbackWidget />
 
       {/* Part Dialog */}
       <Dialog open={partDialogOpen} onOpenChange={handlePartDialogClose}>

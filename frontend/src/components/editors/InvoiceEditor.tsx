@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { api } from "@/api/client"
-import type { Invoice, Project, CompanySettings } from "@/types"
+import type { Invoice, Project } from "@/types"
 import { Receipt, Package, Wrench, FileText, AlertTriangle, Printer, Loader2, Pencil } from "lucide-react"
 import { formatDateTime } from "@/lib/format"
 import { EditCreatedAtDialog } from "./EditCreatedAtDialog"

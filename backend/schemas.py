@@ -36,6 +36,7 @@ class CompanySettingsBase(BaseModel):
     hst_rate: float = 13.0
     default_pms_percent: Optional[float] = None
     logo_data_url: Optional[str] = None
+    usd_to_cad_rate: float = 1.38  # Live USD→CAD rate for USD-priced parts
 
 
 class CompanySettingsUpdate(BaseModel):
@@ -47,6 +48,7 @@ class CompanySettingsUpdate(BaseModel):
     hst_rate: Optional[float] = None
     default_pms_percent: Optional[float] = None
     logo_data_url: Optional[str] = None
+    usd_to_cad_rate: Optional[float] = None  # Live USD→CAD rate for USD-priced parts
 
 
 class CompanySettings(CompanySettingsBase):
@@ -91,6 +93,7 @@ class SystemRate(SystemRateBase):
 # ===== Invoice Summary (for Reports) =====
 class InvoiceSummaryItem(BaseModel):
     invoice_id: int
+    invoice_number: str  # Canonical number shown on the invoice document (Issue #205): "{invoice_seq}-{UCA}-{quote_seq:04d}-{quote_version}"
     invoice_date: datetime
     uca_project_number: str
     project_name: str
@@ -203,6 +206,7 @@ class PartBase(BaseModel):
     vendor_id: Optional[int] = None
     list_price: Optional[float] = None
     discount_percent: Optional[float] = None  # Per-part discount override
+    is_usd_priced: bool = False  # Cost is in USD; converted to CAD on the quote
 
 
 class PartCreate(PartBase):
@@ -219,6 +223,7 @@ class PartUpdate(BaseModel):
     vendor_id: Optional[int] = None
     list_price: Optional[float] = None
     discount_percent: Optional[float] = None
+    is_usd_priced: Optional[bool] = None  # Cost is in USD; converted to CAD on the quote
 
 
 class Part(PartBase):
@@ -231,6 +236,7 @@ class Part(PartBase):
 # ===== Labor Schemas =====
 class LaborBase(BaseModel):
     description: str
+    product_code: Optional[str] = None  # Product code, mirrors Part.part_number (issue #179)
     hours: float = 1
     rate: float
     markup_percent: float = 50.0
@@ -253,6 +259,7 @@ class LaborCreate(LaborBase):
 
 class LaborUpdate(BaseModel):
     description: Optional[str] = None
+    product_code: Optional[str] = None  # Product code, mirrors Part.part_number (issue #179)
     hours: Optional[float] = None
     rate: Optional[float] = None
     markup_percent: Optional[float] = None
@@ -433,6 +440,7 @@ class QuoteLineItemBase(BaseModel):
     part_id: Optional[int] = None
     misc_id: Optional[int] = None
     description: Optional[str] = None
+    description_override: Optional[str] = None  # Per-quote display description override (issue #178)
     quantity: int = 1  # Must be a positive whole number
     unit_price: Optional[float] = None
     is_pms: bool = False  # True for PMS items (Project Management Services)
@@ -459,6 +467,7 @@ class QuoteLineItemCreate(QuoteLineItemBase):
 class QuoteLineItemUpdate(BaseModel):
     quantity: Optional[int] = None  # Must be a positive whole number
     unit_price: Optional[float] = None
+    description_override: Optional[str] = None  # Per-quote display description override (issue #178)
 
     @validator('quantity', pre=True)
     def quantity_must_be_positive_integer(cls, v) -> Optional[int]:
@@ -512,6 +521,11 @@ class QuoteUpdate(BaseModel):
     work_description: Optional[str] = None
     hardware_schedule_version: Optional[str] = None
     cost_code_id: Optional[int] = None
+
+
+class ProjectMove(BaseModel):
+    """Body for moving a quote or PO to another project (issue #209)."""
+    project_id: int  # Target project to re-parent the document into
 
 
 class Quote(QuoteBase):
@@ -973,6 +987,7 @@ class QuoteLineItemSnapshotBase(BaseModel):
     part_id: Optional[int] = None
     misc_id: Optional[int] = None
     description: Optional[str] = None
+    description_override: Optional[str] = None  # Per-quote display description override (issue #178)
     quantity: int  # Must be whole number
     unit_price: Optional[float] = None
     qty_pending: int  # Must be whole number
@@ -1052,6 +1067,7 @@ class StagedLineItemChange(BaseModel):
     part_id: Optional[int] = None
     misc_id: Optional[int] = None
     description: Optional[str] = None
+    description_override: Optional[str] = None  # Per-quote display description override (issue #178)
     quantity: Optional[int] = None  # Must be a positive whole number
     unit_price: Optional[float] = None
     is_pms: bool = False

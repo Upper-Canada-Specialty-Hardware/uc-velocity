@@ -17,8 +17,10 @@ import type {
   CommitEditsRequest, CommitEditsResponse,
   CompanySettings, CompanySettingsUpdate, InvoiceSummaryItem,
   BacklogQuoteItem, InventoryHealthReport, PricebookImportResult, MigrationResult,
-  SystemRate, SystemRateCreate, SystemRateUpdate
+  SystemRate, SystemRateCreate, SystemRateUpdate,
+  FeedbackThread
 } from '@/types';
+import { tel } from '@/lib/tel';
 
 // API base URL - configurable via environment variable for production
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
@@ -38,17 +40,46 @@ async function request<T>(
     // Best-effort: if Clerk isn't ready yet, proceed without a token.
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    // Disable HTTP caching for all API calls so a cold full-page reload never
-    // replays a stale cached GET. Placed before ...options so a caller can
-    // still override it per-call if ever needed.
-    cache: 'no-store',
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders,
-      ...options.headers,
-    },
+  const method = (options.method ?? 'GET').toUpperCase();
+  // Group by path in telemetry: strip the query string (the service further
+  // templates ids, e.g. /quotes/42 -> /quotes/:id).
+  const telemetryPath = endpoint.split('?')[0];
+  const started = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${endpoint}`, {
+      // Disable HTTP caching for all API calls so a cold full-page reload never
+      // replays a stale cached GET. Placed before ...options so a caller can
+      // still override it per-call if ever needed.
+      cache: 'no-store',
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+        ...options.headers,
+      },
+    });
+  } catch (e) {
+    // Network/abort failure — the attempt never reached a status. Record it and
+    // rethrow; telemetry is non-blocking and inert unless its env is set.
+    tel.error('backend_call', {
+      endpoint: telemetryPath,
+      http_method: method,
+      error_class: (e as Error).name,
+      error_message: String(e),
+      duration_ms: Date.now() - started,
+    });
+    throw e;
+  }
+
+  // Every completed call is an attempt — record it with its status (the error-rate
+  // denominator). Use telemetryPath (query stripped, real ids kept) so success and
+  // failure group identically and no query-string content (e.g. search text) leaks.
+  tel.action('backend_call', undefined, {
+    endpoint: telemetryPath,
+    http_method: method,
+    status_code: response.status,
+    duration_ms: Date.now() - started,
   });
 
   if (!response.ok) {
@@ -57,7 +88,8 @@ async function request<T>(
     if (typeof error.detail === 'string') {
       message = error.detail;
     } else if (Array.isArray(error.detail)) {
-      message = error.detail.map((e: any) => e.msg).join('; ');
+      // Join each validation error's msg into one string (FastAPI `detail` is an array of { msg }).
+      message = error.detail.map((e: { msg?: string }) => e.msg).join('; ');
     }
     throw new Error(message);
   }
@@ -237,6 +269,13 @@ export const api = {
     clone: (quoteId: number) =>
       request<Quote>(`/quotes/${quoteId}/clone`, { method: 'POST' }),
 
+    // Move to another project (issue #209) — re-parents in place; number changes.
+    move: (quoteId: number, projectId: number) =>
+      request<Quote>(`/quotes/${quoteId}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ project_id: projectId }),
+      }),
+
     // Commit Edits (Edit Mode)
     commitEdits: (quoteId: number, data: CommitEditsRequest) =>
       request<CommitEditsResponse>(`/quotes/${quoteId}/commit`, { method: 'POST', body: JSON.stringify(data) }),
@@ -342,6 +381,13 @@ export const api = {
     // Clone
     clone: (poId: number) =>
       request<PurchaseOrder>(`/purchase-orders/${poId}/clone`, { method: 'POST' }),
+
+    // Move to another project (issue #209) — re-parents in place; number changes.
+    move: (poId: number, projectId: number) =>
+      request<PurchaseOrder>(`/purchase-orders/${poId}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ project_id: projectId }),
+      }),
   },
 
   // ===== Cost Codes =====
@@ -377,7 +423,8 @@ export const api = {
         if (typeof error.detail === 'string') {
           message = error.detail;
         } else if (Array.isArray(error.detail)) {
-          message = error.detail.map((e: any) => e.msg).join('; ');
+          // Join each validation error's msg into one string (FastAPI `detail` is an array of { msg }).
+      message = error.detail.map((e: { msg?: string }) => e.msg).join('; ');
         }
         throw new Error(message);
       }
@@ -401,11 +448,28 @@ export const api = {
         if (typeof error.detail === 'string') {
           message = error.detail;
         } else if (Array.isArray(error.detail)) {
-          message = error.detail.map((e: any) => e.msg).join('; ');
+          // Join each validation error's msg into one string (FastAPI `detail` is an array of { msg }).
+      message = error.detail.map((e: { msg?: string }) => e.msg).join('; ');
         }
         throw new Error(message);
       }
       return response.json();
     },
+  },
+
+  // ===== Feedback (UCSH telemetry service) =====
+  // Backend proxies these to the telemetry service so the ingest key stays
+  // server-side and the per-user thread key is derived from the Clerk identity.
+  feedback: {
+    // Whether telemetry is switched on; the widget hides itself when false.
+    config: () => request<{ enabled: boolean }>(`/feedback/config`),
+    // This user's own threads (their notes + dev/user replies).
+    threads: () => request<{ threads: FeedbackThread[] }>(`/feedback/threads`),
+    // Open a new feedback note.
+    submit: (data: { message: string; title?: string; category?: string }) =>
+      request<{ ok: boolean }>(`/feedback/submit`, { method: 'POST', body: JSON.stringify(data) }),
+    // Reply within an existing thread.
+    reply: (data: { feedback_id: number; message: string }) =>
+      request<{ ok: boolean }>(`/feedback/reply`, { method: 'POST', body: JSON.stringify(data) }),
   },
 };

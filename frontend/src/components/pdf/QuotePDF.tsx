@@ -12,11 +12,19 @@ import {
 } from '@/lib/pricing'
 import type { Quote, QuoteLineItem, Project, CompanySettings } from '@/types'
 
+/**
+ * How line items are priced on the printout:
+ *  - 'full'            — description, qty, unit price, per-line total, category subtotal
+ *  - 'category-totals' — description, qty, NO per-line pricing, but keep category subtotals (Issue #174)
+ *  - 'quantities'      — description, qty only; no per-line pricing and no category subtotals
+ */
+export type QuotePrintMode = 'full' | 'category-totals' | 'quantities'
+
 interface QuotePDFProps {
   quote: Quote
   project: Project
   companySettings: CompanySettings
-  includeBreakdown?: boolean
+  mode?: QuotePrintMode
 }
 
 function LineItemTable({
@@ -24,19 +32,29 @@ function LineItemTable({
   items,
   nonPmsTotal,
   useEffective,
-  showLineDetails,
+  mode,
 }: {
   title: string
   items: QuoteLineItem[]
   nonPmsTotal: number
   useEffective?: boolean
-  showLineDetails: boolean
+  mode: QuotePrintMode
 }) {
   if (items.length === 0) return null
 
-  // Quantities-only mode: list each item's description + qty, with no pricing
-  // and no section subtotal (only the final Subtotal/HST/Total appear at the bottom).
-  if (!showLineDetails) {
+  const showPricing = mode === 'full'
+  const showSubtotal = mode === 'full' || mode === 'category-totals'
+  const sectionTotal = showSubtotal
+    ? items.reduce(
+        (sum, item) =>
+          sum + (useEffective ? getEffectiveLineItemTotal(item, nonPmsTotal) : getLineItemTotal(item)),
+        0
+      )
+    : 0
+
+  // No-pricing layout (quantities-only or category-totals): description + qty only.
+  // A category subtotal row is appended for 'category-totals' but not 'quantities'.
+  if (!showPricing) {
     return (
       <>
         <Text style={styles.sectionTitle}>{title}</Text>
@@ -54,15 +72,17 @@ function LineItemTable({
             <Text style={styles.colQtyWide}>{item.quantity}</Text>
           </View>
         ))}
+        {showSubtotal && (
+          <View style={styles.tableFooterRow}>
+            <Text style={[styles.bold, { width: '70%' }]}>{title} Subtotal</Text>
+            <Text style={[styles.bold, { width: '30%', textAlign: 'right' }]}>
+              {formatCurrency(sectionTotal)}
+            </Text>
+          </View>
+        )}
       </>
     )
   }
-
-  const sectionTotal = items.reduce(
-    (sum, item) =>
-      sum + (useEffective ? getEffectiveLineItemTotal(item, nonPmsTotal) : getLineItemTotal(item)),
-    0
-  )
 
   return (
     <>
@@ -115,6 +135,9 @@ function LineItemTable({
 }
 
 function getItemDescription(item: QuoteLineItem): string {
+  // A per-quote description override (issue #178) wins over the catalog label
+  // when set. Migrated lines leave this empty, so they print exactly as before.
+  if (item.description_override && item.description_override.trim()) return item.description_override
   if (item.item_type === 'labor' && item.labor) return item.labor.description
   if (item.item_type === 'part' && item.part)
     return `${item.part.part_number} - ${item.part.description}`
@@ -122,7 +145,7 @@ function getItemDescription(item: QuoteLineItem): string {
   return item.description || 'Unknown item'
 }
 
-export function QuotePDF({ quote, project, companySettings, includeBreakdown = true }: QuotePDFProps) {
+export function QuotePDF({ quote, project, companySettings, mode = 'full' }: QuotePDFProps) {
   const partItems = quote.line_items.filter(i => i.item_type === 'part')
   const laborItems = quote.line_items.filter(i => i.item_type === 'labor')
   const miscItems = quote.line_items.filter(i => i.item_type === 'misc')
@@ -193,9 +216,9 @@ export function QuotePDF({ quote, project, companySettings, includeBreakdown = t
         )}
 
         {/* Line Items by Section */}
-        <LineItemTable title="Parts" items={partItems} nonPmsTotal={nonPmsTotal} showLineDetails={includeBreakdown} />
-        <LineItemTable title="Labour" items={laborItems} nonPmsTotal={nonPmsTotal} useEffective showLineDetails={includeBreakdown} />
-        <LineItemTable title="Miscellaneous" items={miscItems} nonPmsTotal={nonPmsTotal} showLineDetails={includeBreakdown} />
+        <LineItemTable title="Parts" items={partItems} nonPmsTotal={nonPmsTotal} mode={mode} />
+        <LineItemTable title="Labour" items={laborItems} nonPmsTotal={nonPmsTotal} useEffective mode={mode} />
+        <LineItemTable title="Miscellaneous" items={miscItems} nonPmsTotal={nonPmsTotal} mode={mode} />
 
         {/* Totals */}
         <View style={styles.totalsBlock}>

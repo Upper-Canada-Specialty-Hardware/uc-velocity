@@ -28,6 +28,7 @@ export interface CompanySettings {
   hst_rate: number;
   default_pms_percent?: number | null;
   logo_data_url?: string | null;
+  usd_to_cad_rate: number;  // Live USD→CAD rate for USD-priced parts
 }
 
 export interface CompanySettingsUpdate {
@@ -39,6 +40,7 @@ export interface CompanySettingsUpdate {
   hst_rate?: number;
   default_pms_percent?: number | null;
   logo_data_url?: string | null;
+  usd_to_cad_rate?: number;  // Live USD→CAD rate for USD-priced parts
 }
 
 // ===== System Rates =====
@@ -70,6 +72,7 @@ export interface SystemRateUpdate {
 // ===== Invoice Summary (for Reports) =====
 export interface InvoiceSummaryItem {
   invoice_id: number;
+  invoice_number: string; // Canonical number shown on the invoice document (Issue #205)
   invoice_date: string;
   uca_project_number: string;
   project_name: string;
@@ -146,6 +149,7 @@ export interface CostCodeUpdate {
 export interface Labor {
   id: number;
   description: string;
+  product_code?: string;  // Product code, mirrors Part.part_number (issue #179)
   hours: number;
   rate: number;
   markup_percent: number;
@@ -154,6 +158,7 @@ export interface Labor {
 
 export interface LaborCreate {
   description: string;
+  product_code?: string;  // Product code, mirrors Part.part_number (issue #179)
   hours: number;
   rate: number;
   markup_percent: number;
@@ -172,6 +177,7 @@ export interface Part {
   vendor_id?: number;
   list_price?: number;
   discount_percent?: number;  // Per-part discount override
+  is_usd_priced: boolean;  // Cost is in USD; converted to CAD on the quote
 }
 
 export interface PartCreate {
@@ -184,6 +190,7 @@ export interface PartCreate {
   vendor_id?: number;
   list_price?: number;
   discount_percent?: number;
+  is_usd_priced?: boolean;  // Cost is in USD; converted to CAD on the quote
 }
 
 // ===== Miscellaneous =====
@@ -275,6 +282,28 @@ export interface ProfileUpdate {
   default_discount_percent?: number;
 }
 
+// ===== Feedback (UCSH telemetry service) =====
+// A reply within a feedback thread. `author_kind` is 'dev' for a UCSH reply
+// (author = the dev's GitHub login) or 'user' for the person's own reply.
+export interface FeedbackReply {
+  author_kind: 'user' | 'dev';
+  author: string | null;
+  body: string;
+  received_at: string;
+}
+
+// One feedback note the signed-in user opened, with its replies (oldest-first).
+export interface FeedbackThread {
+  id: number;
+  received_at: string;
+  source: string;
+  region: string | null;
+  category: string | null;
+  title: string | null;
+  message: string;
+  replies: FeedbackReply[];
+}
+
 // ===== Projects =====
 export interface Project {
   id: number;
@@ -358,6 +387,7 @@ export interface QuoteLineItem {
   part_id?: number;
   misc_id?: number;
   description?: string;
+  description_override?: string;  // Per-quote display description override (issue #178)
   quantity: number;  // Qty Ordered
   unit_price?: number;
   qty_pending: number;  // Remaining to fulfill
@@ -802,6 +832,7 @@ export interface StagedLineItemChange {
   part_id?: number;
   misc_id?: number;
   description?: string;
+  description_override?: string;  // Per-quote display description override (issue #178)
   quantity?: number;
   unit_price?: number;
   is_pms?: boolean;
@@ -834,6 +865,7 @@ export interface StagedEdit {
   quantity?: number;
   unit_price?: number;
   description?: string;
+  description_override?: string;  // Per-quote display description override (issue #178)
   markup_percent?: number;
   base_cost?: number;  // Unit cost override
 }

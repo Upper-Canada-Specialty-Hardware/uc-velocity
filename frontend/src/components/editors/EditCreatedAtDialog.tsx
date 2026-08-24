@@ -49,6 +49,8 @@ export function EditCreatedAtDialog({
 
   // Reset the input to the current value each time the dialog opens.
   useEffect(() => {
+    // Intentional one-shot reset when the dialog opens (not a render loop), so the rule is safe to disable here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (open) setLocalValue(toDateTimeLocalValue(currentCreatedAt))
   }, [open, currentCreatedAt])
 

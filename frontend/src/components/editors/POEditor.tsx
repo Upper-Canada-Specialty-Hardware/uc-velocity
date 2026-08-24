@@ -51,13 +51,13 @@ import { Calendar as CalendarWidget } from "@/components/ui/calendar"
 import type { SearchableSelectOption } from "@/components/ui/searchable-select"
 import { api } from "@/api/client"
 import type {
-  PurchaseOrder, POLineItem, POLineItemCreate, POLineItemType, POStatus, Part, CostCode,
+  PurchaseOrder, POLineItem, POLineItemType, POStatus, Part, CostCode,
   POEditorMode, StagedPOEdit, StagedPOAdd,
   StagedPOLineItemChange, POCommitEditsRequest, POReceiving, POReceivingCreate, POReceivingLineItemCreate,
   CompanySettings, Project
 } from "@/types"
 import {
-  Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy,
+  Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy, FolderInput,
   X, GitCommit, Eye, AlertTriangle, Check, Calendar, Loader2, Hash, Printer,
   History, ChevronDown, ChevronRight, Receipt, Info, ArrowLeft
 } from "lucide-react"
@@ -71,10 +71,11 @@ interface POEditorProps {
   poId: number
   onUpdate?: () => void
   onSelectPO?: (poId: number) => void
+  onMoved?: () => void  // after a move the PO left this project; parent closes the editor + refreshes (#209)
   onDirtyStateChange?: (isDirty: boolean) => void
 }
 
-export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POEditorProps) {
+export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChange }: POEditorProps) {
   // ===== Core State =====
   const [po, setPO] = useState<PurchaseOrder | null>(null)
   const [loading, setLoading] = useState(true)
@@ -141,6 +142,12 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
 
   // ===== Clone State =====
   const [isCloning, setIsCloning] = useState(false)
+
+  // Move-to-project state (issue #209): dialog, target-project list, chosen target, in-flight.
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false)
+  const [isMoving, setIsMoving] = useState(false)
+  const [moveProjects, setMoveProjects] = useState<Project[]>([])
+  const [moveTargetId, setMoveTargetId] = useState<string>("")
   const [cloneConfirmOpen, setCloneConfirmOpen] = useState(false)
 
   // Print PDF state
@@ -171,7 +178,6 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
   const hasStagedChanges = stagedEdits.size > 0 || stagedAdds.length > 0 || stagedDeletes.size > 0
   const stagedChangesCount = stagedEdits.size + stagedAdds.length + stagedDeletes.size
   const hasAnyUnsavedChanges = editorMode === "edit" && hasStagedChanges
-  const canEdit = editorMode === "edit" && po?.status === "Draft"
   const hasPendingItems = po?.line_items.some(item => item.qty_pending > 0) ?? false
   const canReceive = (po?.status === "Sent" || po?.status === "Received") && hasPendingItems
   const stagedReceivingsCount = Array.from(stagedReceivings.values()).filter(r => r.qty_received > 0).length
@@ -695,6 +701,43 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
     }
   }
 
+  // Open the "move to project" dialog: load all projects except the current one.
+  const openMovePODialog = async () => {
+    if (!po) return
+    setMoveTargetId("")
+    try {
+      const all = await api.projects.getAll()  // unbounded list of projects
+      setMoveProjects(all.filter((p) => p.id !== po.project_id))  // exclude current
+    } catch {
+      setMoveProjects([])
+    }
+    setMoveDialogOpen(true)
+  }
+
+  // Move this PO to the chosen project. Same PO (receivings/history come along), but its
+  // number changes — reload via onSelectPO (same id, new number).
+  const handleMovePO = async () => {
+    if (!po || !moveTargetId) return
+    setIsMoving(true)
+    try {
+      const moved = await api.purchaseOrders.move(po.id, parseInt(moveTargetId, 10))
+      setMoveDialogOpen(false)
+      // A move keeps the same PO id, so the parent can't reload by re-selecting it.
+      // Confirm the new number, then let the parent close this editor + refresh the list
+      // (the PO now lives under the target project, not this one).
+      alert(`Purchase order moved. New number: ${moved.po_number}`)
+      if (onMoved) {
+        onMoved()
+      } else {
+        onUpdate?.()
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to move purchase order")
+    } finally {
+      setIsMoving(false)
+    }
+  }
+
   // ===== Print PO Handler =====
 
   const runPrintPO = async (includeBreakdown: boolean) => {
@@ -950,15 +993,6 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
         return <Package className="h-4 w-4" />
       case "misc":
         return <FileText className="h-4 w-4" />
-    }
-  }
-
-  const getTypeBadgeVariant = (type: POLineItemType) => {
-    switch (type) {
-      case "part":
-        return "secondary"
-      case "misc":
-        return "outline"
     }
   }
 
@@ -1319,14 +1353,21 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
         : "border-2 border-transparent"
     }`}>
 
-      {/* Received Banner */}
+      {/* Received banner — shown once receiving has started (edits are then restricted).
+          Label must reflect the REAL state (fully vs partially received), not a fixed string. */}
       {hasBeenReceived && (
         <Card className="border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950">
           <CardContent className="py-3">
             <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
               <Check className="h-4 w-4" />
-              <span className="font-medium">Partially Received</span>
-              <span className="text-sm">— Some items on this PO have been received. Line item edits are restricted.</span>
+              {/* hasPendingItems = any line still has qty_pending > 0 -> a partial receive.
+                  When false, everything is received; the banner said "Partially" regardless — the bug. */}
+              <span className="font-medium">{hasPendingItems ? "Partially Received" : "Fully Received"}</span>
+              <span className="text-sm">
+                {hasPendingItems
+                  ? "— Some items on this PO have been received. Line item edits are restricted."
+                  : "— All items on this PO have been received. Line item edits are restricted."}
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -1801,8 +1842,54 @@ export function POEditor({ poId, onUpdate, onSelectPO, onDirtyStateChange }: POE
                 <Copy className="h-4 w-4" />
                 {isCloning ? "Cloning..." : "Clone"}
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openMovePODialog}
+                disabled={isMoving}
+                className="shadow-md gap-2 bg-background"
+              >
+                <FolderInput className="h-4 w-4" />
+                {isMoving ? "Moving..." : "Move"}
+              </Button>
             </div>
           )}
+
+          {/* Move-to-project dialog (issue #209) */}
+          <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Move purchase order to another project</DialogTitle>
+                <DialogDescription>
+                  The PO keeps its history and receivings, but its number will change to the
+                  target project's code and next sequence.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2 py-2">
+                <Label>Target project</Label>
+                <SearchableSelect
+                  options={moveProjects.map((p): SearchableSelectOption => ({
+                    value: p.id.toString(),
+                    label: `${p.uca_project_number} — ${p.name}`,
+                  }))}
+                  value={moveTargetId}
+                  onChange={setMoveTargetId}
+                  placeholder="Select a project..."
+                  searchPlaceholder="Search projects..."
+                  emptyMessage="No other projects found."
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={isMoving}>
+                  Cancel
+                </Button>
+                <Button onClick={handleMovePO} disabled={isMoving || !moveTargetId} className="gap-2">
+                  <FolderInput className="h-4 w-4" />
+                  {isMoving ? "Moving..." : "Move PO"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <div className="flex gap-2">
             {/* View Mode: Enter Edit Mode button (only for Draft POs that haven't been received) */}
             {editorMode === "view" && po.status === "Draft" && !hasBeenReceived && (

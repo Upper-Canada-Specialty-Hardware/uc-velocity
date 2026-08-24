@@ -111,6 +111,7 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
     }
   }
 
+  // Maps an action type to its Badge `variant`; the call site casts to that union (avoids `any`).
   const getActionBadgeVariant = (actionType: string) => {
     switch (actionType) {
       case "create":
@@ -240,7 +241,7 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
                               v{snapshot.version}
                             </span>
                             <Badge
-                              variant={getActionBadgeVariant(snapshot.action_type) as any}
+                              variant={getActionBadgeVariant(snapshot.action_type) as "default" | "secondary" | "destructive" | "outline"}
                               className={getActionBadgeClass(snapshot.action_type)}
                             >
                               {snapshot.action_type}

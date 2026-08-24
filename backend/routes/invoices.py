@@ -22,7 +22,7 @@ from schemas import (
     InvoiceRevertPreview,
     CreatedAtUpdate
 )
-from routes.quotes import populate_invoice_number
+from routes.quotes import populate_invoice_number, format_invoice_number
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -126,6 +126,16 @@ def list_invoices(
 
         results.append(InvoiceSummaryItem(
             invoice_id=inv.id,
+            # Canonical invoice number as printed on the invoice document, so the report
+            # reconciles against issued invoices (Issue #205). Reuses the single formatter
+            # plus the components frozen at invoice time: the invoice's own sequence and
+            # captured quote_version, plus the quote's UCA number and sequence.
+            invoice_number=format_invoice_number(
+                inv.invoice_sequence,
+                inv.quote.project.uca_project_number,
+                inv.quote.quote_sequence,
+                inv.quote_version,
+            ),
             invoice_date=inv.created_at,
             uca_project_number=inv.quote.project.uca_project_number,
             project_name=inv.quote.project.name,

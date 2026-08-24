@@ -99,6 +99,9 @@ class Part(Base):
     vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=True, index=True)
     list_price = Column(Float, nullable=True)
     discount_percent = Column(Float, nullable=True)  # Per-part discount override (nullable)
+    # Flags that this part's `cost` is entered in USD; converted to CAD at the
+    # live company rate when the part is added to a quote. Non-null, defaults false.
+    is_usd_priced = Column(Boolean, nullable=False, server_default='false', default=False)
 
     # Relationships
     category = relationship("Category", back_populates="parts")
@@ -111,6 +114,7 @@ class Labor(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     description = Column(String, nullable=False)
+    product_code = Column(String, nullable=True)  # Product code, mirrors Part.part_number (issue #179)
     hours = Column(Float, nullable=False, default=1)
     rate = Column(Float, nullable=False)
     markup_percent = Column(Float, default=50.0)
@@ -172,7 +176,10 @@ class Quote(Base):
     quote_sequence = Column(Integer, nullable=False)  # Per-project sequence number (1, 2, 3...)
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="Draft")  # "Draft", "Work Order", "Invoiced", "Closed" — computed by system
-    current_version = Column(Integer, default=0)  # Current snapshot version
+    current_version = Column(Integer, default=0)  # Internal audit counter — bumps on every snapshot
+    # Visible version shown in the quote/invoice number. Advances ONLY on line-item
+    # add/edit/delete (issue #202); invoice creation and date edits leave it unchanged.
+    item_list_version = Column(Integer, default=0, server_default='0')
     client_po_number = Column(String, nullable=True)  # Client's PO number (required for invoicing)
     work_description = Column(String, nullable=True)  # Optional work description
     hardware_schedule_version = Column(String, nullable=True)  # Optional hardware schedule version identifier
@@ -201,6 +208,7 @@ class QuoteLineItem(Base):
     part_id = Column(Integer, ForeignKey('parts.id'), nullable=True)
     misc_id = Column(Integer, ForeignKey('miscellaneous.id'), nullable=True)
     description = Column(String)  # For misc items or override
+    description_override = Column(String, nullable=True)  # Per-quote display description override (issue #178)
     quantity = Column(Integer, default=1)  # Qty Ordered (must be whole number)
     unit_price = Column(Float)  # Override price if needed
     qty_pending = Column(Integer, default=0)  # Remaining to fulfill (must be whole number)
@@ -484,6 +492,9 @@ class CompanySettings(Base):
     hst_rate = Column(Float, default=13.0)
     default_pms_percent = Column(Float, nullable=True)
     logo_data_url = Column(Text, nullable=True)
+    # Live USD→CAD exchange rate used to convert USD-priced parts when they are
+    # added to a quote. Non-null, seeded to 1.38 for the existing singleton row.
+    usd_to_cad_rate = Column(Float, nullable=False, server_default='1.38', default=1.38)
 
 
 class QuoteLineItemSnapshot(Base):
@@ -499,6 +510,7 @@ class QuoteLineItemSnapshot(Base):
     part_id = Column(Integer)
     misc_id = Column(Integer)
     description = Column(String)
+    description_override = Column(String, nullable=True)  # Per-quote display description override (issue #178)
     quantity = Column(Integer)  # qty_ordered (must be whole number)
     unit_price = Column(Float)
     qty_pending = Column(Integer)  # Must be whole number
