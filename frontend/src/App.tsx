@@ -51,6 +51,9 @@ const SettingsPage = lazy(() =>
 const MigrationPage = lazy(() =>
   import("@/pages/MigrationPage").then((m) => ({ default: m.MigrationPage }))
 )
+const ReopenMigratedQuotesPage = lazy(() =>
+  import("@/pages/ReopenMigratedQuotesPage").then((m) => ({ default: m.ReopenMigratedQuotesPage }))
+)
 
 function PageFallback() {
   return (
@@ -72,12 +75,13 @@ import {
   BarChart3,
   Settings,
   DatabaseZap,
+  Unlock,
   Menu,
   X,
 } from "lucide-react"
 import { Toaster } from "@/components/ui/toaster"
 
-type AppView = "profiles" | "projects" | "project-details" | "inventory" | "reports" | "settings" | "migration"
+type AppView = "profiles" | "projects" | "project-details" | "inventory" | "reports" | "settings" | "migration" | "reopen-quotes"
 
 type ParsedRoute =
   | { view: Exclude<AppView, "project-details"> }
@@ -93,6 +97,7 @@ function parseRoute(pathname: string): ParsedRoute {
   if (pathname === "/reports") return { view: "reports" }
   if (pathname === "/settings") return { view: "settings" }
   if (pathname === "/admin/migration") return { view: "migration" }
+  if (pathname === "/reopen-migrated-quotes") return { view: "reopen-quotes" }
   // /projects/:id, /projects/:id/quotes|pos|invoices/:docId
   const projMatch = pathname.match(/^\/projects\/(\d+)(?:\/(quotes|pos|invoices)\/(\d+))?$/)
   if (projMatch) {
@@ -122,10 +127,12 @@ function App() {
   // Projects page search term — lifted here so it survives drilling into a project and coming back.
   const [projectSearchTerm, setProjectSearchTerm] = useState("")
 
-  // Migration is an admin-only destructive surface; non-admins shouldn't see it.
+  // Migration and the global reopen tool are admin-only surfaces (bulk/destructive on live
+  // data); non-admins shouldn't see or land on them. (Gating is client-side only, matching the
+  // app norm - the backend does not enforce admin - so this controls UI exposure, not the API.)
   const isAdmin = useIsAdmin()
   useEffect(() => {
-    if (currentView === "migration" && !isAdmin) {
+    if ((currentView === "migration" || currentView === "reopen-quotes") && !isAdmin) {
       navigate("/projects", { replace: true })
     }
   }, [currentView, isAdmin, navigate])
@@ -368,6 +375,12 @@ function App() {
         // (the useEffect above will then redirect to projects on the next tick).
         if (!isAdmin) return null
         return <MigrationPage />
+
+      case "reopen-quotes":
+        // Defensive gate: bulk cross-project reopen is admin-only (the effect above
+        // also redirects non-admins who somehow land here).
+        if (!isAdmin) return null
+        return <ReopenMigratedQuotesPage />
 
       case "project-details":
         if (selectedProjectId === null) {
@@ -698,6 +711,16 @@ function App() {
         <BarChart3 className="h-4 w-4" />
         Reports
       </Button>
+      {isAdmin && (
+        <Button
+          variant={currentView === "reopen-quotes" ? "secondary" : "ghost"}
+          className="w-full justify-start gap-2"
+          onClick={() => guardedNavigate("/reopen-migrated-quotes")}
+        >
+          <Unlock className="h-4 w-4" />
+          Reopen Quotes
+        </Button>
+      )}
       <Button
         variant={currentView === "settings" ? "secondary" : "ghost"}
         className="w-full justify-start gap-2"

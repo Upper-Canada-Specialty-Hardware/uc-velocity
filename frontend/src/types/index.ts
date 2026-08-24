@@ -446,6 +446,35 @@ export interface Quote {
   line_items: QuoteLineItem[];
 }
 
+// ===== Reopen Migrated Quotes (Issue #164) =====
+/** One migrated quote eligible to reopen, with fields that guide the choice. */
+export interface ReopenableQuote {
+  id: number;
+  quote_number: string;
+  uca_project_number: string;
+  project_id: number;
+  project_name: string;
+  customer_name?: string | null;
+  created_at: string;
+  line_item_count: number;      // how many lines reopen will reset
+  has_client_po: boolean;       // true -> reopens to "Work Order", false -> "Draft"
+  projected_status: string;     // the status it shows after reopen
+}
+
+/** Per-quote outcome inside a bulk reopen response. */
+export interface BulkReopenResult {
+  quote_id: number;
+  reopened: boolean;            // true if this quote's fulfillment was reset
+  reason?: string | null;       // why it was skipped, when reopened is false
+}
+
+/** Aggregate result of a bulk reopen call, with a per-quote breakdown. */
+export interface BulkReopenResponse {
+  reopened_count: number;
+  skipped_count: number;
+  results: BulkReopenResult[];
+}
+
 export interface QuoteCreate {
   project_id: number;
   client_po_number?: string;
@@ -740,7 +769,7 @@ export interface MigrationResult {
 }
 
 // ===== Quote Snapshots =====
-export type SnapshotActionType = 'create' | 'edit' | 'delete' | 'invoice' | 'date_edit' | 'revert';
+export type SnapshotActionType = 'create' | 'edit' | 'delete' | 'invoice' | 'date_edit' | 'revert' | 'reopen';
 
 export interface QuoteSnapshot {
   id: number;
