@@ -17,7 +17,7 @@ not an ORM model); writes the app tables through the ORM (Decision B).
 from __future__ import annotations
 
 import re
-from typing import Any, Optional, Hashable
+from typing import Any, Callable, Optional, Hashable
 
 from sqlalchemy import func
 
@@ -29,7 +29,7 @@ from ..transform import (
     transform_invoice, transform_invoice_line,
     extract_staff, to_str, to_int,
 )
-from .engine import DomainSpec, decide, INSERT, UPDATE, ADOPT, DUP, SKIP
+from .engine import DomainSpec, decide, occurrence_keys, INSERT, UPDATE, ADOPT, DUP, SKIP
 from .execute import execute_domain, DomainResult
 
 # Recovers the Vision work-order number the original importer tagged into a live
@@ -116,6 +116,55 @@ def _staged(raw: Any, table: str) -> list[dict[str, Any]]:
     cur.execute(sql.SQL("SELECT * FROM {}.{}").format(
         sql.Identifier(config.STAGING_SCHEMA), sql.Identifier(table)))
     return [dict(r) for r in cur.fetchall()]
+
+
+def _norm_desc(value: Any) -> str:
+    """Description as used in a child-row natural key: stripped text, None -> ''."""
+    return to_str(value).strip()
+
+
+def _norm_price(value: Any) -> float:
+    """Unit price as used in a child-row natural key: rounded to cents, None -> 0."""
+    return round(float(value or 0), 2)
+
+
+def _attach_natural_keys(rows: list[dict[str, Any]], key_of: Callable[[dict[str, Any]], Optional[Hashable]]) -> None:
+    """Compute each source row's occurrence-numbered natural key into ``row['_nat']``.
+
+    Child rows are matched to pre-existing rows by content (see ``occurrence_keys``),
+    and the numbering must be done over the whole domain in source order -- so it is
+    computed once here, up front, rather than inside ``natural_key_of`` per row.
+
+    Args:
+        rows: Transformed source rows, in export order (mutated: ``_nat`` is added).
+        key_of: ``row -> natural key`` without the occurrence number (None = not adoptable).
+    """
+    for row, nat in zip(rows, occurrence_keys([key_of(r) for r in rows])):
+        row["_nat"] = nat
+
+
+def _existing_by_content(pairs: list[tuple[int, Hashable]]) -> dict[Hashable, int]:
+    """``{(key, occurrence) -> velocity id}`` for un-keyed existing rows, in id order.
+
+    Args:
+        pairs: ``(velocity id, natural key)`` for every adoptable existing row, ordered
+            by id (insertion order), so occurrences number the same way as the source.
+    """
+    ids = [vid for vid, _ in pairs]
+    return {nat: vid for vid, nat in zip(ids, occurrence_keys([k for _, k in pairs])) if nat is not None}
+
+
+def _report_unmatched_existing(name: str, adoptable: int, adopted: int) -> None:
+    """Ledger line for pre-existing child rows that no source row claimed.
+
+    These are rows the earlier import created that have no counterpart in the
+    staged Vision data (typically edits newer than the MDB snapshot). They are
+    left exactly as they were -- the importer never deletes -- but made visible.
+    """
+    left = adoptable - adopted
+    if left > 0:
+        print(f"  {name:<12} {left} pre-existing row(s) on adopted parents had no Vision "
+              "counterpart -> left untouched (never deleted)")
 
 
 def _existing_by_legacy(session: Any, model: Any, source: str) -> dict[tuple[str, int], int]:
@@ -228,7 +277,13 @@ def _import_categories(ctx: Ctx) -> None:
 
 def _import_parts(ctx: Ctx) -> None:
     """tblMaterial -> parts. LM- combo kits (``skipped_lm``) are dropped from the
-    catalog (G7). category/vendor FKs resolve from prior maps (nullable -> None if absent)."""
+    catalog (G7). The category FK resolves from prior maps (nullable -> None if absent).
+
+    The vendor FK is assigned on INSERT only: an adopted part keeps the vendor it
+    already has in Velocity. Vision's vendor names don't always match the profile the
+    earlier import linked ("Allegion" vs "Allegion Canada Inc."), and refreshing the
+    FK would silently re-point ~1,900 existing parts at a freshly inserted variant.
+    """
     from models import Part
     source = "tblMaterial"
     rows = [p for p in (transform_part(r) for r in _staged(ctx.raw, source)) if not p["skipped_lm"]]
@@ -242,10 +297,14 @@ def _import_parts(ctx: Ctx) -> None:
             "cost": r["cost"],
             "markup_percent": r["markup_percent"],
             "category_id": ctx.cat_map.get((r["category_legacy_id"], "part")),  # nullable FK
-            "vendor_id": ctx.maps.get("vendors", {}).get(r["vendor_legacy_id"]),  # nullable FK
-        }
+        }                                              # NOTE: no vendor_id -> never rewritten on adopt/update
+
+    def insert_extra(r):
+        return {"vendor_id": ctx.maps.get("vendors", {}).get(r["vendor_legacy_id"])}  # nullable FK, new parts only
+
     _run(ctx, "parts", source, rows, Part, legacy_id_key="part_legacy_id",
-         natural_of_row=lambda r: r["part_number"], existing_by_natural=by_natural, to_fields=to_fields)
+         natural_of_row=lambda r: r["part_number"], existing_by_natural=by_natural,
+         to_fields=to_fields, insert_extra=insert_extra)
 
 
 def _import_labour(ctx: Ctx) -> None:
@@ -333,9 +392,51 @@ def _import_profiles(ctx: Ctx, name: str, source: str, profile_type: str) -> Non
     def on_insert(session, obj, r):
         _make_contacts(session, obj, r.get("_contacts", []))
 
-    _run(ctx, name, source, rows, Profile, legacy_id_key=lid_key,
-         natural_of_row=lambda r: r["name"], existing_by_natural=by_natural,
-         to_fields=to_fields, on_insert=on_insert)
+    result = _run(ctx, name, source, rows, Profile, legacy_id_key=lid_key,
+                  natural_of_row=lambda r: r["name"], existing_by_natural=by_natural,
+                  to_fields=to_fields, on_insert=on_insert)
+    _report_lookalike_profiles(name, rows, result, existing)
+
+
+def _name_stem(name: str) -> str:
+    """First six letters of a name, letters only, lower-cased -- a deliberately loose
+    'might be the same company' stem ("Allegion Canada Inc." -> "allegi")."""
+    return "".join(ch for ch in to_str(name).lower() if ch.isalpha())[:6]
+
+
+def _report_lookalike_profiles(name: str, rows: list[dict[str, Any]], result: DomainResult,
+                               existing: list[tuple[int, str]]) -> None:
+    """Ledger warning for newly INSERTED profiles whose name resembles an existing one.
+
+    Adoption is by exact name, so a Vision vendor "Allegion" inserts a new profile
+    even when Velocity already has "Allegion Canada Inc.". Whether those are the same
+    company is a business decision, not something the importer should guess -- so the
+    candidates are listed here for a person to merge (or ignore) after the run.
+    Purely informational; nothing is changed.
+
+    Args:
+        name: Domain name for the ledger line.
+        rows: Transformed source rows (``name`` + legacy-id key).
+        result: The domain's write result (its ``id_map`` holds every written row).
+        existing: ``(velocity id, name)`` of the profiles that existed BEFORE the run.
+    """
+    existing_ids = {vid for vid, _ in existing}
+    stems: dict[str, list[str]] = {}
+    for _, nm in existing:                              # index pre-existing names by stem
+        stems.setdefault(_name_stem(nm), []).append(nm)
+    lid_key = next((k for k in rows[0] if k.endswith("_legacy_id")), None) if rows else None
+    lookalikes = []
+    for r in rows:
+        vid = result.id_map.get(r.get(lid_key)) if lid_key else None
+        if vid is None or vid in existing_ids:          # not written, or adopted (not new) -> skip
+            continue
+        similar = [s for s in stems.get(_name_stem(r["name"]), []) if s != r["name"]]
+        if similar:
+            lookalikes.append(f"{r['name']!r} ~ {' | '.join(similar[:3])}")
+    if lookalikes:
+        print(f"  {name:<12} {len(lookalikes)} NEW profile(s) resemble existing ones -- review/merge by hand:")
+        for line in lookalikes:
+            print(f"               {line}")
 
 
 def _import_staff(ctx: Ctx) -> None:
@@ -364,23 +465,36 @@ def _import_staff(ctx: Ctx) -> None:
 def _import_projects(ctx: Ctx) -> None:
     """tblProjects -> projects. customer_id is REQUIRED (NOT NULL): a project whose
     ClientID doesn't resolve to a migrated customer is SKIPPED (to_fields -> None),
-    matching the importer's "unknown-ClientID rows skipped"."""
+    matching the importer's "unknown-ClientID rows skipped".
+
+    customer_id is assigned on INSERT only: an adopted project keeps the customer it
+    already has in Velocity (same reasoning as the part vendor -- Vision's customer
+    names don't always match the profile the earlier import linked, e.g. "Inzola
+    Construction" vs "Inzola Construction Inc.").
+    """
     from models import Project
     source = "tblProjects"
     rows = [transform_project(r) for r in _staged(ctx.raw, source)]
     existing = ctx.session.query(Project.id, Project.uca_project_number).all()
     by_natural = {uca: vid for (vid, uca) in existing}
+    vision_customer: dict[int, int] = {}               # project -> customer Vision wants (insert-only)
 
     def to_fields(r):
         customer_id = ctx.maps.get("customers", {}).get(r["client_legacy_id"])
         if customer_id is None or not r.get("uca_project_number"):
             return None                                # NOT NULL customer_id / uca number -> unwritable
+        vision_customer[r["project_legacy_id"]] = customer_id
         return {"name": r["name"] or f"Project {r['project_legacy_id']}",
-                "customer_id": customer_id, "created_on": r["created_on"],
+                "created_on": r["created_on"],         # NOTE: no customer_id -> never rewritten on adopt/update
                 "status": r["status"], "ucsh_project_number": r["ucsh_project_number"],
                 "uca_project_number": r["uca_project_number"], "project_lead": r["project_lead"]}
+
+    def insert_extra(r):
+        return {"customer_id": vision_customer[r["project_legacy_id"]]}   # resolved in to_fields just before
+
     _run(ctx, "projects", source, rows, Project, legacy_id_key="project_legacy_id",
-         natural_of_row=lambda r: r["uca_project_number"], existing_by_natural=by_natural, to_fields=to_fields)
+         natural_of_row=lambda r: r["uca_project_number"], existing_by_natural=by_natural,
+         to_fields=to_fields, insert_extra=insert_extra)
 
 
 def _import_quotes(ctx: Ctx) -> None:
@@ -437,7 +551,17 @@ def _import_quotes(ctx: Ctx) -> None:
 def _import_quote_lines(ctx: Ctx) -> None:
     """The three workorder-line tables -> quote_line_items. Each line resolves its
     parent quote (by workorder number) and its catalog ref (part/labour/misc). Lines
-    whose parent quote didn't import are skipped (quote_id NOT NULL)."""
+    whose parent quote didn't import are skipped (quote_id NOT NULL).
+
+    Adopted quotes already carry their lines from the earlier import (un-keyed), so a
+    source line ADOPTS the existing line on the same quote with the same content --
+    natural key ``(quote_id, item_type, description, quantity, unit_price)`` plus an
+    occurrence number for identical lines (see ``occurrence_keys``) -- instead of
+    inserting a second copy. On the restored production copy this pairs 99.3% of
+    lines exactly; the adopt refreshes fulfillment (the close-state fix) and the
+    catalog ref. Source lines with no counterpart INSERT; existing lines with no
+    counterpart are left untouched and counted in the ledger.
+    """
     from models import QuoteLineItem
     quote_map = ctx.maps.get("quotes", {})             # workorder_legacy_id -> quote velocity id
     part_map = ctx.maps.get("parts", {})
@@ -446,6 +570,7 @@ def _import_quote_lines(ctx: Ctx) -> None:
     ref_maps = {"part": (part_map, "part_id", "part_legacy_id"),
                 "labor": (labour_map, "labor_id", "labor_legacy_id"),
                 "misc": (misc_map, "misc_id", "misc_legacy_id")}
+    quote_ids = list(quote_map.values())               # every parent written this run (adopted or new)
 
     for source, item_type in (("tblWorkorderApplication", "labor"),
                               ("tblWorkorderMaterial", "part"),
@@ -458,6 +583,23 @@ def _import_quote_lines(ctx: Ctx) -> None:
             rows.append(transform_workorder_line(r, item_type, force_closed=fc))
         cat_map, fk_col, ref_key = ref_maps[item_type]
 
+        def content_key(quote_id, desc, qty, price, _it=item_type):
+            """The adoption key shared by existing and source lines of this type."""
+            return (quote_id, _it, _norm_desc(desc), int(qty or 0), _norm_price(price))
+
+        # Existing un-keyed lines of this type on the parents, oldest first, by content.
+        existing = []
+        if quote_ids:
+            q = ctx.session.query(QuoteLineItem.id, QuoteLineItem.quote_id, QuoteLineItem.description,
+                                  QuoteLineItem.quantity, QuoteLineItem.unit_price).filter(
+                QuoteLineItem.legacy_id.is_(None), QuoteLineItem.item_type == item_type,
+                QuoteLineItem.quote_id.in_(quote_ids)).order_by(QuoteLineItem.id)
+            existing = [(vid, content_key(qid, d, qty, price)) for vid, qid, d, qty, price in q.all()]
+        by_natural = _existing_by_content(existing)
+        _attach_natural_keys(rows, lambda rr: (
+            content_key(quote_map[rr["workorder_legacy_id"]], rr["description"], rr["quantity"], rr["unit_price"])
+            if rr["workorder_legacy_id"] in quote_map else None))   # orphan line -> not adoptable
+
         def to_fields(rr, _cat_map=cat_map, _fk_col=fk_col, _ref_key=ref_key, _it=item_type):
             quote_id = quote_map.get(rr["workorder_legacy_id"])
             if quote_id is None:
@@ -467,9 +609,10 @@ def _import_quote_lines(ctx: Ctx) -> None:
                     "description": rr["description"], "quantity": rr["quantity"],
                     "unit_price": rr["unit_price"], "base_cost": rr["base_cost"],
                     "qty_fulfilled": rr["qty_fulfilled"], "qty_pending": rr["qty_pending"]}
-        _run(ctx, f"quote_lines/{item_type}", source, rows, QuoteLineItem,
-             legacy_id_key="line_legacy_id", natural_of_row=None, existing_by_natural={},
-             to_fields=to_fields)
+        result = _run(ctx, f"quote_lines/{item_type}", source, rows, QuoteLineItem,
+                      legacy_id_key="line_legacy_id", natural_of_row=lambda rr: rr["_nat"],
+                      existing_by_natural=by_natural, to_fields=to_fields)
+        _report_unmatched_existing(f"quote_lines/{item_type}", len(by_natural), result.counts[ADOPT])
 
 
 # --------------------------------------------------------------------------- #
@@ -479,18 +622,40 @@ def _import_quote_lines(ctx: Ctx) -> None:
 def _import_pos(ctx: Ctx) -> None:
     """tblPurchaseOrders -> purchase_orders. project_id + vendor_id REQUIRED; project_id,
     vendor_id and po_sequence are assigned on INSERT only (a re-run never moves a PO to
-    another project or vendor -- see _import_quotes for why). No natural key (migrated
-    POs carry no Vision id), so a first run INSERTs them all -- UPDATE by key comes only
-    after this run has backfilled the keys."""
+    another project or vendor -- see _import_quotes for why).
+
+    The earlier import already brought Vision's POs into Velocity without keys (the
+    2015-2017 counts match exactly), so a source PO ADOPTS the existing un-keyed PO
+    with the same ``(project, order date)`` -- plus an occurrence number when a
+    project got several POs on one day -- rather than inserting a duplicate. The
+    vendor is deliberately NOT part of the key: the earlier import resolved some
+    vendors to differently-named profiles ("Allegion" vs "Allegion Canada Inc."),
+    which left 64 of 149 POs unpaired on the production copy, while project + date
+    pairs all 149. Vendor is insert-only, so an adopted PO keeps its current vendor.
+    Unmatched source POs INSERT; unmatched existing POs are left as they are.
+    """
     from models import PurchaseOrder
     source = "tblPurchaseOrders"
     rows = [transform_po(r) for r in _staged(ctx.raw, source)]
     vision_project: dict[int, int] = {}                # po -> project Vision wants (for the report)
     vision_vendor: dict[int, int] = {}                 # po -> vendor Vision wants (insert-only)
+    project_map = ctx.maps.get("projects", {})
+    vendor_map = ctx.maps.get("vendors", {})
+
+    def po_key(project_id, created_at):
+        """The adoption key shared by existing and source POs: project + order date."""
+        if project_id is None or created_at is None:
+            return None
+        return (project_id, created_at.date() if hasattr(created_at, "date") else created_at)
+
+    q = ctx.session.query(PurchaseOrder.id, PurchaseOrder.project_id,
+                          PurchaseOrder.created_at).filter(PurchaseOrder.legacy_id.is_(None)).order_by(PurchaseOrder.id)
+    by_natural = _existing_by_content([(vid, po_key(p, c)) for vid, p, c in q.all()])
+    _attach_natural_keys(rows, lambda r: po_key(project_map.get(r["project_legacy_id"]), r["created_at"]))
 
     def to_fields(r):
-        project_id = ctx.maps.get("projects", {}).get(r["project_legacy_id"])
-        vendor_id = ctx.maps.get("vendors", {}).get(r["vendor_legacy_id"])
+        project_id = project_map.get(r["project_legacy_id"])
+        vendor_id = vendor_map.get(r["vendor_legacy_id"])
         if project_id is None or vendor_id is None:
             return None                                # both are NOT NULL -> unwritable, skip
         vision_project[r["po_legacy_id"]] = project_id  # remembered for insert_extra + the report
@@ -505,17 +670,39 @@ def _import_pos(ctx: Ctx) -> None:
                 "po_sequence": ctx.next_seq(ctx._po_seq, PurchaseOrder, PurchaseOrder.po_sequence, project_id)}
 
     result = _run(ctx, "pos", source, rows, PurchaseOrder, legacy_id_key="po_legacy_id",
-                  natural_of_row=None, existing_by_natural={}, to_fields=to_fields, insert_extra=insert_extra)
+                  natural_of_row=lambda r: r["_nat"], existing_by_natural=by_natural,
+                  to_fields=to_fields, insert_extra=insert_extra)
     _report_kept_placement(ctx, "pos", PurchaseOrder, result.id_map, vision_project)
 
 
 def _import_po_lines(ctx: Ctx) -> None:
-    """tblPurchaseOrdersMaterial -> po_line_items. Resolves parent PO + part FK."""
+    """tblPurchaseOrdersMaterial -> po_line_items. Resolves parent PO + part FK.
+
+    Like quote lines: an adopted PO already has its lines, so a source line ADOPTS
+    the existing un-keyed line on the same PO with the same content
+    ``(purchase_order_id, description, quantity, unit_price)`` + occurrence number.
+    """
     from models import POLineItem
     source = "tblPurchaseOrdersMaterial"
     rows = [transform_po_line(r) for r in _staged(ctx.raw, source)]
     po_map = ctx.maps.get("pos", {})
     part_map = ctx.maps.get("parts", {})
+    po_ids = list(po_map.values())
+
+    def line_key(po_id, desc, qty, price):
+        """The adoption key shared by existing and source PO lines."""
+        return (po_id, _norm_desc(desc), int(qty or 0), _norm_price(price))
+
+    existing = []
+    if po_ids:
+        q = ctx.session.query(POLineItem.id, POLineItem.purchase_order_id, POLineItem.description,
+                              POLineItem.quantity, POLineItem.unit_price).filter(
+            POLineItem.legacy_id.is_(None), POLineItem.purchase_order_id.in_(po_ids)).order_by(POLineItem.id)
+        existing = [(vid, line_key(pid, d, qty, price)) for vid, pid, d, qty, price in q.all()]
+    by_natural = _existing_by_content(existing)
+    _attach_natural_keys(rows, lambda r: (
+        line_key(po_map[r["po_legacy_id"]], r["description"], r["quantity"], r["unit_price"])
+        if r["po_legacy_id"] in po_map else None))
 
     def to_fields(r):
         po_id = po_map.get(r["po_legacy_id"])
@@ -526,8 +713,9 @@ def _import_po_lines(ctx: Ctx) -> None:
                 "description": r["description"], "quantity": r["quantity"],
                 "unit_price": r["unit_price"], "qty_received": r["qty_received"],
                 "qty_pending": r["qty_pending"]}
-    _run(ctx, "po_lines", source, rows, POLineItem, legacy_id_key="line_legacy_id",
-         natural_of_row=None, existing_by_natural={}, to_fields=to_fields)
+    result = _run(ctx, "po_lines", source, rows, POLineItem, legacy_id_key="line_legacy_id",
+                  natural_of_row=lambda r: r["_nat"], existing_by_natural=by_natural, to_fields=to_fields)
+    _report_unmatched_existing("po_lines", len(by_natural), result.counts[ADOPT])
 
 
 # --------------------------------------------------------------------------- #
