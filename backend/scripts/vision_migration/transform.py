@@ -707,7 +707,7 @@ def transform_po_line(row: dict[str, Any]) -> dict[str, Any]:
 # Sparse-source reality (from the export): First/Last name are always present;
 # Address (3/41), Postal Code (2/41), Home Phone (2/41), Mobile (2/41) and Email
 # (8/41) are mostly blank. Blank -> None (address/postal are nullable as of migration
-# 025; empty contact fields are omitted). Role flags (Lead/Installer/Manager/...) and
+# 032 -- 025 only relaxed pst; empty contact fields are omitted). Role flags (Lead/Installer/Manager/...) and
 # City ('Toronto' for all) are dropped -- Velocity's Profile has no field for them.
 
 STAFF_LEGACY_SOURCE = "tblEmployees"   # real Vision staff table; EmployeeID is its primary key
@@ -719,7 +719,9 @@ def transform_staff(row: dict[str, Any]) -> Optional[dict[str, Any]]:
     Keyed on the real Vision primary key ``EmployeeID`` (same-name people stay
     distinct; re-runs UPDATE by key). Address/postal are imported when present, else
     ``None`` (Vision stores ``''`` for most staff, and ``Profile.address``/
-    ``postal_code`` are nullable as of migration 025). The person's own email, home
+    ``postal_code`` are nullable as of migration 032 -- 025 only relaxed ``pst``,
+    which is why the first cutover rehearsal failed on a NOT NULL violation). The
+    person's own email, home
     phone and mobile become a single Contact; empty values are omitted rather than
     stored blank. Job roles (``blnLead`` / ``blnInstaller`` / ``blnManager`` ->
     "Manager") are joined into ``staff_roles``; the other booleans
