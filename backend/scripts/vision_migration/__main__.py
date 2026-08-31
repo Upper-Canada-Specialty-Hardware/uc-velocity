@@ -52,7 +52,8 @@ def main(argv: list[str] | None = None) -> int:
     p_stage = sub.add_parser("stage", help="Raw-stage all Vision tables into vision_legacy.")
     _common_args(p_stage)
     p_stage.add_argument("--i-understand-scratch-db", action="store_true",
-                         help="Confirm the target is a throwaway/preview DB, not production.")
+                         help="Confirm the target DB is intended (required even for a host "
+                              "unlocked via MIGRATION_UNLOCK_HOST).")
 
     p_verify = sub.add_parser("verify", help="Compare source vs staged row counts.")
     _common_args(p_verify)
@@ -81,7 +82,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Live Velocity Postgres URL, read-only (or "
                              "MIGRATION_VELOCITY_SOURCE_URL); e.g. the Railway public URL.")
     p_load.add_argument("--i-understand-scratch-db", action="store_true",
-                        help="Confirm the TARGET is a throwaway/preview DB, not production.")
+                        help="Confirm the TARGET DB is intended (required even for a host "
+                             "unlocked via MIGRATION_UNLOCK_HOST).")
 
     p_dryrun = sub.add_parser(
         "dryrun",
@@ -103,7 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     p_import.add_argument("--commit", action="store_true",
                           help="Persist the run. Omit for a preview that rolls everything back.")
     p_import.add_argument("--i-understand-scratch-db", action="store_true",
-                          help="Confirm the target is a throwaway/preview DB, not production.")
+                          help="Confirm the target DB is intended (required even for a host "
+                               "unlocked via MIGRATION_UNLOCK_HOST).")
     p_import.add_argument("--domain", default=None,
                           help="Run only this one domain (its FK-parents must already be "
                                "imported). Omit to run all domains in dependency order.")

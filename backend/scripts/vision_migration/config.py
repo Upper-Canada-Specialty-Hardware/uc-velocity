@@ -9,14 +9,17 @@ Safety model (read this):
     the tooling can never accidentally inherit a shell that points at production.
   - `assert_scratch_target()` refuses to run unless the caller explicitly confirms
     the target is a throwaway/scratch DB, and it hard-blocks any host that looks
-    like production.
+    like production. The only way through is `MIGRATION_UNLOCK_HOST` naming ONE
+    exact host (the cutover mechanism) -- and the confirmation flag is still
+    required on top of that.
   - Even so, staging writes ONLY into the `vision_legacy` schema and never touches
     Velocity's application tables.
 """
 from __future__ import annotations
 
 import os
-from urllib.parse import urlparse
+import sys
+from urllib.parse import parse_qs, urlparse
 
 # The isolated schema that holds the verbatim Vision copy. Never the app tables.
 STAGING_SCHEMA = "vision_legacy"
@@ -32,6 +35,21 @@ VELOCITY_CURRENT_SCHEMA = "velocity_current"
 # sitting in the shell can't slip through. The check runs against the WHOLE
 # connection string (see assert_scratch_target), so keyword-form DSNs are caught.
 _DEFAULT_BLOCKED_HOST_MARKERS = ("railway.internal", "rlwy.net", "railway.app")
+
+# The ONE deliberate way past the blocklist: MIGRATION_UNLOCK_HOST names a single
+# exact endpoint as "host:port" (the production proxy endpoint for the cutover, or
+# a PR-preview endpoint for a dress rehearsal). Only a DSN whose *parsed* host AND
+# port both equal it (host case-insensitive) skips the marker check. The port is
+# mandatory because Railway's public proxies are shared regional hostnames --
+# several databases sit behind one "<name>.proxy.rlwy.net" told apart only by port,
+# so a hostname alone could unlock production while meaning a preview. A substring
+# such as "rlwy.net" unlocks nothing. Even when unlocked, the REST of the DSN is
+# still scanned for blocked markers and multi-host / hostaddr / query overrides are
+# refused, so the connection can only ever reach the one named endpoint. The CLI
+# confirmation flag is STILL required, and every run against an unlocked endpoint
+# prints a loud banner. Unset the variable afterwards and the guard re-locks by
+# itself; nothing is persisted anywhere.
+UNLOCK_HOST_ENV = "MIGRATION_UNLOCK_HOST"
 
 # Postgres truncates identifiers to 63 bytes; Access allows up to 64 chars.
 MAX_PG_IDENTIFIER_BYTES = 63
@@ -133,6 +151,30 @@ def _blocked_markers() -> tuple[str, ...]:
     return _DEFAULT_BLOCKED_HOST_MARKERS + extras
 
 
+def _unlock_endpoint() -> tuple[str, int] | None:
+    """Read the deliberately-unlocked endpoint, if any.
+
+    Returns:
+        ``(host, port)`` from ``MIGRATION_UNLOCK_HOST`` (host lower-cased), or None
+        when the variable is unset/blank (the normal, fully-locked state).
+
+    Raises:
+        MigrationConfigError: the variable is set but is not ``host:port`` -- a
+            malformed unlock is refused loudly rather than silently ignored, so an
+            operator can't believe they unlocked something they didn't.
+    """
+    value = os.getenv(UNLOCK_HOST_ENV, "").strip().lower()   # blank counts as unset
+    if not value:
+        return None
+    host, sep, port = value.rpartition(":")                   # split on the LAST colon
+    if not sep or not host or not port.isdigit():             # must be exactly host:port
+        raise MigrationConfigError(
+            f"{UNLOCK_HOST_ENV} must be 'host:port' naming ONE exact endpoint "
+            f"(e.g. nozomi.proxy.rlwy.net:52032); got {value!r}."
+        )
+    return host, int(port)
+
+
 def _extract_host(url: str) -> str | None:
     """Best-effort host from either a URL DSN or a libpq keyword/value DSN.
 
@@ -141,7 +183,10 @@ def _extract_host(url: str) -> str | None:
     parse the keyword form ourselves -- otherwise a keyword-form prod DSN would
     slip past a hostname-only guard.
     """
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:                                         # e.g. an unbalanced '[' -> unparseable
+        return None                                            # caller treats "no host" as fail-closed
     if parsed.hostname:
         return parsed.hostname
     for token in url.replace("\t", " ").split():
@@ -150,31 +195,122 @@ def _extract_host(url: str) -> str | None:
     return None
 
 
+def _extract_port(url: str) -> int | None:
+    """Best-effort port from a URL DSN or a libpq keyword/value DSN.
+
+    Returns:
+        The port as an int, or None when absent or unparseable. None never matches
+        an unlock endpoint, so a DSN with no explicit port stays locked.
+    """
+    try:
+        port = urlparse(url).port                              # None when absent; ValueError when junk
+        if port is not None:
+            return port
+    except ValueError:
+        return None
+    for token in url.replace("\t", " ").split():
+        if token.lower().startswith("port="):
+            value = token[len("port="):].strip("'\"")
+            return int(value) if value.isdigit() else None
+    return None
+
+
+def _unlock_side_channels(url: str) -> str | None:
+    """Name the first way this DSN could reach a host OTHER than its parsed host.
+
+    libpq lets one connection string carry several targets: comma-separated
+    multi-host lists, repeated ``host=`` keywords (last wins), ``hostaddr=`` (an IP
+    that overrides ``host``), and ``?host=``/``?port=`` query overrides. The guard
+    compares only the parsed host, so an unlocked DSN must not carry any of these.
+
+    Returns:
+        A short description of the offending construct, or None if the DSN is a
+        plain single-endpoint string.
+    """
+    lowered = url.lower()
+    if "hostaddr" in lowered:
+        return "a 'hostaddr' override"
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "an unparseable URL"
+    if "," in parsed.netloc:
+        return "a comma-separated multi-host list"
+    for key in parse_qs(parsed.query, keep_blank_values=True):   # ?host= / ?port= override the netloc
+        if key.lower() in ("host", "port"):
+            return f"a '?{key.lower()}=' query override"
+    tokens = [t.lower() for t in url.replace("\t", " ").split()]
+    if sum(t.startswith("host=") for t in tokens) > 1:
+        return "more than one 'host=' keyword"
+    return None
+
+
 def assert_scratch_target(url: str, confirmed: bool) -> str:
     """Refuse to proceed unless the target is an explicitly-confirmed non-prod DB.
 
     Fails CLOSED: the blocked-marker check runs against the whole connection
     string (so URL *and* keyword-form DSNs are covered), and an indeterminate
-    host is refused rather than assumed safe. Returns the host for logging.
+    host is refused rather than assumed safe.
+
+    The single exception is the ``host:port`` endpoint named in
+    ``MIGRATION_UNLOCK_HOST`` (see :func:`_unlock_endpoint`): when the *parsed*
+    host and port both equal it, the blocked-marker check skips that one endpoint.
+    Everything else in the DSN is still scanned, and multi-target constructs
+    (multi-host lists, ``hostaddr``, query overrides) are refused, so the
+    connection can only reach the named endpoint. The confirmation flag stays
+    mandatory for writing commands and a banner is printed, so targeting
+    production is always a visible two-key act (the exact endpoint in the
+    environment + the flag on the command line).
+
+    Args:
+        url: Target connection string (URL form or libpq keyword form).
+        confirmed: Whether the caller passed the explicit confirmation flag.
+
+    Returns:
+        The lower-cased target host, for logging.
+
+    Raises:
+        MigrationConfigError: blocked host, undeterminable host, an unlocked DSN
+            that could reach a second host, or missing confirmation.
     """
+    host = (_extract_host(url) or "").lower()           # parse first: the unlock compares endpoints, never substrings
+    port = _extract_port(url)
+    unlock = _unlock_endpoint()                          # None unless MIGRATION_UNLOCK_HOST is set (and well-formed)
+    unlocked = bool(host) and unlock is not None and (host, port) == unlock   # host AND port must match
     raw = url.lower()
-    for marker in _blocked_markers():
+    if unlocked:
+        side_channel = _unlock_side_channels(url)        # refuse anything that could reach a second host
+        if side_channel:
+            raise MigrationConfigError(
+                f"Refusing to run: the connection string carries {side_channel}, so "
+                f"it could reach a host other than the unlocked {host}:{port}. Use a "
+                "plain single-endpoint DSN."
+            )
+        raw = raw.replace(host, "")                      # mask the unlocked host, then scan what's left
+        # Loud and on stderr, so it survives stdout redirection to a log file.
+        print(
+            f"!!! {UNLOCK_HOST_ENV} is set: TARGETING UNLOCKED ENDPOINT {host}:{port}. "
+            "The production-host guard is bypassed for this endpoint. !!!",
+            file=sys.stderr,
+        )
+    for marker in _blocked_markers():                    # a marker anywhere else in the DSN still refuses
         if marker and marker.lower() in raw:
             raise MigrationConfigError(
                 f"Refusing to run: connection string matches blocked marker "
-                f"{marker!r}. This looks like production."
+                f"{marker!r}. This looks like production. (To target it on "
+                f"purpose, set {UNLOCK_HOST_ENV} to that exact host:port.)"
             )
-    host = (_extract_host(url) or "").lower()
-    if not host:
+    if not host:                                         # fail-closed: no host -> no unlock, no run
         raise MigrationConfigError(
             "Could not determine the target host from the connection string. "
             "Refusing (fail-closed) -- use an explicit host, e.g. "
             "postgresql://postgres:postgres@localhost:5432/vision_scratch."
         )
-    if not confirmed:
+    if not confirmed:                                    # the flag is required even for an unlocked endpoint
         raise MigrationConfigError(
             f"Target host is {host!r}. Re-run with --i-understand-scratch-db to confirm "
-            "this is a throwaway/preview database, not production."
+            "this is the intended target database."
+            + (" (The unlocked endpoint still requires the flag.)" if unlocked else "")
         )
     return host
 
