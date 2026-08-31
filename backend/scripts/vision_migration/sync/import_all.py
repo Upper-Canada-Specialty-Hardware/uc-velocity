@@ -161,6 +161,34 @@ def _run(ctx: Ctx, name: str, source: str, rows: list[dict[str, Any]], model: An
     return result
 
 
+def _report_kept_placement(ctx: Ctx, name: str, model: Any, id_map: dict[int, int],
+                           vision_project: dict[int, int]) -> None:
+    """Print how many adopted/updated rows were left in a project Vision disagrees with.
+
+    Placement (``project_id``) is insert-only, so an existing row keeps Velocity's
+    project. This makes that visible in the ledger instead of silent: it is the
+    count of rows where the project Vision files the record under differs from the
+    project the row is in after the run. Freshly inserted rows match by
+    construction, so they never count.
+
+    Args:
+        ctx: The run context (for the session).
+        name: Domain name for the ledger line.
+        model: ORM class with ``id`` and ``project_id`` columns.
+        id_map: ``{legacy_id -> velocity id}`` of every row written this run.
+        vision_project: ``{legacy_id -> project_id Vision wants}`` from ``to_fields``.
+    """
+    if not id_map:
+        return
+    ids = list(id_map.values())
+    actual = dict(ctx.session.query(model.id, model.project_id).filter(model.id.in_(ids)).all())
+    kept = sum(1 for lid, vid in id_map.items()          # rows whose current project != Vision's
+               if lid in vision_project and actual.get(vid) != vision_project[lid])
+    if kept:
+        print(f"  {name:<12} kept Velocity's project for {kept} existing row(s) where Vision "
+              "disagreed (placement is never changed on adopt/update)")
+
+
 # --------------------------------------------------------------------------- #
 # Catalog domains
 # --------------------------------------------------------------------------- #
@@ -356,15 +384,24 @@ def _import_projects(ctx: Ctx) -> None:
 
 
 def _import_quotes(ctx: Ctx) -> None:
-    """tblServiceRecords -> quotes. project_id REQUIRED; quote_sequence assigned per
-    project on INSERT only. Also builds the ``force_closed`` map for the line import.
+    """tblServiceRecords -> quotes. project_id REQUIRED; project_id AND quote_sequence
+    are assigned on INSERT only. Also builds the ``force_closed`` map for the line import.
     Quote STATUS is intentionally left at its default: the app derives it from the line
     fulfillment quantities on read (compute_quote_status), so it is correct when shown.
+
+    Adopting never MOVES a quote: an existing quote keeps whatever project Velocity
+    currently has it in, even if Vision files the workorder under a different project.
+    Users re-home quotes in Velocity (sub-projects, the Move action), and a quote's
+    number is ``(project, quote_sequence)`` -- rewriting project_id on adopt would both
+    undo that and collide with the per-project sequence (uq_quote_project_sequence),
+    which is exactly how the cutover rehearsal failed. Disagreements are counted and
+    reported, not applied.
     """
     from models import Quote
     source = "tblServiceRecords"
     staged = _staged(ctx.raw, source)
     rows = [transform_workorder(r) for r in staged]
+    vision_project: dict[int, int] = {}                # workorder -> project Vision wants (for the report)
     # Force-closed map (workorder number -> bool) for the line importer.
     for r in staged:
         wo = transform_workorder(r)["workorder_legacy_id"]
@@ -380,18 +417,21 @@ def _import_quotes(ctx: Ctx) -> None:
     def to_fields(r):
         project_id = ctx.maps.get("projects", {}).get(r["project_legacy_id"])
         if project_id is None:
-            return None                                # project_id is NOT NULL
-        return {"project_id": project_id, "created_at": r["created_at"],
+            return None                                # project_id is NOT NULL -> unwritable, skip
+        vision_project[r["workorder_legacy_id"]] = project_id   # remember Vision's choice for the report
+        return {"created_at": r["created_at"],         # NOTE: no project_id here -> never rewritten on adopt/update
                 "client_po_number": r["client_po_number"], "work_description": r["work_description"],
                 "legacy_imported": True}
 
     def insert_extra(r):
-        project_id = ctx.maps.get("projects", {}).get(r["project_legacy_id"])
-        return {"quote_sequence": ctx.next_seq(ctx._quote_seq, Quote, Quote.quote_sequence, project_id)}
+        project_id = vision_project[r["workorder_legacy_id"]]   # resolved in to_fields just before
+        return {"project_id": project_id,              # placement is decided ONCE, when the quote is created
+                "quote_sequence": ctx.next_seq(ctx._quote_seq, Quote, Quote.quote_sequence, project_id)}
 
-    _run(ctx, "quotes", source, rows, Quote, legacy_id_key="workorder_legacy_id",
-         natural_of_row=lambda r: r["workorder_legacy_id"], existing_by_natural=by_natural,
-         to_fields=to_fields, insert_extra=insert_extra)
+    result = _run(ctx, "quotes", source, rows, Quote, legacy_id_key="workorder_legacy_id",
+                  natural_of_row=lambda r: r["workorder_legacy_id"], existing_by_natural=by_natural,
+                  to_fields=to_fields, insert_extra=insert_extra)
+    _report_kept_placement(ctx, "quotes", Quote, result.id_map, vision_project)
 
 
 def _import_quote_lines(ctx: Ctx) -> None:
@@ -437,29 +477,36 @@ def _import_quote_lines(ctx: Ctx) -> None:
 # --------------------------------------------------------------------------- #
 
 def _import_pos(ctx: Ctx) -> None:
-    """tblPurchaseOrders -> purchase_orders. project_id + vendor_id REQUIRED;
-    po_sequence assigned per project on INSERT. No natural key (migrated POs carry no
-    Vision id), so a first run INSERTs them all -- adoption comes only after the keys
-    are backfilled by this run."""
+    """tblPurchaseOrders -> purchase_orders. project_id + vendor_id REQUIRED; project_id,
+    vendor_id and po_sequence are assigned on INSERT only (a re-run never moves a PO to
+    another project or vendor -- see _import_quotes for why). No natural key (migrated
+    POs carry no Vision id), so a first run INSERTs them all -- UPDATE by key comes only
+    after this run has backfilled the keys."""
     from models import PurchaseOrder
     source = "tblPurchaseOrders"
     rows = [transform_po(r) for r in _staged(ctx.raw, source)]
+    vision_project: dict[int, int] = {}                # po -> project Vision wants (for the report)
+    vision_vendor: dict[int, int] = {}                 # po -> vendor Vision wants (insert-only)
 
     def to_fields(r):
         project_id = ctx.maps.get("projects", {}).get(r["project_legacy_id"])
         vendor_id = ctx.maps.get("vendors", {}).get(r["vendor_legacy_id"])
         if project_id is None or vendor_id is None:
-            return None                                # both are NOT NULL
-        return {"project_id": project_id, "vendor_id": vendor_id, "created_at": r["created_at"],
+            return None                                # both are NOT NULL -> unwritable, skip
+        vision_project[r["po_legacy_id"]] = project_id  # remembered for insert_extra + the report
+        vision_vendor[r["po_legacy_id"]] = vendor_id
+        return {"created_at": r["created_at"],         # NOTE: no project_id / vendor_id -> never rewritten on update
                 "work_description": r["work_description"], "vendor_po_number": r["vendor_po_number"],
                 "expected_delivery_date": r["expected_delivery_date"], "legacy_imported": True}
 
     def insert_extra(r):
-        project_id = ctx.maps.get("projects", {}).get(r["project_legacy_id"])
-        return {"po_sequence": ctx.next_seq(ctx._po_seq, PurchaseOrder, PurchaseOrder.po_sequence, project_id)}
+        project_id = vision_project[r["po_legacy_id"]]
+        return {"project_id": project_id, "vendor_id": vision_vendor[r["po_legacy_id"]],
+                "po_sequence": ctx.next_seq(ctx._po_seq, PurchaseOrder, PurchaseOrder.po_sequence, project_id)}
 
-    _run(ctx, "pos", source, rows, PurchaseOrder, legacy_id_key="po_legacy_id",
-         natural_of_row=None, existing_by_natural={}, to_fields=to_fields, insert_extra=insert_extra)
+    result = _run(ctx, "pos", source, rows, PurchaseOrder, legacy_id_key="po_legacy_id",
+                  natural_of_row=None, existing_by_natural={}, to_fields=to_fields, insert_extra=insert_extra)
+    _report_kept_placement(ctx, "pos", PurchaseOrder, result.id_map, vision_project)
 
 
 def _import_po_lines(ctx: Ctx) -> None:

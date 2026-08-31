@@ -83,6 +83,26 @@ def test_insert_extra_only_on_insert_and_on_insert_hook_runs():
     assert seen == [1]                                  # on_insert ran AFTER flush (id assigned)
 
 
+def test_adopt_never_touches_insert_only_placement():
+    """Adopting an existing row must not move it: fields passed via insert_extra
+    (project_id / quote_sequence in the real runners) are applied on INSERT only, so
+    an ADOPT keeps whatever placement Velocity already has -- even when the source
+    says otherwise. This is the contract the cutover rehearsal violated before the
+    quote/PO runners moved project_id into insert_extra (uq_quote_project_sequence
+    collision when Vision filed a re-homed quote under its original project)."""
+    existing = FakeModel(name="old", project_id=2064, quote_sequence=3, legacy_source=None, legacy_id=None)
+    existing.id = 7036
+    session = FakeSession({7036: existing})
+    res = execute_domain(session, FakeModel, [{"name": "new", "vision_project": 1729}],
+                         [Decision(ADOPT, "tblServiceRecords", 7597, 7036, "")],
+                         to_fields=lambda r: {"name": r["name"]},                       # no project_id here
+                         insert_extra=lambda r: {"project_id": r["vision_project"], "quote_sequence": 99})
+    assert res.counts[ADOPT] == 1 and res.id_map == {7597: 7036}
+    assert existing.name == "new"                                                       # mapped fields refreshed
+    assert existing.project_id == 2064 and existing.quote_sequence == 3               # placement untouched
+    assert existing.legacy_source == "tblServiceRecords" and existing.legacy_id == 7597  # key stamped
+
+
 def test_dup_resolves_to_claimant_without_second_write():
     """A DUP whose claimant wrote resolves to that row and performs no second write."""
     session = FakeSession()
