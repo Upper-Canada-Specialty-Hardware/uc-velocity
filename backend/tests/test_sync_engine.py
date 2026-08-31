@@ -21,6 +21,36 @@ def _one(row, existing_by_legacy=None, existing_by_natural=None):
     return e.decide([row], SPEC, existing_by_legacy or {}, existing_by_natural or {})[0]
 
 
+def test_occurrence_keys_numbers_identical_keys_in_order():
+    """Identical keys become (key, 1), (key, 2)...; None stays None; order is kept."""
+    keys = [("q1", "part", "Widget", 2, 9.99), None, ("q1", "part", "Widget", 2, 9.99), ("q1", "misc", "Travel", 1, 50.0)]
+    assert e.occurrence_keys(keys) == [
+        (("q1", "part", "Widget", 2, 9.99), 1), None,
+        (("q1", "part", "Widget", 2, 9.99), 2), (("q1", "misc", "Travel", 1, 50.0), 1),
+    ]
+
+
+def test_identical_child_lines_adopt_distinct_existing_rows_not_dup():
+    """Two byte-identical lines on one quote are two entities: with occurrence keys the
+    first source line adopts the first existing line and the second adopts the second,
+    instead of the second becoming a DUP (which is right for parts, wrong for lines)."""
+    content = ("quote7", "part", "Push plate", 2, 172.0)
+    existing_by_natural = {(content, 1): 501, (content, 2): 502}           # two existing un-keyed lines
+    rows = [{"legacy_id": 9001, "nat": (content, 1)}, {"legacy_id": 9002, "nat": (content, 2)}]
+    d1, d2 = e.decide(rows, SPEC, {}, existing_by_natural)
+    assert (d1.action, d1.target_id) == (ADOPT, 501)
+    assert (d2.action, d2.target_id) == (ADOPT, 502)
+
+
+def test_third_identical_line_with_no_existing_counterpart_inserts():
+    """One more source line than existing lines -> the extra one is a genuine INSERT."""
+    content = ("quote7", "part", "Push plate", 2, 172.0)
+    rows = [{"legacy_id": 1, "nat": (content, 1)}, {"legacy_id": 2, "nat": (content, 2)}]
+    d1, d2 = e.decide(rows, SPEC, {}, {(content, 1): 501})
+    assert (d1.action, d1.target_id) == (ADOPT, 501)
+    assert d2.action == INSERT
+
+
 def test_update_when_stored_legacy_key_matches():
     """A row whose (source, id) already exists in Velocity is refreshed in place."""
     d = _one({"legacy_id": 5, "nat": "WO5"}, existing_by_legacy={("tblServiceRecords", 5): 100})

@@ -79,6 +79,34 @@ class DomainSpec:
     natural_key_of: Callable[[dict[str, Any]], Optional[Hashable]]
 
 
+def occurrence_keys(keys: list[Optional[Hashable]]) -> list[Optional[Hashable]]:
+    """Make repeated natural keys distinct by numbering their occurrences in order.
+
+    Child rows (quote lines, PO lines) have no unique business key of their own: two
+    genuinely separate lines on one quote can be byte-identical (same part, qty and
+    price). Numbering identical keys 1, 2, 3... in list order turns them into
+    distinct natural keys, so the FIRST such source line adopts the FIRST such
+    existing line, the second the second, and none of them is mistaken for a DUP.
+    Both sides (existing rows in id order; source rows in export order) must be
+    numbered the same way for the pairing to hold. ``None`` stays ``None``.
+
+    Args:
+        keys: The natural key of each row, in row order (``None`` = not adoptable).
+
+    Returns:
+        A list of ``(key, occurrence)`` tuples (``None`` where the input was ``None``).
+    """
+    seen: dict[Hashable, int] = {}
+    out: list[Optional[Hashable]] = []
+    for key in keys:
+        if key is None:                       # not adoptable -> stays not adoptable
+            out.append(None)
+            continue
+        seen[key] = seen.get(key, 0) + 1      # 1-based occurrence of this exact key so far
+        out.append((key, seen[key]))
+    return out
+
+
 def decide(
     source_rows: list[dict[str, Any]],
     spec: DomainSpec,
