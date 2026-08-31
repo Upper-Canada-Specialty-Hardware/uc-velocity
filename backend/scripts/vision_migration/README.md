@@ -19,10 +19,26 @@ application tables.
 - Target DB is read from `MIGRATION_DATABASE_URL` (or `--database-url`) — a
   **separate** variable from the app's `DATABASE_URL`, so it can't inherit a
   prod-pointing shell.
-- `stage` refuses to run without `--i-understand-scratch-db`, and **hard-blocks**
-  any host containing `railway.internal` (production) — extend the denylist via
-  `MIGRATION_BLOCKED_HOSTS`.
-- **Never point this at production.** Use a local or throwaway/preview Postgres.
+- Writing commands (`stage`, `load-velocity`, `import`) refuse to run without
+  `--i-understand-scratch-db`, and every command **hard-blocks** any connection
+  string containing `railway.internal`, `rlwy.net`, or `railway.app` (Railway =
+  production) — extend the denylist via `MIGRATION_BLOCKED_HOSTS` (comma-separated).
+- **The one deliberate way through — `MIGRATION_UNLOCK_HOST`.** For the real
+  cutover (or a dress rehearsal against a PR-preview database) set it to the
+  **single exact endpoint, as `host:port`**, you intend to write to, e.g.
+  `MIGRATION_UNLOCK_HOST=nozomi.proxy.rlwy.net:52032`. Only a DSN whose parsed
+  host **and** port both equal that value bypasses the denylist for that one
+  endpoint. The port is mandatory because Railway's public proxies are shared
+  regional hostnames — several databases can sit behind one
+  `<name>.proxy.rlwy.net` told apart only by port, so a hostname alone could mean
+  production when you intended a preview. A substring such as `rlwy.net` unlocks
+  nothing, every other host/port stays blocked, the rest of the DSN is still
+  scanned for blocked markers, and multi-host / `hostaddr` / `?host=` forms are
+  refused outright. The `--i-understand-scratch-db` flag is still required on top
+  of it, and each run prints a `!!! TARGETING UNLOCKED ENDPOINT … !!!` banner.
+  Unset the variable when done and the guard re-locks by itself.
+- **Do not point this at production casually.** Default to a local or
+  throwaway/preview Postgres; the unlock exists for the planned, backed-up cutover.
 
 ## Setup (Windows)
 ```powershell
