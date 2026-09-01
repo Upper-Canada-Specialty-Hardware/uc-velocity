@@ -10,6 +10,20 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
 })
 
+// Same shape as dateFormatter but pinned to UTC. Used for date-ONLY values
+// (`YYYY-MM-DD`, e.g. invoice_date): JS parses those as UTC midnight, so rendering
+// them in the local zone would shift the calendar date back a day in west-of-UTC
+// zones (e.g. Eastern). Formatting in UTC prints exactly the stored calendar date.
+const dateOnlyFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+})
+
+// A bare `YYYY-MM-DD` calendar date (no time component).
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
+
 const dateTimeFormatter = new Intl.DateTimeFormat("en-CA", {
   year: "numeric",
   month: "short",
@@ -27,10 +41,28 @@ const currencyFormatter = new Intl.NumberFormat("en-CA", {
   maximumFractionDigits: 2,
 })
 
-/** Render a date as `MMM d, yyyy` (e.g. `Jun 8, 2020`); em-dash for missing values. */
+/**
+ * Render a date as `MMM d, yyyy` (e.g. `Jun 8, 2020`); em-dash for missing values.
+ *
+ * Two input shapes are handled distinctly so neither shifts by a day (issue #226):
+ * - a date-ONLY string (`YYYY-MM-DD`) is a calendar date with no timezone -> print
+ *   its components as-is (formatted in UTC), never converted to local;
+ * - a full timestamp (backend `created_at` is naive-UTC, no suffix) is a UTC instant
+ *   -> pin it to UTC (`asUtcIso`) then render in the viewer's local zone, so the
+ *   local calendar date is correct (e.g. `2026-08-21T03:24Z` -> Aug 20 in Eastern).
+ * A bare `new Date(value)` mishandled BOTH: it read a timestamp as local (wrong date
+ * after ~8pm ET) and a date-only string as UTC-midnight-then-local (a day early).
+ */
 export function formatDate(value: string | Date | null | undefined): string {
   if (value == null || value === "") return "—"
-  const date = value instanceof Date ? value : new Date(value)
+  if (value instanceof Date) {                      // already an instant -> local calendar date
+    return Number.isNaN(value.getTime()) ? "—" : dateFormatter.format(value)
+  }
+  if (DATE_ONLY_RE.test(value)) {                   // calendar date -> no timezone shift
+    const date = new Date(`${value}T00:00:00Z`)     // parse the components at UTC midnight
+    return Number.isNaN(date.getTime()) ? "—" : dateOnlyFormatter.format(date)
+  }
+  const date = new Date(asUtcIso(value))            // naive-UTC timestamp -> local calendar date
   if (Number.isNaN(date.getTime())) return "—"
   return dateFormatter.format(date)
 }
