@@ -522,11 +522,23 @@ def _import_quotes(ctx: Ctx) -> None:
         if wo:
             ctx.force_closed[wo] = workorder_force_closed(r)
     # existing_by_natural: {WO number -> live quote id} from the [WO ####] tag.
+    # Un-keyed rows only (a row a prior run already keyed goes through existing_by_legacy
+    # -> UPDATE, never re-adopted by tag), ordered by id ASC so the choice is
+    # deterministic: when a migrated quote has been CLONED in Velocity (Clone copies the
+    # [WO ####] tag but NOT the legacy key), the ORIGINAL (lowest id -- a clone is always
+    # inserted later) is adopted, never the clone.
     by_natural: dict[Hashable, int] = {}
-    for vid, desc in ctx.session.query(Quote.id, Quote.work_description).all():
+    cloned_tags = 0                                    # [WO] tags carried by >1 un-keyed quote (clones)
+    q = ctx.session.query(Quote.id, Quote.work_description).filter(
+        Quote.legacy_id.is_(None)).order_by(Quote.id)
+    for vid, desc in q.all():
         m = _WO_RE.search(to_str(desc))
         if m:
-            by_natural.setdefault(int(m.group(1)), vid)
+            wo = int(m.group(1))
+            if wo in by_natural:                       # a later (higher-id) quote shares this tag -> a clone
+                cloned_tags += 1
+            else:
+                by_natural[wo] = vid                   # first (lowest id) = the original, claims the tag
 
     def to_fields(r):
         project_id = ctx.maps.get("projects", {}).get(r["project_legacy_id"])
@@ -546,6 +558,9 @@ def _import_quotes(ctx: Ctx) -> None:
                   natural_of_row=lambda r: r["workorder_legacy_id"], existing_by_natural=by_natural,
                   to_fields=to_fields, insert_extra=insert_extra)
     _report_kept_placement(ctx, "quotes", Quote, result.id_map, vision_project)
+    if cloned_tags:
+        print(f"  quotes       {cloned_tags} [WO] tag(s) also carried by a cloned quote -> "
+              "adopted the original (lowest id); clone(s) left untouched")
 
 
 def _import_quote_lines(ctx: Ctx) -> None:
