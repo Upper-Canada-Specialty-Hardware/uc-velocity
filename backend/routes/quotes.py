@@ -824,6 +824,12 @@ def clone_quote(quote_id: int, db: Session = Depends(get_db)):
             is_pms=item.is_pms,
             pms_percent=item.pms_percent,
             original_markup_percent=item.original_markup_percent,
+            markup_percent=item.markup_percent,  # Issue #230: carry the per-line markup so the
+                                                 # clone keeps its margin. getLineItemUnitPrice prefers
+                                                 # base_cost * (1 + markup_percent/100); without this the
+                                                 # clone fell back to the static unit_price and the markup
+                                                 # % vanished (clone runs with markup control OFF, which is
+                                                 # exactly when the per-line markup_percent drives price).
             base_cost=item.base_cost,
         )
         db.add(new_item)
@@ -1973,6 +1979,10 @@ def revert_to_snapshot(quote_id: int, version: int, db: Session = Depends(get_db
                 is_pms=item_state.is_pms,
                 pms_percent=item_state.pms_percent,
                 original_markup_percent=item_state.original_markup_percent,
+                markup_percent=item_state.markup_percent,  # Issue #230 (adjacent path): the snapshot
+                                                           # stores the per-line markup, but revert rebuilt
+                                                           # the line without it, so reverting also lost the
+                                                           # markup and fell back to unit_price. Restore it.
                 base_cost=item_state.base_cost
             )
             db.add(restored_item)
