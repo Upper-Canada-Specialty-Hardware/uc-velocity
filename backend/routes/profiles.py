@@ -69,6 +69,7 @@ def create_profile(profile_data: ProfileCreate, db: Session = Depends(get_db)):
         pst=profile_data.pst,
         address=profile_data.address,
         postal_code=profile_data.postal_code,
+        staff_roles=profile_data.staff_roles,  # staff only; None for customer/vendor
         default_discount_percent=getattr(profile_data, 'default_discount_percent', None)
     )
     db.add(db_profile)
@@ -117,6 +118,8 @@ def update_profile(profile_id: int, profile_data: ProfileUpdate, db: Session = D
         db_profile.address = profile_data.address
     if profile_data.postal_code is not None:
         db_profile.postal_code = profile_data.postal_code
+    if profile_data.staff_roles is not None:
+        db_profile.staff_roles = profile_data.staff_roles  # persist edited staff roles
     if profile_data.default_discount_percent is not None:
         db_profile.default_discount_percent = profile_data.default_discount_percent
 
@@ -125,6 +128,9 @@ def update_profile(profile_id: int, profile_data: ProfileUpdate, db: Session = D
     # would otherwise leave the previous customer/vendor pst in place.
     if db_profile.type == ModelProfileType.staff:
         db_profile.pst = None
+    else:
+        # Roles only apply to staff; clear any stale value if converted away from staff.
+        db_profile.staff_roles = None
 
     db.commit()
     db.refresh(db_profile)

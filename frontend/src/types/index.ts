@@ -257,8 +257,9 @@ export interface Profile {
   name: string;
   type: ProfileType;
   pst?: string | null;
-  address: string;
-  postal_code: string;
+  address: string | null;       // nullable: staff imported from Vision often have none
+  postal_code: string | null;   // nullable: same as address
+  staff_roles?: string | null;  // staff only: comma-joined roles ("Lead, Manager")
   default_discount_percent?: number;
   contacts: Contact[];
 }
@@ -267,8 +268,9 @@ export interface ProfileCreate {
   name: string;
   type: ProfileType;
   pst?: string;
-  address: string;
-  postal_code: string;
+  address?: string;             // optional for staff (no address in Vision)
+  postal_code?: string;
+  staff_roles?: string;         // staff only
   default_discount_percent?: number;
   contacts: ContactCreate[];
 }
@@ -279,6 +281,7 @@ export interface ProfileUpdate {
   pst?: string;
   address?: string;
   postal_code?: string;
+  staff_roles?: string;         // staff only
   default_discount_percent?: number;
 }
 
