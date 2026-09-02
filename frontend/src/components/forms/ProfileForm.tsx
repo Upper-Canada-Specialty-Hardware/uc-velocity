@@ -53,6 +53,7 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
   const [address, setAddress] = useState("")
   const [postalCode, setPostalCode] = useState("")
   const [defaultDiscountPercent, setDefaultDiscountPercent] = useState("")
+  const [staffRoles, setStaffRoles] = useState("")   // staff only: comma-joined roles
 
   // Contacts state
   const [contacts, setContacts] = useState<ContactFormData[]>([])
@@ -77,8 +78,9 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
       setName(profile.name)
       setType(profile.type)
       setPst(profile.pst || "")
-      setAddress(profile.address)
-      setPostalCode(profile.postal_code)
+      setAddress(profile.address ?? "")          // nullable for staff
+      setPostalCode(profile.postal_code ?? "")
+      setStaffRoles(profile.staff_roles ?? "")
       setDefaultDiscountPercent(profile.default_discount_percent?.toString() || "")
       setContacts(profile.contacts.map(c => ({
         id: c.id,
@@ -150,9 +152,10 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
 
   // Validation
   const isFormValid = () => {
-    if (!name.trim() || !address.trim() || !postalCode.trim()) return false
-    // Staff have no Provincial Tax Number; PST is required only for customers/vendors.
-    if (type !== "staff" && !pst.trim()) return false
+    if (!name.trim()) return false
+    // Staff imported from Vision often have no address/postal/PST, so those are
+    // required only for customers and vendors.
+    if (type !== "staff" && (!address.trim() || !postalCode.trim() || !pst.trim())) return false
     if (contacts.length === 0) return false
     return contacts.every(c => c.name.trim() !== "")
   }
@@ -181,8 +184,9 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
           name: name.trim(),
           type,
           pst: type === "staff" ? undefined : pst.trim(),
-          address: address.trim(),
-          postal_code: postalCode.trim(),
+          address: address.trim() || undefined,
+          postal_code: postalCode.trim() || undefined,
+          staff_roles: type === "staff" ? (staffRoles.trim() || undefined) : undefined,
           default_discount_percent: defaultDiscountPercent ? parseFloat(defaultDiscountPercent) : undefined,
         })
 
@@ -221,8 +225,9 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
           name: name.trim(),
           type,
           pst: type === "staff" ? undefined : pst.trim(),
-          address: address.trim(),
-          postal_code: postalCode.trim(),
+          address: address.trim() || undefined,
+          postal_code: postalCode.trim() || undefined,
+          staff_roles: type === "staff" ? (staffRoles.trim() || undefined) : undefined,
           default_discount_percent: defaultDiscountPercent ? parseFloat(defaultDiscountPercent) : undefined,
           contacts: contacts.map(buildContactCreate)
         }
@@ -293,26 +298,40 @@ export function ProfileForm({ profile, defaultType = "customer", onSuccess, onCa
         )}
 
         <div className="space-y-2">
-          <Label htmlFor="address">Address *</Label>
+          <Label htmlFor="address">Address{type !== "staff" ? " *" : ""}</Label>
           <Input
             id="address"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             placeholder="e.g., 123 Main Street, Suite 100"
-            required
+            required={type !== "staff"}
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="postalCode">Postal Code *</Label>
+          <Label htmlFor="postalCode">Postal Code{type !== "staff" ? " *" : ""}</Label>
           <Input
             id="postalCode"
             value={postalCode}
             onChange={(e) => setPostalCode(e.target.value)}
             placeholder="e.g., V6B 1A1"
-            required
+            required={type !== "staff"}
           />
         </div>
+
+        {/* Roles — staff only (Lead / Installer / Manager, comma-joined; imported from Vision) */}
+        {type === "staff" && (
+          <div className="space-y-2">
+            <Label htmlFor="staffRoles">Roles</Label>
+            <Input
+              id="staffRoles"
+              value={staffRoles}
+              onChange={(e) => setStaffRoles(e.target.value)}
+              placeholder="e.g., Lead, Installer"
+            />
+            <p className="text-xs text-muted-foreground">Comma-separated (e.g., Lead, Manager).</p>
+          </div>
+        )}
 
         {/* Default Discount — only for vendors */}
         {type === "vendor" && (

@@ -343,6 +343,12 @@ export function ProfilesPage() {
                   </p>
                   <p className="font-medium">{viewingProfile.address || EMPTY_VALUE}</p>
                 </div>
+                {viewingProfile.type === 'staff' && (
+                  <div>
+                    <p className="text-sm text-muted-foreground">Roles</p>
+                    <p className="font-medium">{viewingProfile.staff_roles || EMPTY_VALUE}</p>
+                  </div>
+                )}
               </div>
 
               <Separator />

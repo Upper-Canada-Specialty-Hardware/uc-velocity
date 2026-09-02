@@ -130,7 +130,7 @@ export function ProjectForm({ project, onSuccess, onCancel }: ProjectFormProps) 
           options={customers.map((customer): SearchableSelectOption => ({
             value: customer.id.toString(),
             label: customer.name,
-            description: customer.address,
+            description: customer.address ?? undefined,   // address is now nullable (staff)
           }))}
           value={customerId}
           onChange={handleCustomerChange}
