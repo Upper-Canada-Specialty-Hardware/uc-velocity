@@ -24,4 +24,6 @@ if not _pg_reachable():
         # Imports routes.migration -> database, which requires DATABASE_URL.
         # That env var is present in CI (alongside Postgres) but not locally.
         "test_migration_import.py",
+        # Runs the real import endpoint (wipes and reloads tables) -- scratch/CI DB only.
+        "test_migration_import_endpoint.py",
     ]

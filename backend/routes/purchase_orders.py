@@ -26,6 +26,29 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 10000
 
 
+def compute_po_status(line_items) -> POStatus:
+    """Derive a purchase order's status from its line receipt quantities.
+
+    This is the rule the revert path has always applied after restoring line
+    items; the legacy import calls it too, so imported POs get exactly the status
+    the app would derive from the same receipts.
+
+    Args:
+        line_items: The PO's line items (anything with ``quantity`` and
+            ``qty_pending``); may be empty.
+
+    Returns:
+        ``POStatus.draft`` when nothing has been received on any line (or there
+        are no lines), ``POStatus.received`` when every line is fully received,
+        otherwise ``POStatus.sent`` (partially received).
+    """
+    if all(item.qty_pending == item.quantity for item in line_items):  # no receipts at all
+        return POStatus.draft
+    if all(item.qty_pending == 0 for item in line_items):              # everything received
+        return POStatus.received
+    return POStatus.sent                                                # partially received
+
+
 def create_po_snapshot(
     db: Session,
     po: PurchaseOrder,
@@ -1318,16 +1341,9 @@ def revert_po_to_version(po_id: int, version: int, db: Session = Depends(get_db)
     for line_item in restored_items:
         recompute_line_item_aggregates(db, line_item)
 
-    # Update PO status based on recomputed quantities
-    if all(item.qty_pending == item.quantity for item in restored_items):
-        # No receivings remain - revert to Draft
-        po.status = POStatus.draft
-    elif all(item.qty_pending == 0 for item in restored_items):
-        # All items fully received
-        po.status = POStatus.received
-    else:
-        # Partially received
-        po.status = POStatus.sent
+    # Update PO status based on recomputed quantities (shared rule: no receipts ->
+    # Draft, all received -> Received, otherwise Sent).
+    po.status = compute_po_status(restored_items)
 
     # Create snapshot after revert operations to capture final restored state
     revert_snapshot = create_po_snapshot(db, po, "revert", f"Reverted to version {version}")
