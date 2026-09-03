@@ -11,7 +11,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from "@/components/ui/dialog"
 import {
   AlertDialog,
@@ -61,7 +60,6 @@ import {
   ChevronRight,
   Clock,
   Search,
-  Unlock,
 } from "lucide-react"
 
 const QuoteEditor = lazy(() =>
@@ -218,12 +216,6 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
   const [poDialogOpen, setPoDialogOpen] = useState(false)
   const [vendors, setVendors] = useState<Profile[]>([])
   const [selectedVendorId, setSelectedVendorId] = useState<string>("")
-
-  // Per-project bulk-reopen (Issue #164): open state, the ids the user has ticked,
-  // and an in-flight guard so the confirm button can't be double-fired.
-  const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
-  const [reopenSelectedIds, setReopenSelectedIds] = useState<Set<number>>(new Set())
-  const [reopenBusy, setReopenBusy] = useState(false)
 
   // Invoices from all quotes
   const [invoices, setInvoices] = useState<(Invoice & { quoteId: number; quoteNumber: string })[]>([])
@@ -466,65 +458,6 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
     })
   }, [project, debouncedFilter])
 
-  // Quote ids that already have real Velocity invoices. The backend refuses to reopen
-  // these (fulfillment reflects real invoicing), so excluding them keeps the banner count
-  // and the pre-ticked set honest instead of silently over-counting.
-  const quoteIdsWithInvoices = useMemo(
-    () => new Set(invoices.map((inv) => inv.quoteId)),
-    [invoices],
-  )
-
-  // Migrated quotes in THIS project that still show Closed AND have no invoices - i.e. the
-  // ones the backend will actually reopen. project.quotes carries computed status + the flag.
-  const migratedClosedQuotes = useMemo(
-    () =>
-      (project?.quotes ?? []).filter(
-        (q) => q.legacy_imported && q.status === "Closed" && !quoteIdsWithInvoices.has(q.id),
-      ),
-    [project, quoteIdsWithInvoices],
-  )
-
-  // Open the reopen dialog with every candidate pre-ticked (common case: reopen them
-  // all; the user unticks any that genuinely are finished).
-  const openReopenDialog = () => {
-    setReopenSelectedIds(new Set(migratedClosedQuotes.map((q) => q.id)))
-    setReopenDialogOpen(true)
-  }
-
-  // Add/remove one quote id from the ticked selection.
-  const toggleReopenId = (id: number) => {
-    setReopenSelectedIds((prev) => {
-      const next = new Set(prev)          // clone so React sees a new Set
-      if (next.has(id)) next.delete(id)   // untick -> drop
-      else next.add(id)                   // tick -> add
-      return next
-    })
-  }
-
-  // Reopen every ticked quote in one bulk request, then refresh and report.
-  const runBulkReopen = async () => {
-    const ids = [...reopenSelectedIds]    // Set -> array for the payload
-    if (ids.length === 0) return          // nothing ticked, no-op
-    setReopenBusy(true)                   // guard against a double click
-    try {
-      const res = await api.quotes.reopenBulk(ids)  // one atomic bulk call
-      toast({
-        title: "Reopen complete",
-        description: `Reopened ${res.reopened_count}${res.skipped_count ? `, skipped ${res.skipped_count}` : ""}.`,
-      })
-      setReopenDialogOpen(false)
-      await fetchProject()                // reload so the quote statuses refresh in the list
-    } catch (err) {
-      toast({
-        variant: "destructive",
-        title: "Reopen failed",
-        description: err instanceof Error ? err.message : "Could not reopen quotes.",
-      })
-    } finally {
-      setReopenBusy(false)
-    }
-  }
-
   const filteredPOs = useMemo(() => {
     if (!project) return []
     const n = debouncedFilter.trim().toLowerCase()
@@ -746,22 +679,6 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
                     list couldn't bound or overflow — hence no scrollbar.) */}
                 <div className="flex-1 min-h-0 px-3 pb-3 overflow-y-auto" onKeyDown={onSidebarKeyDown}>
                     <div className="space-y-1 pr-2">
-                      {/* Reopen banner: only on the Quotes tab, only when this project has
-                          migrated quotes still stuck at Closed (Issue #164). Opens the picker. */}
-                      {activeTab === "quotes" && migratedClosedQuotes.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={openReopenDialog}
-                          className="w-full flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 transition-colors"
-                          title="Reopen migrated quotes that were imported as Closed"
-                        >
-                          <Unlock className="h-3.5 w-3.5 flex-none" />
-                          <span className="text-left">
-                            Reopen {migratedClosedQuotes.length} migrated{" "}
-                            {migratedClosedQuotes.length === 1 ? "quote" : "quotes"}
-                          </span>
-                        </button>
-                      )}
                       {activeTab === "quotes" && (
                         filteredQuotes.length === 0 ? (
                           <EmptyListMessage
@@ -864,82 +781,6 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
           )}
         </div>
       </div>
-
-      {/* Reopen Migrated Quotes Dialog (per-project, Issue #164) */}
-      <Dialog open={reopenDialogOpen} onOpenChange={(o) => !reopenBusy && setReopenDialogOpen(o)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Unlock className="h-4 w-4" />
-              Reopen migrated quotes
-            </DialogTitle>
-            <DialogDescription>
-              These quotes were imported from UC Vision as fully fulfilled, so they show as Closed.
-              Reopening resets each to unfulfilled, so it becomes an open Work Order (or Draft) again.
-              Untick any that genuinely are finished. Each reopen is recorded in the quote's audit trail.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* Select-all row: header checkbox + running count of what's ticked. */}
-          <div className="flex items-center justify-between border-b pb-2 text-sm">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-primary"
-                // checked only when every candidate is ticked
-                checked={reopenSelectedIds.size === migratedClosedQuotes.length && migratedClosedQuotes.length > 0}
-                // show the dash state when some-but-not-all are ticked
-                ref={(el) => {
-                  if (el)
-                    el.indeterminate =
-                      reopenSelectedIds.size > 0 && reopenSelectedIds.size < migratedClosedQuotes.length
-                }}
-                // tick -> select every candidate; untick -> clear
-                onChange={(e) =>
-                  setReopenSelectedIds(
-                    e.target.checked ? new Set(migratedClosedQuotes.map((q) => q.id)) : new Set(),
-                  )
-                }
-              />
-              <span className="font-medium">Select all</span>
-            </label>
-            <span className="text-muted-foreground">{reopenSelectedIds.size} selected</span>
-          </div>
-
-          {/* One ticky row per candidate; the far label previews what it becomes on reopen. */}
-          <div className="max-h-72 overflow-y-auto space-y-1 pr-1">
-            {migratedClosedQuotes.map((q) => {
-              const hasPo = !!(q.client_po_number && q.client_po_number.trim())  // -> Work Order vs Draft
-              return (
-                <label
-                  key={q.id}
-                  className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm cursor-pointer hover:bg-muted/50"
-                >
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-primary"
-                    checked={reopenSelectedIds.has(q.id)}
-                    onChange={() => toggleReopenId(q.id)}
-                  />
-                  <span className="font-medium">{q.quote_number}</span>
-                  <span className="ml-auto text-xs text-muted-foreground">
-                    → {hasPo ? "Work Order" : "Draft"}
-                  </span>
-                </label>
-              )
-            })}
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setReopenDialogOpen(false)} disabled={reopenBusy}>
-              Cancel
-            </Button>
-            <Button onClick={runBulkReopen} disabled={reopenBusy || reopenSelectedIds.size === 0}>
-              {reopenBusy ? "Reopening..." : `Reopen ${reopenSelectedIds.size} selected`}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Create Quote Dialog */}
       <Dialog open={quoteDialogOpen} onOpenChange={setQuoteDialogOpen}>
