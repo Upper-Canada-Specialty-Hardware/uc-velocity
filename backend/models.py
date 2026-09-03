@@ -111,8 +111,8 @@ class Profile(Base):
     name = Column(String, nullable=False)
     type = Column(Enum(ProfileType), nullable=False)
     pst = Column(String, nullable=True)  # Provincial Tax Number (not applicable to staff)
-    address = Column(String, nullable=True)  # nullable: staff imported from Vision often have none
-    postal_code = Column(String, nullable=True)  # nullable: same as address (sparse in Vision staff)
+    address = Column(String, nullable=False)  # NOT NULL in the database (baseline schema) -> every profile type must supply one
+    postal_code = Column(String, nullable=False)  # NOT NULL in the database, same as address
     staff_roles = Column(String, nullable=True)  # staff only: comma-joined roles ("Lead, Manager"); NULL otherwise
     default_discount_percent = Column(Float, nullable=True)  # Default vendor discount %
     legacy_source = _legacy_source_col()  # Vision import: which source table
@@ -182,7 +182,7 @@ class Labor(Base):
     id = Column(Integer, primary_key=True, index=True)
     description = Column(String, nullable=False)
     product_code = Column(String, nullable=True)  # Product code, mirrors Part.part_number (issue #179)
-    hours = Column(Float, nullable=False, default=1)
+    hours = Column(Float, nullable=False, default=1, server_default='1')  # DB default 1 -> declared so alembic check matches
     rate = Column(Float, nullable=False)
     markup_percent = Column(Float, default=50.0)
     category_id = Column(Integer, ForeignKey('categories.id'))
@@ -203,7 +203,7 @@ class Miscellaneous(Base):
     unit_price = Column(Float, nullable=False)
     markup_percent = Column(Float, default=50.0)
     category_id = Column(Integer, ForeignKey('categories.id'))
-    is_system_item = Column(Boolean, default=False)
+    is_system_item = Column(Boolean, default=False, server_default='false')  # DB default false (migration 032)
     legacy_source = _legacy_source_col()  # Vision import: which source table
     legacy_id = _legacy_id_col()          # Vision import: source row's id
     __table_args__ = (_legacy_unique_index("miscellaneous"),)
@@ -227,7 +227,7 @@ class Project(Base):
     name = Column(String, nullable=False)
     customer_id = Column(Integer, ForeignKey('profiles.id'), nullable=False, index=True)
     created_on = Column(DateTime, default=datetime.utcnow)
-    status = Column(String, default="active")
+    status = Column(String, default="active", server_default='active')  # DB default 'active' (migration 032)
     ucsh_project_number = Column(String, nullable=True)
     uca_project_number = Column(String, unique=True, nullable=False)
     project_lead = Column(String, nullable=True)  # Static contact name
@@ -252,15 +252,15 @@ class Quote(Base):
     project_id = Column(Integer, ForeignKey('projects.id'), nullable=False, index=True)
     quote_sequence = Column(Integer, nullable=False)  # Per-project sequence number (1, 2, 3...)
     created_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(String, default="Draft")  # "Draft", "Work Order", "Invoiced", "Closed" — computed by system
-    current_version = Column(Integer, default=0)  # Internal audit counter — bumps on every snapshot
+    status = Column(String, default="Draft", server_default='Draft')  # "Draft", "Work Order", "Invoiced", "Closed" — computed by system; DB default 'Draft'
+    current_version = Column(Integer, default=0, server_default='0')  # Internal audit counter — bumps on every snapshot; DB default 0 (migration 032)
     # Visible version shown in the quote/invoice number. Advances ONLY on line-item
     # add/edit/delete (issue #202); invoice creation and date edits leave it unchanged.
-    item_list_version = Column(Integer, default=0, server_default='0')
+    item_list_version = Column(Integer, nullable=False, default=0, server_default='0')  # NOT NULL in the DB (migration 028)
     client_po_number = Column(String, nullable=True)  # Client's PO number (required for invoicing)
-    work_description = Column(String, nullable=True)  # Optional work description
+    work_description = Column(Text, nullable=True)  # Optional work description; TEXT in the DB (production shape, migration 032)
     hardware_schedule_version = Column(String, nullable=True)  # Optional hardware schedule version identifier
-    markup_control_enabled = Column(Boolean, default=False)  # Markup Discount Control toggle
+    markup_control_enabled = Column(Boolean, default=False, server_default='false')  # Markup Discount Control toggle; DB default false
     parts_markup_percent = Column(Float, nullable=True)  # Section-level markup for parts
     labor_markup_percent = Column(Float, nullable=True)  # Section-level markup for labor
     misc_markup_percent = Column(Float, nullable=True)  # Section-level markup for misc
@@ -288,11 +288,11 @@ class QuoteLineItem(Base):
     misc_id = Column(Integer, ForeignKey('miscellaneous.id'), nullable=True)
     description = Column(String)  # For misc items or override
     description_override = Column(String, nullable=True)  # Per-quote display description override (issue #178)
-    quantity = Column(Integer, default=1)  # Qty Ordered (must be whole number)
+    quantity = Column(Integer, default=1, server_default='1')  # Qty Ordered (must be whole number); DB default 1 (migration 032)
     unit_price = Column(Float)  # Override price if needed
-    qty_pending = Column(Integer, default=0)  # Remaining to fulfill (must be whole number)
-    qty_fulfilled = Column(Integer, default=0)  # Total fulfilled across all invoices (must be whole number)
-    is_pms = Column(Boolean, default=False)  # True for PMS items (Project Management Services)
+    qty_pending = Column(Integer, default=0, server_default='0')  # Remaining to fulfill (must be whole number); DB default 0 (migration 032)
+    qty_fulfilled = Column(Integer, default=0, server_default='0')  # Total fulfilled across all invoices (must be whole number); DB default 0 (migration 032)
+    is_pms = Column(Boolean, default=False, server_default='false')  # True for PMS items (Project Management Services); DB default false
     pms_percent = Column(Float, nullable=True)  # Percentage value for PMS % items (null for PMS $ or non-PMS)
     original_markup_percent = Column(Float, nullable=True)  # Individual markup before global override
     base_cost = Column(Float, nullable=True)  # Base cost used for recalculation
@@ -320,11 +320,11 @@ class PurchaseOrder(Base):
     vendor_id = Column(Integer, ForeignKey('profiles.id'), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     po_sequence = Column(Integer, nullable=False)
-    current_version = Column(Integer, default=0)
+    current_version = Column(Integer, nullable=False, default=0, server_default='0')  # NOT NULL, DB default 0 (PO versioning migration)
     work_description = Column(String, nullable=True)
     vendor_po_number = Column(String, nullable=True)
     expected_delivery_date = Column(DateTime, nullable=True)
-    status = Column(Enum(POStatus), default=POStatus.draft)
+    status = Column(Enum(POStatus), default=POStatus.draft, server_default=text("'draft'::postatus"))  # DB default 'draft' (enum member name)
     cost_code_id = Column(Integer, ForeignKey('cost_codes.id'), nullable=True)
     legacy_imported = Column(Boolean, nullable=False, server_default='false')
     legacy_source = _legacy_source_col()  # Vision import: which source table
@@ -347,10 +347,10 @@ class POLineItem(Base):
     item_type = Column(String, nullable=False)  # "part" or "misc" (NO labor for POs)
     part_id = Column(Integer, ForeignKey('parts.id'), nullable=True)
     description = Column(String)  # For misc items or override
-    quantity = Column(Integer, default=1)  # Must be whole number
+    quantity = Column(Integer, default=1, server_default='1')  # Must be whole number; DB default 1 (migration 032)
     unit_price = Column(Float)
-    qty_pending = Column(Integer, default=0)
-    qty_received = Column(Integer, default=0)
+    qty_pending = Column(Integer, nullable=False, default=0, server_default='0')  # NOT NULL, DB default 0 (PO versioning migration)
+    qty_received = Column(Integer, nullable=False, default=0, server_default='0')  # NOT NULL, DB default 0 (PO versioning migration)
     actual_unit_price = Column(Float, nullable=True)
     legacy_source = _legacy_source_col()  # Vision import: which source table
     legacy_id = _legacy_id_col()          # Vision import: source row's id
@@ -449,11 +449,11 @@ class Invoice(Base):
     id = Column(Integer, primary_key=True, index=True)
     quote_id = Column(Integer, ForeignKey('quotes.id'), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(String, default="Sent")  # "Sent", "Paid", "Voided"
+    status = Column(String, default="Sent", server_default='Sent')  # "Sent", "Paid", "Voided"; DB default 'Sent' (migration 032)
     notes = Column(String)  # Optional notes for this invoice
-    invoice_sequence = Column(Integer, default=1)  # Per-quote sequence (1, 2, 3...)
-    quote_version = Column(Integer, default=0)  # Quote version captured at invoice time
-    current_version = Column(Integer, default=0, server_default='0')  # Invoice's own snapshot version (audit trail)
+    invoice_sequence = Column(Integer, nullable=False, default=1, server_default='1')  # Per-quote sequence (1, 2, 3...); NOT NULL + DB default 1 (migration 021)
+    quote_version = Column(Integer, nullable=False, default=0, server_default='0')  # Quote version captured at invoice time; NOT NULL + DB default 0 (migration 021)
+    current_version = Column(Integer, nullable=False, default=0, server_default='0')  # Invoice's own snapshot version (audit trail); NOT NULL (migration 024)
     voided_at = Column(DateTime)  # When voided (if applicable)
     voided_by_snapshot_id = Column(Integer)  # Which revert voided this
     legacy_source = _legacy_source_col()  # Vision import: which source ledger table
@@ -569,9 +569,9 @@ class SystemRate(Base):
     rate_type = Column(String, nullable=False)  # "parking" or "travel_distance"
     description = Column(String, nullable=False)
     unit_price = Column(Float, nullable=False)
-    markup_percent = Column(Float, nullable=False, default=0.0)
-    sort_order = Column(Integer, nullable=False, default=0)
-    is_active = Column(Boolean, nullable=False, default=True)
+    markup_percent = Column(Float, nullable=False, default=0.0, server_default='0')  # DB default 0 (system rates migration)
+    sort_order = Column(Integer, nullable=False, default=0, server_default='0')  # DB default 0 (system rates migration)
+    is_active = Column(Boolean, nullable=False, default=True, server_default='true')  # DB default true (system rates migration)
     linked_misc_id = Column(Integer, ForeignKey('miscellaneous.id'), nullable=True)
 
     # Relationships
@@ -587,7 +587,7 @@ class CompanySettings(Base):
     phone = Column(String)
     fax = Column(String)
     gst_number = Column(String)
-    hst_rate = Column(Float, default=13.0)
+    hst_rate = Column(Float, default=13.0, server_default='13.0')  # DB default 13.0 (HST migration)
     default_pms_percent = Column(Float, nullable=True)
     logo_data_url = Column(Text, nullable=True)
     # Live USD→CAD exchange rate used to convert USD-priced parts when they are
@@ -613,8 +613,8 @@ class QuoteLineItemSnapshot(Base):
     unit_price = Column(Float)
     qty_pending = Column(Integer)  # Must be whole number
     qty_fulfilled = Column(Integer)  # Must be whole number
-    is_deleted = Column(Boolean, default=False)  # Track if item was deleted at this snapshot
-    is_pms = Column(Boolean, default=False)  # True for PMS items (Project Management Services)
+    is_deleted = Column(Boolean, default=False, server_default='false')  # Track if item was deleted at this snapshot; DB default false (migration 032)
+    is_pms = Column(Boolean, default=False, server_default='false')  # True for PMS items (Project Management Services); DB default false
     pms_percent = Column(Float, nullable=True)  # Percentage value for PMS % items
     original_markup_percent = Column(Float, nullable=True)  # Individual markup before global override
     base_cost = Column(Float, nullable=True)  # Base cost used for recalculation
