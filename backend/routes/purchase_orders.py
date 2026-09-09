@@ -770,22 +770,32 @@ def commit_po_edits(po_id: int, request: POCommitEditsRequest, db: Session = Dep
                 if not edit.description and not db_line.description:
                     raise HTTPException(status_code=400, detail="description required for misc line items")
 
+            # The editor sends only the fields the user changed, so a price-only
+            # edit arrives with no quantity and a quantity-only edit with no price.
+            # Fall back to the line's current value for anything omitted, the same
+            # way item_type / part_id / description do above. Without this, a
+            # missing quantity crashed the received-quantity check below (500 ->
+            # "Failed to fetch" in the browser) and a missing price was written
+            # to the line as NULL.
+            effective_quantity = edit.quantity if edit.quantity is not None else db_line.quantity
+            effective_unit_price = edit.unit_price if edit.unit_price is not None else db_line.unit_price
+
             # Validate quantity not reduced below qty_received
-            if edit.quantity < db_line.qty_received:
+            if effective_quantity < db_line.qty_received:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot reduce quantity below already received amount ({db_line.qty_received})"
                 )
 
-            # Update fields (use effective_item_type which falls back to existing)
+            # Update fields (every value falls back to the existing one when omitted)
             db_line.item_type = effective_item_type
             db_line.part_id = edit.part_id if edit.part_id is not None else db_line.part_id
             db_line.description = edit.description if edit.description is not None else db_line.description
-            db_line.quantity = edit.quantity
-            db_line.unit_price = edit.unit_price
+            db_line.quantity = effective_quantity
+            db_line.unit_price = effective_unit_price
 
-            # Recalculate qty_pending
-            db_line.qty_pending = max(0, edit.quantity - db_line.qty_received)
+            # Recalculate qty_pending from the effective quantity
+            db_line.qty_pending = max(0, effective_quantity - db_line.qty_received)
 
         changes_summary.append(f"Edited {len(edits)} item(s)")
 

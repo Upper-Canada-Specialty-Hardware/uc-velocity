@@ -55,7 +55,7 @@ import type {
   InvoiceCreate, QuoteEditorMode, StagedEdit, StagedAdd,
   StagedLineItemChange, CommitEditsRequest
 } from "@/types"
-import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, FolderInput, Car, MapPin, X, Lock, Unlock, GitCommit, Eye, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
+import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, FolderInput, Car, MapPin, X, Lock, Unlock, GitCommit, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { formatDateTime } from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
@@ -219,7 +219,6 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
   const [isCommitting, setIsCommitting] = useState(false)
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
   const [editPreviewOpen, setEditPreviewOpen] = useState(false)
-  const [commitConfirmOpen, setCommitConfirmOpen] = useState(false)
   const [noPendingDialogOpen, setNoPendingDialogOpen] = useState(false)
   // Total Margin and other advanced totals are hidden by default to reduce surface noise.
   const [showAdvancedTotals, setShowAdvancedTotals] = useState(false)
@@ -804,7 +803,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     if (!hasStagedChanges) return false
 
     setIsCommitting(true)
-    setCommitConfirmOpen(false)
+    setEditPreviewOpen(false)  // the review dialog is the confirmation; close it
 
     try {
       // Pre-submit staleness check: fetch latest quote to detect external changes
@@ -3619,7 +3618,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                 </Button>
                 <Button
                   size="lg"
-                  onClick={() => setCommitConfirmOpen(true)}
+                  onClick={() => setEditPreviewOpen(true)}
                   disabled={!hasStagedChanges || isCommitting}
                   className="shadow-lg gap-2 bg-blue-600 hover:bg-blue-700"
                 >
@@ -4557,51 +4556,17 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
         isLoading={savingCreatedAt}
       />
 
-      {/* Commit Changes Confirmation Dialog */}
-      <AlertDialog open={commitConfirmOpen} onOpenChange={setCommitConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <GitCommit className="h-5 w-5 text-blue-500" />
-              Commit Changes?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              You are about to commit {stagedChangesCount} change{stagedChangesCount !== 1 ? "s" : ""} to this quote:
-              <ul className="mt-2 space-y-1 text-sm">
-                {stagedAdds.length > 0 && (
-                  <li className="text-green-600 dark:text-green-400">• {stagedAdds.length} item{stagedAdds.length !== 1 ? "s" : ""} added</li>
-                )}
-                {stagedEdits.size > 0 && (
-                  <li className="text-blue-600 dark:text-blue-400">• {stagedEdits.size} item{stagedEdits.size !== 1 ? "s" : ""} modified</li>
-                )}
-                {stagedDeletes.size > 0 && (
-                  <li className="text-red-600 dark:text-red-400">• {stagedDeletes.size} item{stagedDeletes.size !== 1 ? "s" : ""} deleted</li>
-                )}
-              </ul>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleCommitChanges}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              Commit Changes
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       {/* Edit Preview Dialog */}
       <Dialog open={editPreviewOpen} onOpenChange={setEditPreviewOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Eye className="h-5 w-5" />
-              Preview Changes
+              <GitCommit className="h-5 w-5 text-blue-500" />
+              Commit Changes?
             </DialogTitle>
             <DialogDescription>
-              Review your staged changes before committing.
+              {/* One review step: the exact staged changes, then commit. */}
+              You are about to commit {stagedChangesCount} change{stagedChangesCount !== 1 ? "s" : ""} to this quote. Review them below, then commit.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -4675,10 +4640,10 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditPreviewOpen(false)}>
-              Close
+              Cancel
             </Button>
-            <Button onClick={() => { setEditPreviewOpen(false); setCommitConfirmOpen(true); }} className="bg-blue-600 hover:bg-blue-700">
-              Commit Changes
+            <Button onClick={handleCommitChanges} disabled={isCommitting} className="bg-blue-600 hover:bg-blue-700">
+              {isCommitting ? "Committing..." : "Commit Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

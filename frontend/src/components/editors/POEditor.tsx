@@ -58,7 +58,7 @@ import type {
 } from "@/types"
 import {
   Plus, Minus, Trash2, Package, FileText, Building, Pencil, Copy, FolderInput,
-  X, GitCommit, Eye, AlertTriangle, Check, Calendar, Loader2, Hash, Printer,
+  X, GitCommit, AlertTriangle, Check, Calendar, Loader2, Hash, Printer,
   History, ChevronDown, ChevronRight, Receipt, Info, ArrowLeft
 } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -90,6 +90,9 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   // Edit dialog states
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [editingLineItem, setEditingLineItem] = useState<POLineItem | null>(null)
+  // A staged add (green "New" row) opened in the Edit dialog. Mutually exclusive
+  // with editingLineItem: exactly one of them is set while the dialog is open.
+  const [editingStagedAdd, setEditingStagedAdd] = useState<StagedPOAdd | null>(null)
 
   // ===== Resource States =====
   const [parts, setParts] = useState<Part[]>([])
@@ -114,7 +117,6 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   const [isCommitting, setIsCommitting] = useState(false)
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
   const [editPreviewOpen, setEditPreviewOpen] = useState(false)
-  const [commitConfirmOpen, setCommitConfirmOpen] = useState(false)
 
   // ===== Version Tracking =====
   const [editModeStartVersion, setEditModeStartVersion] = useState<number | null>(null)
@@ -176,6 +178,9 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   // ===== Computed Values =====
   const hasBeenReceived = po?.line_items.some(item => item.qty_received > 0) ?? false
   const hasStagedChanges = stagedEdits.size > 0 || stagedAdds.length > 0 || stagedDeletes.size > 0
+  // The row the Edit dialog is showing: a committed line or a staged add (never both).
+  // Both types carry item_type / part / description, which is all the dialog header needs.
+  const editTarget: POLineItem | StagedPOAdd | null = editingLineItem ?? editingStagedAdd
   const stagedChangesCount = stagedEdits.size + stagedAdds.length + stagedDeletes.size
   const hasAnyUnsavedChanges = editorMode === "edit" && hasStagedChanges
   const hasPendingItems = po?.line_items.some(item => item.qty_pending > 0) ?? false
@@ -316,6 +321,16 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     setStagedAdds(prev => [...prev, { ...newItem, tempId }])
   }
 
+  /**
+   * Revise a staged (not yet committed) add in place.
+   * Only client state changes; the row is sent in full on Commit as before.
+   * @param tempId - The staged row's negative temp id.
+   * @param changes - Fields to overwrite (quantity, unit_price, description).
+   */
+  const updateStagedAdd = (tempId: number, changes: Partial<Pick<StagedPOAdd, "quantity" | "unit_price" | "description">>) => {
+    setStagedAdds(prev => prev.map(item => (item.tempId === tempId ? { ...item, ...changes } : item)))
+  }
+
   const unstageAdd = (tempId: number) => {
     setStagedAdds(prev => prev.filter(item => item.tempId !== tempId))
   }
@@ -342,7 +357,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     if (!hasStagedChanges) return
 
     setIsCommitting(true)
-    setCommitConfirmOpen(false)
+    setEditPreviewOpen(false)  // the review dialog is the confirmation; close it
 
     try {
       // Pre-submit staleness check
@@ -458,12 +473,28 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   }
 
   const openEditDialog = (item: POLineItem) => {
+    setEditingStagedAdd(null)  // dialog now targets a committed line
     setEditingLineItem(item)
     // Use staged values if available, otherwise original
     const staged = stagedEdits.get(item.id)
     setEditQuantity((staged?.quantity ?? item.quantity).toString())
     setEditUnitPrice((staged?.unit_price ?? item.unit_price ?? 0).toString())
     setEditDescription(staged?.description ?? item.description ?? "")
+    setEditDialogOpen(true)
+  }
+
+  /**
+   * Open the Edit Line Item dialog for a staged add (a green "New" row).
+   * Prefills the fields from the staged row so the user can revise the
+   * quantity, unit price, or misc description before committing.
+   * @param item - The staged add to edit.
+   */
+  const openStagedAddEditDialog = (item: StagedPOAdd) => {
+    setEditingLineItem(null)   // dialog now targets a staged add, not a committed line
+    setEditingStagedAdd(item)
+    setEditQuantity(item.quantity.toString())
+    setEditUnitPrice((item.unit_price ?? 0).toString())
+    setEditDescription(item.description ?? "")
     setEditDialogOpen(true)
   }
 
@@ -536,11 +567,24 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   }
 
   const handleEditLineItem = () => {
-    if (!editingLineItem) return
-
     const newQuantity = Math.max(1, parseFloat(editQuantity) || 0)
     const newUnitPrice = parseFloat(editUnitPrice) || 0
     const newDescription = editDescription.trim()
+
+    // Staged add: overwrite the row in client state; nothing hits the API until Commit.
+    if (editingStagedAdd) {
+      updateStagedAdd(editingStagedAdd.tempId, {
+        quantity: newQuantity,
+        unit_price: newUnitPrice,
+        // Parts keep their catalog description; only misc rows carry a free-text one.
+        ...(editingStagedAdd.item_type === "misc" ? { description: newDescription } : {}),
+      })
+      setEditDialogOpen(false)
+      setEditingStagedAdd(null)
+      return
+    }
+
+    if (!editingLineItem) return
 
     if (editorMode === "edit") {
       const changes: Partial<Omit<StagedPOEdit, "originalItem">> = {}
@@ -1305,6 +1349,15 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                         <Button
                           variant="ghost"
                           size="sm"
+                          onClick={() => openStagedAddEditDialog(item)}
+                          aria-label={`Edit new line item ${item.item_type === "part" && item.part ? item.part.part_number : item.description || "Miscellaneous"}`}
+                          title="Edit new item"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => unstageAdd(item.tempId)}
                           className="text-destructive hover:text-destructive hover:bg-destructive/10"
                           title="Remove staged item"
@@ -1945,17 +1998,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                 </Button>
                 <Button
                   size="lg"
-                  variant="secondary"
                   onClick={() => setEditPreviewOpen(true)}
-                  disabled={!hasStagedChanges}
-                  className="shadow-lg gap-2"
-                >
-                  <Eye className="h-5 w-5" />
-                  Preview
-                </Button>
-                <Button
-                  size="lg"
-                  onClick={() => setCommitConfirmOpen(true)}
                   disabled={!hasStagedChanges || isCommitting}
                   className="shadow-lg gap-2 bg-blue-600 hover:bg-blue-700"
                 >
@@ -2163,20 +2206,20 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
           </DialogHeader>
 
           <div className="space-y-4 pt-4">
-            {editingLineItem && (
+            {editTarget && (
               <>
                 {/* Show item description (read-only for parts) */}
                 <div className="p-3 bg-muted/50 rounded-md">
                   <span className="text-sm font-medium">
-                    {editingLineItem.item_type === "part" && editingLineItem.part
-                      ? `${editingLineItem.part.part_number} - ${editingLineItem.part.description}`
-                      : editingLineItem.description || "Miscellaneous"
+                    {editTarget.item_type === "part" && editTarget.part
+                      ? `${editTarget.part.part_number} - ${editTarget.part.description}`
+                      : editTarget.description || "Miscellaneous"
                     }
                   </span>
                 </div>
 
                 {/* Description (editable for misc items) */}
-                {editingLineItem.item_type === "misc" && (
+                {editTarget.item_type === "misc" && (
                   <div className="space-y-2">
                     <Label>Description</Label>
                     <Input
@@ -2216,7 +2259,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
               Cancel
             </Button>
             <Button onClick={handleEditLineItem}>
-              Save Changes
+              {editingStagedAdd ? "Update New Item" : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2246,51 +2289,17 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Commit Changes Confirmation Dialog */}
-      <AlertDialog open={commitConfirmOpen} onOpenChange={setCommitConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <GitCommit className="h-5 w-5 text-blue-500" />
-              Commit Changes?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              You are about to commit {stagedChangesCount} change{stagedChangesCount !== 1 ? "s" : ""} to this purchase order:
-              <ul className="mt-2 space-y-1 text-sm">
-                {stagedAdds.length > 0 && (
-                  <li className="text-green-600 dark:text-green-400">• {stagedAdds.length} item{stagedAdds.length !== 1 ? "s" : ""} added</li>
-                )}
-                {stagedEdits.size > 0 && (
-                  <li className="text-blue-600 dark:text-blue-400">• {stagedEdits.size} item{stagedEdits.size !== 1 ? "s" : ""} modified</li>
-                )}
-                {stagedDeletes.size > 0 && (
-                  <li className="text-red-600 dark:text-red-400">• {stagedDeletes.size} item{stagedDeletes.size !== 1 ? "s" : ""} deleted</li>
-                )}
-              </ul>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleCommitChanges}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              Commit Changes
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       {/* Edit Preview Dialog */}
       <Dialog open={editPreviewOpen} onOpenChange={setEditPreviewOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Eye className="h-5 w-5" />
-              Preview Changes
+              <GitCommit className="h-5 w-5 text-blue-500" />
+              Commit Changes?
             </DialogTitle>
             <DialogDescription>
-              Review your staged changes before committing.
+              {/* One review step: the exact staged changes, then commit. */}
+              You are about to commit {stagedChangesCount} change{stagedChangesCount !== 1 ? "s" : ""} to this purchase order. Review them below, then commit.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -2367,10 +2376,10 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditPreviewOpen(false)}>
-              Close
+              Cancel
             </Button>
-            <Button onClick={() => { setEditPreviewOpen(false); setCommitConfirmOpen(true); }} className="bg-blue-600 hover:bg-blue-700">
-              Commit Changes
+            <Button onClick={handleCommitChanges} disabled={isCommitting} className="bg-blue-600 hover:bg-blue-700">
+              {isCommitting ? "Committing..." : "Commit Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
