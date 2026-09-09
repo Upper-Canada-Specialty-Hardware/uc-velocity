@@ -90,6 +90,9 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   // Edit dialog states
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [editingLineItem, setEditingLineItem] = useState<POLineItem | null>(null)
+  // A staged add (green "New" row) opened in the Edit dialog. Mutually exclusive
+  // with editingLineItem: exactly one of them is set while the dialog is open.
+  const [editingStagedAdd, setEditingStagedAdd] = useState<StagedPOAdd | null>(null)
 
   // ===== Resource States =====
   const [parts, setParts] = useState<Part[]>([])
@@ -176,6 +179,9 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   // ===== Computed Values =====
   const hasBeenReceived = po?.line_items.some(item => item.qty_received > 0) ?? false
   const hasStagedChanges = stagedEdits.size > 0 || stagedAdds.length > 0 || stagedDeletes.size > 0
+  // The row the Edit dialog is showing: a committed line or a staged add (never both).
+  // Both types carry item_type / part / description, which is all the dialog header needs.
+  const editTarget: POLineItem | StagedPOAdd | null = editingLineItem ?? editingStagedAdd
   const stagedChangesCount = stagedEdits.size + stagedAdds.length + stagedDeletes.size
   const hasAnyUnsavedChanges = editorMode === "edit" && hasStagedChanges
   const hasPendingItems = po?.line_items.some(item => item.qty_pending > 0) ?? false
@@ -314,6 +320,16 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     const tempId = nextTempId
     setNextTempId(prev => prev - 1)
     setStagedAdds(prev => [...prev, { ...newItem, tempId }])
+  }
+
+  /**
+   * Revise a staged (not yet committed) add in place.
+   * Only client state changes; the row is sent in full on Commit as before.
+   * @param tempId - The staged row's negative temp id.
+   * @param changes - Fields to overwrite (quantity, unit_price, description).
+   */
+  const updateStagedAdd = (tempId: number, changes: Partial<Pick<StagedPOAdd, "quantity" | "unit_price" | "description">>) => {
+    setStagedAdds(prev => prev.map(item => (item.tempId === tempId ? { ...item, ...changes } : item)))
   }
 
   const unstageAdd = (tempId: number) => {
@@ -458,12 +474,28 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   }
 
   const openEditDialog = (item: POLineItem) => {
+    setEditingStagedAdd(null)  // dialog now targets a committed line
     setEditingLineItem(item)
     // Use staged values if available, otherwise original
     const staged = stagedEdits.get(item.id)
     setEditQuantity((staged?.quantity ?? item.quantity).toString())
     setEditUnitPrice((staged?.unit_price ?? item.unit_price ?? 0).toString())
     setEditDescription(staged?.description ?? item.description ?? "")
+    setEditDialogOpen(true)
+  }
+
+  /**
+   * Open the Edit Line Item dialog for a staged add (a green "New" row).
+   * Prefills the fields from the staged row so the user can revise the
+   * quantity, unit price, or misc description before committing.
+   * @param item - The staged add to edit.
+   */
+  const openStagedAddEditDialog = (item: StagedPOAdd) => {
+    setEditingLineItem(null)   // dialog now targets a staged add, not a committed line
+    setEditingStagedAdd(item)
+    setEditQuantity(item.quantity.toString())
+    setEditUnitPrice((item.unit_price ?? 0).toString())
+    setEditDescription(item.description ?? "")
     setEditDialogOpen(true)
   }
 
@@ -536,11 +568,24 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
   }
 
   const handleEditLineItem = () => {
-    if (!editingLineItem) return
-
     const newQuantity = Math.max(1, parseFloat(editQuantity) || 0)
     const newUnitPrice = parseFloat(editUnitPrice) || 0
     const newDescription = editDescription.trim()
+
+    // Staged add: overwrite the row in client state; nothing hits the API until Commit.
+    if (editingStagedAdd) {
+      updateStagedAdd(editingStagedAdd.tempId, {
+        quantity: newQuantity,
+        unit_price: newUnitPrice,
+        // Parts keep their catalog description; only misc rows carry a free-text one.
+        ...(editingStagedAdd.item_type === "misc" ? { description: newDescription } : {}),
+      })
+      setEditDialogOpen(false)
+      setEditingStagedAdd(null)
+      return
+    }
+
+    if (!editingLineItem) return
 
     if (editorMode === "edit") {
       const changes: Partial<Omit<StagedPOEdit, "originalItem">> = {}
@@ -1302,6 +1347,15 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                     {/* Actions */}
                     {editorMode === "edit" && (
                       <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openStagedAddEditDialog(item)}
+                          aria-label={`Edit new line item ${item.item_type === "part" && item.part ? item.part.part_number : item.description || "Miscellaneous"}`}
+                          title="Edit new item"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -2163,20 +2217,20 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
           </DialogHeader>
 
           <div className="space-y-4 pt-4">
-            {editingLineItem && (
+            {editTarget && (
               <>
                 {/* Show item description (read-only for parts) */}
                 <div className="p-3 bg-muted/50 rounded-md">
                   <span className="text-sm font-medium">
-                    {editingLineItem.item_type === "part" && editingLineItem.part
-                      ? `${editingLineItem.part.part_number} - ${editingLineItem.part.description}`
-                      : editingLineItem.description || "Miscellaneous"
+                    {editTarget.item_type === "part" && editTarget.part
+                      ? `${editTarget.part.part_number} - ${editTarget.part.description}`
+                      : editTarget.description || "Miscellaneous"
                     }
                   </span>
                 </div>
 
                 {/* Description (editable for misc items) */}
-                {editingLineItem.item_type === "misc" && (
+                {editTarget.item_type === "misc" && (
                   <div className="space-y-2">
                     <Label>Description</Label>
                     <Input
@@ -2216,7 +2270,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
               Cancel
             </Button>
             <Button onClick={handleEditLineItem}>
-              Save Changes
+              {editingStagedAdd ? "Update New Item" : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
