@@ -22,6 +22,7 @@ if not _pg_reachable():
         "test_clone_revert_markup.py",
         "test_staff_profile.py",
         "test_delete_cascade.py",
+        "test_po_commit_partial_edit.py",
         # Imports routes.migration -> database, which requires DATABASE_URL.
         # That env var is present in CI (alongside Postgres) but not locally.
         "test_migration_import.py",
