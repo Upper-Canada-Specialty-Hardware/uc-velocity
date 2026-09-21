@@ -31,7 +31,7 @@ router = APIRouter(prefix="/webhooks/clerk", tags=["clerk-webhooks"])
 async def receive_clerk_email(
     request: Request,
 ) -> dict[str, str]:
-    """Authenticate a Clerk event and relay its original email through SMTP2GO.
+    """Authenticate a Clerk event and relay its prepared email through SMTP2GO.
 
     Args:
         request: Incoming request containing exact signed webhook bytes.

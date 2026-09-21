@@ -1,8 +1,8 @@
 """Authenticate and validate Clerk email webhook requests.
 
 Clerk remains responsible for generating and verifying sign-in codes. This
-module authenticates Clerk's signed ``email.created`` event and exposes the
-message content without changing the subject or either body.
+module authenticates Clerk's signed ``email.created`` event, prepares the local
+verification-code bodies, and preserves other Clerk messages unchanged.
 """
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from fastapi import Request
+
+from email_templates import render_verification_code_email
 
 
 # Bound unauthenticated input before JSON parsing or signature work.
@@ -219,9 +221,18 @@ def parse_event(raw_body: bytes) -> ClerkEmailMessage | None:
     if "\r" in subject or "\n" in subject:
         raise WebhookPayloadError("invalid webhook payload")
 
-    # Preserve Clerk's strings exactly after JSON decoding.
-    html_body = _optional_body(data, "body")
-    text_body = _optional_body(data, "body_plain")
+    if data.get("slug") == "verification_code":
+        # Clerk generates the code; the local template controls only presentation.
+        template_data = data.get("data")
+        if not isinstance(template_data, dict):
+            raise WebhookPayloadError("invalid webhook payload")
+        otp_code = _bounded_text(template_data, "otp_code", 128)
+        # Render only after signature verification and metadata validation.
+        html_body, text_body = render_verification_code_email(otp_code)
+    else:
+        # Preserve bodies for every other Clerk email template unchanged.
+        html_body = _optional_body(data, "body")
+        text_body = _optional_body(data, "body_plain")
     if not any(
         body is not None and body.strip()
         for body in (html_body, text_body)
