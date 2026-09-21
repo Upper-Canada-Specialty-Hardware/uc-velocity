@@ -3,7 +3,7 @@
 Clerk still generates every sign-in code, verifies the submitted code, and
 creates the user session. UC Velocity replaces delivery: Clerk signs an
 `email.created` webhook, Railway verifies it, and SMTP2GO sends the message from
-the approved sender. For the `verification_code` slug, UC Velocity puts Clerk's
+the approved sender. For `verification_code` and `reset_password_code`, UC Velocity puts Clerk's
 signed `event.data.data.otp_code` value into fixed local HTML and plain-text
 templates. It does not generate or verify the code, and it never extracts the
 code from rendered HTML. Other Clerk email slugs retain Clerk's original subject
@@ -38,11 +38,12 @@ Clerk template.
    endpoint's signing secret into Railway.
 3. Keep Clerk's existing subjects. Change each relevant sign-in or verification
    template to external delivery so its event has `delivered_by_clerk: false`.
-   The `verification_code` body is rendered by the local UC Velocity HTML and
+   Both `verification_code` and `reset_password_code` use the same local HTML and
    text templates from Clerk's signed `event.data.data.otp_code`; other slugs
    pass through Clerk's supplied bodies.
-4. Cut over one template first, complete the end-to-end check below, and then
-   switch the remaining templates that must use the approved sender.
+4. Disable Clerk delivery for both code templates after deploying the renderer.
+   Both use the same webhook, Jinja templates, SMTP2GO sender, and receipt handling.
+   Password resets retain Clerk's original subject and code.
 
 Messages with `delivered_by_clerk: true` and unrelated signed events are
 acknowledged without sending. A selected message must explicitly contain
@@ -71,6 +72,9 @@ Those configuration and live checks must be completed during rollout.
 ## Rollout status on 2026-09-21
 
 The Jinja rendering follow-up is tracked in issue #242, a sub-issue of #240.
+
+It includes both verification codes and forgot-password codes. Password-reset
+delivery must be switched from Clerk after the shared renderer is deployed.
 
 The original relay from PR #241 is merged and deployed successfully in Railway
 deployment `8b9a53b3-c30b-4ab0-ae37-ae91ef90f3bc`. The live database is at

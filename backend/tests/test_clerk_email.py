@@ -162,14 +162,18 @@ def test_invalid_signature_is_rejected_before_delivery(
     assert response.json() == {"detail": "invalid webhook signature"}
 
 
+@pytest.mark.parametrize("slug", ["verification_code", "reset_password_code"])
 def test_signed_verification_event_renders_exact_leading_zero_code(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
+    slug: str,
 ) -> None:
     """Render local HTML and text after auth while preserving leading zeroes."""
     event = _verification_event("001204")
     email_data = event["data"]
     assert isinstance(email_data, dict)
+    # Both Clerk code types must use the same signed rendering path.
+    email_data["slug"] = slug
     expected_subject = str(email_data["subject"])
     raw_body = _encode(event)
     captured: list[ClerkEmailMessage] = []
@@ -194,6 +198,7 @@ def test_signed_verification_event_renders_exact_leading_zero_code(
     assert "verification code is 001204" in (captured[0].text_body or "")
 
 
+@pytest.mark.parametrize("slug", ["verification_code", "reset_password_code"])
 @pytest.mark.parametrize(
     "metadata",
     [
@@ -209,11 +214,14 @@ def test_invalid_verification_metadata_is_rejected_without_delivery(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     metadata: object,
+    slug: str,
 ) -> None:
     """Reject missing, blank, non-string, or oversized Clerk code metadata."""
     event = _verification_event()
     email_data = event["data"]
     assert isinstance(email_data, dict)
+    # Reset codes must fail closed just like ordinary verification codes.
+    email_data["slug"] = slug
     email_data["data"] = metadata
     raw_body = _encode(event)
     monkeypatch.setattr(

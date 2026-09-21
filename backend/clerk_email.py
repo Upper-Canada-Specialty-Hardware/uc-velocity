@@ -221,7 +221,8 @@ def parse_event(raw_body: bytes) -> ClerkEmailMessage | None:
     if "\r" in subject or "\n" in subject:
         raise WebhookPayloadError("invalid webhook payload")
 
-    if data.get("slug") == "verification_code":
+    # Sign-up, sign-in, and password-reset codes share one rendering pipeline.
+    if data.get("slug") in ("verification_code", "reset_password_code"):
         # Clerk generates the code; the local template controls only presentation.
         template_data = data.get("data")
         if not isinstance(template_data, dict):
