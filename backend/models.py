@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum, Table, DateTime, Boolean, UniqueConstraint, Text, Index, text
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum, Table, DateTime, Boolean, UniqueConstraint, Text, Index, text, func
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -622,3 +622,18 @@ class QuoteLineItemSnapshot(Base):
 
     # Relationships
     snapshot = relationship("QuoteSnapshot", back_populates="line_item_states")
+
+
+class ClerkEmailDelivery(Base):
+    """Record provider acceptance without retaining sensitive email content."""
+
+    __tablename__ = "clerk_email_deliveries"
+
+    # Clerk's opaque email id is both the receipt and uniqueness guard.
+    clerk_email_id = Column(String(255), primary_key=True)
+    # PostgreSQL supplies a timezone-aware provider-acceptance timestamp.
+    accepted_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
