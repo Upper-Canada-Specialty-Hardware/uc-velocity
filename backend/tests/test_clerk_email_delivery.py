@@ -1,8 +1,11 @@
 """Unit tests for SMTP2GO transport and transactional delivery receipts."""
 from __future__ import annotations
 
+import logging
+import io
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from collections.abc import Generator
 from typing import Any
@@ -26,6 +29,7 @@ from email_delivery import (
     clerk_email_lock_key,
     deliver_clerk_email,
     load_email_delivery_config,
+    logger as email_delivery_logger,
     send_via_smtp2go,
 )
 
@@ -158,6 +162,19 @@ def _accepted_response() -> httpx.Response:
     return httpx.Response(200, json={"data": {"succeeded": 1, "failed": 0}})
 
 
+@contextmanager
+def _capture_provider_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> Generator[None, None, None]:
+    """Attach pytest's capture handler to the non-propagating module logger."""
+    email_delivery_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger="email_delivery"):
+            yield
+    finally:
+        email_delivery_logger.removeHandler(caplog.handler)
+
+
 def test_transport_sends_exact_clerk_content_and_configured_sender() -> None:
     """Build the SMTP2GO request without rewriting either Clerk body."""
     client = _RecordingClient([_accepted_response()])
@@ -197,6 +214,167 @@ def test_transport_rejects_http_count_and_shape_failures(
 
     with pytest.raises(EmailSendError):
         send_via_smtp2go(_message(), _config(), client=client)
+
+
+def test_transport_logs_only_allowlisted_accepted_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Expose safe success correlation without message or credential content."""
+    response = httpx.Response(
+        200,
+        json={
+            "request_id": "550e8400-e29b-41d4-a716-446655440000",
+            "data": {
+                "email_id": "smtp2go-email_123",
+                "succeeded": 1,
+                "failed": 0,
+            },
+        },
+    )
+    client = _RecordingClient([response])
+
+    with _capture_provider_logs(caplog):
+        send_via_smtp2go(_message(), _config(), client=client)
+
+    log_text = caplog.text
+    assert "outcome=accepted" in log_text
+    assert "http_status=200" in log_text
+    assert "succeeded=1" in log_text
+    assert "failed=0" in log_text
+    assert "request_id=550e8400-e29b-41d4-a716-446655440000" in log_text
+    assert "email_id=smtp2go-email_123" in log_text
+    assert "person@example.com" not in log_text
+    assert "123456" not in log_text
+    assert "test-api-key" not in log_text
+
+
+def test_transport_logs_sanitized_http_rejection_without_raw_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Retain safe rejection fields while dropping provider error text and body."""
+    response = httpx.Response(
+        403,
+        json={
+            "request_id": "request-safe_123",
+            "data": {
+                "succeeded": 0,
+                "failed": 1,
+                "email_id": "unsafe\nemail-id",
+                "error_code": "E_ApiResponseCodes.ENDPOINT_PERMISSION_DENIED",
+                "failures": [
+                    {
+                        "email": "person@example.com",
+                        "error": "secret code 123456 and raw provider detail",
+                    }
+                ],
+            },
+            "error": "another raw provider error",
+        },
+    )
+    client = _RecordingClient([response])
+
+    with _capture_provider_logs(caplog):
+        with pytest.raises(EmailSendError):
+            send_via_smtp2go(_message(), _config(), client=client)
+
+    log_text = caplog.text
+    assert "outcome=http_rejected" in log_text
+    assert "http_status=403" in log_text
+    assert "succeeded=0" in log_text
+    assert "failed=1" in log_text
+    assert "request_id=request-safe_123" in log_text
+    assert "error_code=E_ApiResponseCodes.ENDPOINT_PERMISSION_DENIED" in log_text
+    assert "unsafe" not in log_text
+    assert "person@example.com" not in log_text
+    assert "123456" not in log_text
+    assert "raw provider" not in log_text
+
+
+def test_transport_logs_invalid_response_without_raw_body(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Classify malformed provider data without echoing its response body."""
+    raw_body = b"not-json person@example.com secret-code-123456"
+    client = _RecordingClient([httpx.Response(200, content=raw_body)])
+
+    with _capture_provider_logs(caplog):
+        with pytest.raises(EmailSendError):
+            send_via_smtp2go(_message(), _config(), client=client)
+
+    log_text = caplog.text
+    assert "outcome=invalid_response" in log_text
+    assert "person@example.com" not in log_text
+    assert "123456" not in log_text
+    assert "not-json" not in log_text
+
+
+def test_transport_logs_network_error_without_exception_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Classify network failure without logging the exception representation."""
+    request = httpx.Request("POST", SMTP2GO_ENDPOINT)
+    network_error = httpx.ConnectError(
+        "person@example.com secret-code-123456 test-api-key",
+        request=request,
+    )
+    client = _RecordingClient([network_error])
+
+    with _capture_provider_logs(caplog):
+        with pytest.raises(EmailSendError):
+            send_via_smtp2go(_message(), _config(), client=client)
+
+    log_text = caplog.text
+    assert "outcome=network_error" in log_text
+    assert "person@example.com" not in log_text
+    assert "123456" not in log_text
+    assert "test-api-key" not in log_text
+
+
+def test_transport_bounds_untrusted_diagnostic_counts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Replace out-of-range provider integers with safe placeholders in logs."""
+    response = httpx.Response(
+        200,
+        json={
+            "data": {
+                "succeeded": 999999,
+                "failed": -999999,
+            }
+        },
+    )
+    client = _RecordingClient([response])
+
+    with _capture_provider_logs(caplog):
+        with pytest.raises(EmailSendError):
+            send_via_smtp2go(_message(), _config(), client=client)
+
+    assert "outcome=invalid_response" in caplog.text
+    assert "succeeded=- failed=-" in caplog.text
+    assert "999999" not in caplog.text
+
+
+def test_module_handler_emits_accepted_info_without_root_handlers() -> None:
+    """Keep successful provider diagnostics visible without global logging setup."""
+    root_logger = logging.getLogger()
+    original_root_handlers = list(root_logger.handlers)
+    module_handler = email_delivery_logger.handlers[0]
+    original_stream = module_handler.stream
+    captured_stream = io.StringIO()
+    try:
+        root_logger.handlers.clear()
+        module_handler.setStream(captured_stream)
+        send_via_smtp2go(
+            _message(),
+            _config(),
+            client=_RecordingClient([_accepted_response()]),
+        )
+    finally:
+        module_handler.setStream(original_stream)
+        root_logger.handlers[:] = original_root_handlers
+
+    assert "outcome=accepted" in captured_stream.getvalue()
+    assert "succeeded=1 failed=0" in captured_stream.getvalue()
 
 
 def test_missing_provider_configuration_fails_closed(

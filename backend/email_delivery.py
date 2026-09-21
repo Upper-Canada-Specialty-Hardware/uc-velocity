@@ -7,7 +7,9 @@ message, allowing Clerk to retry failures without duplicating completed sends.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import re
 from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
@@ -34,6 +36,21 @@ EMAIL_DATABASE_CONNECT_TIMEOUT_SECONDS = 5
 # Build the dedicated pool only after an authenticated email actually needs it.
 _email_session_factory: sessionmaker[Session] | None = None
 _email_session_factory_lock = Lock()
+# Emit provider outcomes even when the process has no configured root handler.
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    # Keep SMTP2GO diagnostics visible without changing global logging behavior.
+    _provider_log_handler = logging.StreamHandler()
+    _provider_log_handler.setLevel(logging.INFO)
+    _provider_log_handler.setFormatter(
+        logging.Formatter("%(levelname)s %(name)s %(message)s")
+    )
+    logger.addHandler(_provider_log_handler)
+# Prevent duplication when Gunicorn or Uvicorn also installs root handlers.
+logger.propagate = False
+# Provider identifiers must match this allowlist before entering application logs.
+_SAFE_PROVIDER_TOKEN = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 
 
 class EmailDeliveryError(RuntimeError):
@@ -111,13 +128,101 @@ def clerk_email_lock_key(email_id: str) -> int:
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
+def _safe_provider_token(value: object) -> str | None:
+    """Allow one bounded provider identifier with no log-control characters.
+
+    Args:
+        value: Untrusted field decoded from the SMTP2GO response.
+
+    Returns:
+        The safe token, or ``None`` when its type or characters are unsafe.
+    """
+    if not isinstance(value, str) or _SAFE_PROVIDER_TOKEN.fullmatch(value) is None:
+        return None
+    return value
+
+
+def _provider_diagnostics(
+    result: object,
+) -> tuple[int | None, int | None, str | None, str | None, str | None]:
+    """Extract only allowlisted counts and identifiers from provider JSON.
+
+    Args:
+        result: Untrusted decoded SMTP2GO response JSON.
+
+    Returns:
+        Sanitized succeeded, failed, request id, email id, and error code.
+    """
+    if not isinstance(result, dict):
+        return None, None, None, None, None
+    provider_data = result.get("data")
+    data = provider_data if isinstance(provider_data, dict) else {}
+    succeeded_value = data.get("succeeded")
+    failed_value = data.get("failed")
+    # Reject bools because they are Python ints but not provider counts.
+    succeeded = (
+        succeeded_value
+        if type(succeeded_value) is int and succeeded_value in (0, 1)
+        else None
+    )
+    failed = (
+        failed_value
+        if type(failed_value) is int and failed_value in (0, 1)
+        else None
+    )
+    # SMTP2GO documents request_id at top level and email_id inside data.
+    request_id = _safe_provider_token(result.get("request_id"))
+    email_id = _safe_provider_token(data.get("email_id"))
+    error_code = _safe_provider_token(data.get("error_code"))
+    if error_code is None:
+        # Some rejection shapes may place the same safe code at top level.
+        error_code = _safe_provider_token(result.get("error_code"))
+    return succeeded, failed, request_id, email_id, error_code
+
+
+def _log_provider_outcome(
+    outcome: str,
+    *,
+    http_status: int | None,
+    succeeded: int | None = None,
+    failed: int | None = None,
+    request_id: str | None = None,
+    email_id: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Log a fixed outcome using only sanitized provider diagnostics.
+
+    Args:
+        outcome: One fixed delivery outcome category.
+        http_status: Provider HTTP status, or ``None`` for network failures.
+        succeeded: Sanitized provider success count when available.
+        failed: Sanitized provider failure count when available.
+        request_id: Sanitized SMTP2GO request identifier when available.
+        email_id: Sanitized SMTP2GO email identifier when available.
+        error_code: Sanitized SMTP2GO error code when available.
+    """
+    log_method = logger.info if outcome == "accepted" else logger.warning
+    # Fixed placeholders prevent raw response or message content from entering logs.
+    log_method(
+        "smtp2go outcome=%s http_status=%s succeeded=%s failed=%s "
+        "request_id=%s email_id=%s error_code=%s",
+        outcome,
+        http_status if http_status is not None else "-",
+        succeeded if succeeded is not None else "-",
+        failed if failed is not None else "-",
+        request_id or "-",
+        email_id or "-",
+        error_code or "-",
+    )
+
+
 def send_via_smtp2go(
     message: ClerkEmailMessage,
     config: EmailDeliveryConfig,
     *,
     client: HttpClient | None = None,
 ) -> None:
-    """Send Clerk's exact subject and bodies through the approved sender.
+    """Send the prepared subject and bodies through the approved sender.
 
     Args:
         message: Authenticated and validated Clerk email content.
@@ -136,10 +241,10 @@ def send_via_smtp2go(
         "subject": message.subject,
     }
     if message.html_body is not None:
-        # Forward Clerk's decoded HTML string without rendering or rewriting it.
+        # Forward the prepared HTML string without further rewriting it.
         payload["html_body"] = message.html_body
     if message.text_body is not None:
-        # Forward Clerk's decoded plain text without rendering or rewriting it.
+        # Forward the prepared plain text without further rewriting it.
         payload["text_body"] = message.text_body
 
     owned_client = client is None
@@ -153,28 +258,71 @@ def send_via_smtp2go(
             )
         except httpx.HTTPError as exc:
             # Never expose exceptions that could include credentials or content.
+            _log_provider_outcome("network_error", http_status=None)
             raise EmailSendError("could not reach the email service") from exc
     finally:
         if owned_client:
             # The locally created client owns its connection resources.
             assert isinstance(provider_client, httpx.Client)
             provider_client.close()
-    if not 200 <= response.status_code < 300:
-        raise EmailSendError("email service rejected the request")
     try:
         result = response.json()
-    except (TypeError, ValueError) as exc:
-        raise EmailSendError("email service returned an invalid response") from exc
+    except (TypeError, ValueError):
+        # Never log raw response text when JSON decoding fails.
+        result = None
+    succeeded, failed, request_id, email_id, error_code = _provider_diagnostics(
+        result
+    )
+    if not 200 <= response.status_code < 300:
+        # Non-2xx JSON may still contain safe request ids and provider error codes.
+        _log_provider_outcome(
+            "http_rejected",
+            http_status=response.status_code,
+            succeeded=succeeded,
+            failed=failed,
+            request_id=request_id,
+            email_id=email_id,
+            error_code=error_code,
+        )
+        raise EmailSendError("email service rejected the request")
     if not isinstance(result, dict) or not isinstance(result.get("data"), dict):
+        _log_provider_outcome(
+            "invalid_response",
+            http_status=response.status_code,
+            request_id=request_id,
+            email_id=email_id,
+            error_code=error_code,
+        )
         raise EmailSendError("email service returned an invalid response")
-    provider_data = result["data"]
-    succeeded = provider_data.get("succeeded")
-    failed = provider_data.get("failed")
-    # Reject bools because they are Python ints but not provider count values.
-    if type(succeeded) is not int or type(failed) is not int:
+    if succeeded is None or failed is None:
+        _log_provider_outcome(
+            "invalid_response",
+            http_status=response.status_code,
+            request_id=request_id,
+            email_id=email_id,
+            error_code=error_code,
+        )
         raise EmailSendError("email service returned an invalid response")
     if succeeded != 1 or failed != 0:
+        _log_provider_outcome(
+            "not_accepted",
+            http_status=response.status_code,
+            succeeded=succeeded,
+            failed=failed,
+            request_id=request_id,
+            email_id=email_id,
+            error_code=error_code,
+        )
         raise EmailSendError("the email was not accepted for delivery")
+    _log_provider_outcome(
+        "accepted",
+        http_status=response.status_code,
+        succeeded=succeeded,
+        failed=failed,
+        request_id=request_id,
+        email_id=email_id,
+        error_code=error_code,
+    )
 
 
 def _get_email_session_factory() -> sessionmaker[Session]:

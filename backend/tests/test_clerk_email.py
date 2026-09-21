@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import clerk_email as clerk_email_module
 from clerk_email import MAX_BODY_BYTES, ClerkEmailMessage
 from email_delivery import EmailSendError
 from routes import clerk_email as clerk_email_route
@@ -41,6 +42,16 @@ def _email_event(
             "delivered_by_clerk": delivered_by_clerk,
         },
     }
+
+
+def _verification_event(otp_code: object = "012345") -> dict[str, Any]:
+    """Build Clerk's confirmed verification-code metadata shape."""
+    event = _email_event()
+    email_data = event["data"]
+    assert isinstance(email_data, dict)
+    email_data["slug"] = "verification_code"
+    email_data["data"] = {"otp_code": otp_code}
+    return event
 
 
 def _encode(payload: object) -> bytes:
@@ -127,7 +138,7 @@ def test_invalid_signature_is_rejected_before_delivery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reject a mismatched HMAC without invoking delivery."""
-    raw_body = _encode(_email_event())
+    raw_body = _encode(_verification_event())
     headers = _signed_headers(raw_body)
     headers["svix-signature"] = "v1," + base64.b64encode(b"wrong").decode()
 
@@ -138,12 +149,126 @@ def test_invalid_signature_is_rejected_before_delivery(
     monkeypatch.setattr(
         clerk_email_route, "run_delivery", unexpected_delivery
     )
+    monkeypatch.setattr(
+        clerk_email_module,
+        "render_verification_code_email",
+        lambda code: pytest.fail("rendering must not run"),
+    )
     response = client.post(
         "/webhooks/clerk/email", content=raw_body, headers=headers
     )
 
     assert response.status_code == 401
     assert response.json() == {"detail": "invalid webhook signature"}
+
+
+@pytest.mark.parametrize("slug", ["verification_code", "reset_password_code"])
+def test_signed_verification_event_renders_exact_leading_zero_code(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    slug: str,
+) -> None:
+    """Render local HTML and text after auth while preserving leading zeroes."""
+    event = _verification_event("001204")
+    email_data = event["data"]
+    assert isinstance(email_data, dict)
+    # Both Clerk code types must use the same signed rendering path.
+    email_data["slug"] = slug
+    expected_subject = str(email_data["subject"])
+    raw_body = _encode(event)
+    captured: list[ClerkEmailMessage] = []
+
+    def capture_delivery(message: ClerkEmailMessage) -> bool:
+        """Capture the fully prepared message instead of sending it."""
+        captured.append(message)
+        return True
+
+    monkeypatch.setattr(clerk_email_route, "run_delivery", capture_delivery)
+    response = client.post(
+        "/webhooks/clerk/email",
+        content=raw_body,
+        headers=_signed_headers(raw_body),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "delivered"}
+    assert len(captured) == 1
+    assert captured[0].subject == expected_subject
+    assert "<strong>001204</strong>" in (captured[0].html_body or "")
+    assert "verification code is 001204" in (captured[0].text_body or "")
+
+
+@pytest.mark.parametrize("slug", ["verification_code", "reset_password_code"])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        {},
+        {"otp_code": ""},
+        {"otp_code": "   "},
+        {"otp_code": 123456},
+        {"otp_code": "1" * 129},
+    ],
+)
+def test_invalid_verification_metadata_is_rejected_without_delivery(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: object,
+    slug: str,
+) -> None:
+    """Reject missing, blank, non-string, or oversized Clerk code metadata."""
+    event = _verification_event()
+    email_data = event["data"]
+    assert isinstance(email_data, dict)
+    # Reset codes must fail closed just like ordinary verification codes.
+    email_data["slug"] = slug
+    email_data["data"] = metadata
+    raw_body = _encode(event)
+    monkeypatch.setattr(
+        clerk_email_route,
+        "run_delivery",
+        lambda message: pytest.fail("delivery must not run"),
+    )
+
+    response = client.post(
+        "/webhooks/clerk/email",
+        content=raw_body,
+        headers=_signed_headers(raw_body),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "invalid webhook payload"}
+
+
+def test_other_email_slug_keeps_clerk_bodies_unchanged(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep non-verification templates on the existing passthrough path."""
+    html_body = "<p>Clerk magic-link body {{ untouched }}</p>"
+    text_body = "Clerk magic-link body {{ untouched }}"
+    event = _email_event(html_body=html_body, text_body=text_body)
+    email_data = event["data"]
+    assert isinstance(email_data, dict)
+    email_data["slug"] = "magic_link"
+    email_data["data"] = {"otp_code": "must-not-render"}
+    raw_body = _encode(event)
+    captured: list[ClerkEmailMessage] = []
+    monkeypatch.setattr(
+        clerk_email_route,
+        "run_delivery",
+        lambda message: captured.append(message) or True,
+    )
+
+    response = client.post(
+        "/webhooks/clerk/email",
+        content=raw_body,
+        headers=_signed_headers(raw_body),
+    )
+
+    assert response.status_code == 200
+    assert captured[0].html_body == html_body
+    assert captured[0].text_body == text_body
 
 
 def test_stale_signature_is_rejected(
