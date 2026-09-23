@@ -296,15 +296,27 @@ def format_quote_number(uca_project_number: str, quote_sequence: int, current_ve
     return f"{uca_project_number}-{quote_sequence:04d}-{current_version}"
 
 
-def compute_quote_status(quote: Quote) -> str:
-    """Derive quote status from its current state.
+def compute_status_from_lines(line_items, client_po_number: Optional[str]) -> str:
+    """Derive a quote's status from its line fulfillment and client PO.
 
-    Requires quote.line_items to be loaded.
+    This is THE status rule. ``compute_quote_status`` wraps it for a loaded ORM
+    quote, and the legacy import calls it directly on in-memory lines so imported
+    quotes get exactly the status the app itself would compute.
+
+    Args:
+        line_items: The quote's line items (anything with ``qty_fulfilled`` and
+            ``qty_pending``); may be empty.
+        client_po_number: The quote's client PO number, or None.
+
+    Returns:
+        "Closed" (every line fulfilled, something fulfilled), "Invoiced" (something
+        fulfilled, something still pending), "Work Order" (nothing fulfilled, has a
+        client PO) or "Draft".
     """
-    has_line_items = len(quote.line_items) > 0
-    has_fulfillment = any(li.qty_fulfilled > 0 for li in quote.line_items)
-    all_fulfilled = has_line_items and all(li.qty_pending == 0 for li in quote.line_items)
-    has_client_po = bool(quote.client_po_number and quote.client_po_number.strip())
+    has_line_items = len(line_items) > 0                                   # no lines -> never Closed
+    has_fulfillment = any(li.qty_fulfilled > 0 for li in line_items)      # anything shipped/invoiced?
+    all_fulfilled = has_line_items and all(li.qty_pending == 0 for li in line_items)  # nothing left?
+    has_client_po = bool(client_po_number and client_po_number.strip())   # PO makes a Work Order
 
     if all_fulfilled and has_fulfillment:
         return "Closed"
@@ -313,6 +325,15 @@ def compute_quote_status(quote: Quote) -> str:
     if has_client_po:
         return "Work Order"
     return "Draft"
+
+
+def compute_quote_status(quote: Quote) -> str:
+    """Derive quote status from its current state.
+
+    Requires quote.line_items to be loaded. Delegates to
+    ``compute_status_from_lines`` so there is one rule.
+    """
+    return compute_status_from_lines(quote.line_items, quote.client_po_number)
 
 
 def populate_quote_number(quote: Quote, uca_project_number: str) -> QuoteSchema:
