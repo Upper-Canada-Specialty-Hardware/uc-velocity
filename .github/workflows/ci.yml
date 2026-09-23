@@ -152,4 +152,4 @@ jobs:
         run: alembic upgrade head
 
       - name: Verify models match migrations
-        run: alembic check || echo "WARNING - models may have unapplied changes"
+        run: alembic check

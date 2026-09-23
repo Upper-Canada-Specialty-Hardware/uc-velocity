@@ -30,6 +30,29 @@ if config.config_file_name is not None:
 # Set target metadata from your models for autogenerate support
 target_metadata = Base.metadata
 
+# Tables that live in the database on purpose but have no model. Migration 023
+# keeps a copy of the pre-bulk-markup values in ``_markup_backup_023`` so its
+# downgrade can restore them; ``alembic check`` must not report it as drift.
+_TABLES_WITHOUT_MODELS = {"_markup_backup_023"}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    """Filter which schema objects autogenerate / ``alembic check`` compare.
+
+    Args:
+        obj: The SQLAlchemy schema object being considered.
+        name: Its name.
+        type_: "table", "column", "index", etc.
+        reflected: True when the object came from the live database.
+        compare_to: The counterpart object on the other side, or None.
+
+    Returns:
+        False for tables deliberately kept without a model; True otherwise.
+    """
+    if type_ == "table" and name in _TABLES_WITHOUT_MODELS:  # backup table from 023
+        return False                                           # skip it -> not drift
+    return True                                                # everything else compares normally
+
 
 def get_url() -> str:
     """Get database URL from environment variable."""
@@ -60,6 +83,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_object=include_object,  # ignore the 023 backup table
     )
 
     with context.begin_transaction():
@@ -87,6 +111,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,
+            include_object=include_object,  # ignore the 023 backup table
         )
 
         with context.begin_transaction():
