@@ -129,45 +129,6 @@ class BacklogQuoteItem(BaseModel):
     line_items: List[BacklogLineItem] = []
 
 
-# ===== Reopen Migrated Quotes (Issue #164) =====
-class ReopenableQuote(BaseModel):
-    """One migrated quote eligible to be reopened, plus fields to guide the choice.
-
-    Surfaced by the bulk-reopen tool so staff can pick which ongoing work orders to
-    reopen. `has_client_po`/`projected_status` tell them what the quote becomes once
-    reopened (a quote with a client PO recomputes to "Work Order", otherwise "Draft").
-    """
-    id: int
-    quote_number: str          # display id, e.g. A2132-0001-1
-    uca_project_number: str    # owning project's UCA number
-    project_id: int            # for linking through to the project
-    project_name: str          # human context for the row
-    customer_name: Optional[str] = None  # owning project's customer, if set
-    created_at: datetime       # import/creation date, helps date-scope a cleanup
-    line_item_count: int       # how many lines get reset on reopen
-    has_client_po: bool        # true -> reopens to "Work Order", false -> "Draft"
-    projected_status: str      # the status it will show after reopen
-
-
-class BulkReopenRequest(BaseModel):
-    """Payload for reopening several migrated quotes in one call."""
-    quote_ids: List[int]       # quotes to attempt to reopen
-
-
-class BulkReopenResult(BaseModel):
-    """Per-quote outcome inside a bulk reopen response."""
-    quote_id: int
-    reopened: bool             # true if this quote's fulfillment was reset
-    reason: Optional[str] = None  # why it was skipped, when reopened is False
-
-
-class BulkReopenResponse(BaseModel):
-    """Aggregate result of a bulk reopen call, with a per-quote breakdown."""
-    reopened_count: int        # how many were actually reopened
-    skipped_count: int         # how many were skipped (not found / ineligible)
-    results: List[BulkReopenResult]  # one entry per requested id, in request order
-
-
 # ===== Inventory Health (UX-7) =====
 class InventoryHealthIssue(BaseModel):
     """A single quality issue against an inventory part."""

@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload, selectinload
-from sqlalchemy import func, and_
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 from typing import List, Optional
 
 from database import get_db
 from auth import current_actor
 from utils import to_naive_utc
 from models import (
-    Quote, QuoteLineItem, Project, Profile, Labor, Part, Miscellaneous,
+    Quote, QuoteLineItem, Project, Labor, Part, Miscellaneous,
     QuoteSnapshot, QuoteLineItemSnapshot, Invoice, InvoiceLineItem, CostCode,
     CompanySettings
 )
@@ -20,8 +20,7 @@ from schemas import (
     QuoteSnapshot as QuoteSnapshotSchema,
     Invoice as InvoiceSchema, InvoiceCreate,
     RevertPreview, MarkupControlToggleRequest, MarkupControlToggleResponse,
-    CommitEditsRequest, CommitEditsResponse, CreatedAtUpdate, ProjectMove,
-    ReopenableQuote, BulkReopenRequest, BulkReopenResult, BulkReopenResponse
+    CommitEditsRequest, CommitEditsResponse, CreatedAtUpdate, ProjectMove
 )
 
 DEFAULT_LIMIT = 50
@@ -363,14 +362,6 @@ def populate_invoice_number(invoice: Invoice, db: Session) -> InvoiceSchema:
     return response
 
 
-# Cap on how many quotes one bulk-reopen call may touch. Keeps the single
-# transaction (and its row locks) bounded on the live DB - the UI batches larger
-# selections. Chosen well above a normal per-project selection, well below the
-# ~4,200 total migrated rows, so a full cleanup is a handful of batches, not one
-# table-wide write.
-BULK_REOPEN_MAX = 500
-
-
 def _reopen_eligibility(quote: Quote) -> Optional[str]:
     """Check whether a quote may be reopened, returning the blocking reason.
 
@@ -379,8 +370,7 @@ def _reopen_eligibility(quote: Quote) -> Optional[str]:
 
     Returns:
         A human-readable reason string when the quote is NOT eligible, or None
-        when it is. Used by both the single and bulk reopen paths so the rules
-        stay identical.
+        when it is.
     """
     if not quote.legacy_imported:                 # only migrated rows may be un-frozen
         return "Not a migrated (legacy-imported) quote."
@@ -394,7 +384,7 @@ def _apply_reopen(db: Session, quote: Quote) -> int:
 
     Clears every line to fully-pending so the quote recomputes off "Closed"
     (to "Work Order" if it has a client PO, else "Draft"). Does NOT commit -
-    the caller owns the transaction boundary so bulk callers commit once.
+    the calling endpoint owns the transaction boundary.
 
     Args:
         db: Active database session.
@@ -448,144 +438,6 @@ def get_all_quotes(
     items = [populate_quote_number(quote, quote.project.uca_project_number) for quote in quotes]
     return Paginated[QuoteSchema](
         items=items, total=total, limit=limit, offset=effective_offset
-    )
-
-
-@router.get("/reopenable", response_model=Paginated[ReopenableQuote])
-def list_reopenable_quotes(
-    offset: int = Query(0, ge=0),
-    limit: int = Query(DEFAULT_LIMIT, ge=0, le=MAX_LIMIT),
-    search: Optional[str] = Query(None, description="Filter by UCA project number or customer name"),
-    db: Session = Depends(get_db),
-):
-    """List migrated quotes currently eligible to be reopened (Issue #164).
-
-    Powers the bulk-reopen tool's checklist. Eligibility mirrors the single-reopen
-    guards plus the "Closed" branch of compute_quote_status, expressed in SQL so we
-    don't have to load every line item just to filter: legacy-imported, no Velocity
-    invoices, has >=1 line, no line still pending, and >=1 line fulfilled. A quote
-    that was already reopened has pending lines and so drops out automatically.
-
-    Args:
-        offset: Rows to skip (pagination).
-        limit: Max rows to return; 0 returns all matches.
-        search: Optional case-insensitive filter on UCA number or customer name.
-        db: Database session.
-
-    Returns:
-        Paginated[ReopenableQuote] grouped by project, each row carrying the
-        guidance fields (client-PO -> projected status) the UI shows.
-    """
-    # SQL mirror of compute_quote_status()'s "Closed" test. KEEP IN SYNC with that
-    # function: Closed == has line(s) AND none pending AND some fulfilled.
-    closed_and_migrated = and_(
-        Quote.legacy_imported.is_(True),                       # migrated rows only
-        ~Quote.invoices.any(),                                 # no real Velocity invoices
-        Quote.line_items.any(),                                # has at least one line
-        ~Quote.line_items.any(QuoteLineItem.qty_pending > 0),  # nothing still pending
-        Quote.line_items.any(QuoteLineItem.qty_fulfilled > 0), # something fulfilled
-    )
-    base = (
-        db.query(Quote)
-        .filter(closed_and_migrated)
-        .options(
-            joinedload(Quote.project).joinedload(Project.customer),  # project + customer for each row
-            joinedload(Quote.line_items),                            # count lines from memory, no extra query
-        )
-    )
-    if search:                                                 # optional text filter via EXISTS subqueries
-        term = f"%{search.strip()}%"                           # (avoids join clashes with the eager loads)
-        base = base.filter(
-            Quote.project.has(                                 # match project's UCA number...
-                Project.uca_project_number.ilike(term)
-                | Project.customer.has(Profile.name.ilike(term))  # ...or its customer's name
-            )
-        )
-    total = base.with_entities(Quote.id).count()               # total matches, independent of pagination
-    q = base.order_by(Quote.project_id, Quote.quote_sequence).offset(offset)  # group a project's quotes together
-    if limit > 0:
-        q = q.limit(limit)
-    rows = q.all()
-    items = []
-    for quote in rows:                                         # build the slim guidance DTO per row
-        has_po = bool(quote.client_po_number and quote.client_po_number.strip())  # drives projected status
-        items.append(ReopenableQuote(
-            id=quote.id,
-            quote_number=format_quote_number(                  # display id from project + sequence + version
-                quote.project.uca_project_number, quote.quote_sequence, quote.current_version
-            ),
-            uca_project_number=quote.project.uca_project_number,
-            project_id=quote.project_id,
-            project_name=quote.project.name,
-            customer_name=quote.project.customer.name if quote.project.customer else None,
-            created_at=quote.created_at,
-            line_item_count=len(quote.line_items),             # how many lines reopen will reset
-            has_client_po=has_po,
-            projected_status="Work Order" if has_po else "Draft",  # what the quote becomes after reopen
-        ))
-    return Paginated[ReopenableQuote](items=items, total=total, limit=limit, offset=offset)
-
-
-@router.post("/reopen-bulk", response_model=BulkReopenResponse)
-def reopen_quotes_bulk(payload: BulkReopenRequest, db: Session = Depends(get_db)):
-    """Reopen many migrated quotes in one call, skipping ineligible ones (Issue #164).
-
-    Applies the same per-quote guards as the single reopen (migrated + no invoices);
-    a missing or ineligible id is reported as skipped-with-reason rather than failing
-    the whole batch. All resets share one transaction, so the call commits every
-    reset together or, on error, none. The batch is capped (BULK_REOPEN_MAX) so that
-    single transaction stays bounded on the live DB.
-
-    Args:
-        payload: BulkReopenRequest with the quote ids to attempt.
-        db: Database session.
-
-    Returns:
-        BulkReopenResponse: reopened/skipped counts plus a per-id result (reopened,
-        or skipped with a reason), in the order the ids were sent.
-
-    Raises:
-        HTTPException: 400 if no ids are given, or more than BULK_REOPEN_MAX.
-    """
-    ids = list(dict.fromkeys(payload.quote_ids))               # de-dup, keep first-seen order
-    if not ids:
-        raise HTTPException(status_code=400, detail="No quote ids provided.")
-    if len(ids) > BULK_REOPEN_MAX:                             # keep the transaction bounded
-        raise HTTPException(
-            status_code=400,
-            detail=f"Too many quotes in one request (max {BULK_REOPEN_MAX}). Reopen in smaller batches.",
-        )
-    quotes = (                                                 # one query for every requested row
-        db.query(Quote)
-        # line_items via joinedload; invoices via selectinload so two sibling collections
-        # don't cross-join into a cartesian product per quote (efficiency, not correctness).
-        .options(joinedload(Quote.line_items), selectinload(Quote.invoices))
-        .filter(Quote.id.in_(ids))
-        .all()
-    )
-    by_id = {q.id: q for q in quotes}                          # id -> quote, for order-preserving lookup
-    results: List[BulkReopenResult] = []
-    reopened = 0
-    for qid in ids:                                            # process in the caller's order
-        quote = by_id.get(qid)
-        if quote is None:                                      # id not found in DB
-            results.append(BulkReopenResult(quote_id=qid, reopened=False, reason="Quote not found."))
-            continue
-        reason = _reopen_eligibility(quote)                    # shared guard (migrated + no invoices)
-        if reason:                                             # ineligible -> record and skip
-            results.append(BulkReopenResult(quote_id=qid, reopened=False, reason=reason))
-            continue
-        reset = _apply_reopen(db, quote)                       # reset fulfillment + snapshot (no commit)
-        if reset == 0:                                         # already open -> nothing changed, not a reopen
-            results.append(BulkReopenResult(quote_id=qid, reopened=False, reason="Already open - nothing to reset."))
-            continue
-        results.append(BulkReopenResult(quote_id=qid, reopened=True))
-        reopened += 1
-    db.commit()                                                # commit all resets atomically
-    return BulkReopenResponse(
-        reopened_count=reopened,
-        skipped_count=len(ids) - reopened,
-        results=results,
     )
 
 
