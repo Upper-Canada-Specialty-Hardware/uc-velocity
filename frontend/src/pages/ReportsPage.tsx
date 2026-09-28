@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { api } from '@/api/client'
 import { formatCurrency } from '@/lib/pricing'
-import { formatDate } from '@/lib/format'
+import { formatDate, formatQuantity } from '@/lib/format'
 import type { InvoiceSummaryItem, CompanySettings, BacklogQuoteItem, InventoryHealthReport, InventoryHealthIssueCode, ProjectListView } from '@/types'
 import { FileText, Download, Loader2, ChevronRight, ChevronDown, FileSpreadsheet, ShieldAlert } from 'lucide-react'
 
@@ -534,7 +534,8 @@ function BacklogQuoteRow({
             <span className="capitalize">{li.item_type}</span> — {li.description}
           </td>
           <td className="px-3 py-1.5 text-xs text-muted-foreground">
-            Ord: {li.quantity} / Ful: {li.qty_fulfilled} / Pend: {li.qty_pending}
+            {/* Clean quantities (1.5, not 1.5000000001); the Excel export keeps raw numbers */}
+            Ord: {formatQuantity(li.quantity)} / Ful: {formatQuantity(li.qty_fulfilled)} / Pend: {formatQuantity(li.qty_pending)}
           </td>
           <td className="px-3 py-1.5 text-xs text-muted-foreground">
             {formatCurrency(li.unit_price)}

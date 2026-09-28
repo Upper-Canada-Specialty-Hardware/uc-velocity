@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { api } from "@/api/client"
 import type { InvoiceSnapshot, InvoiceRevertPreview } from "@/types"
-import { formatDateTime } from "@/lib/format"
+import { formatDateTime, formatQuantity } from "@/lib/format"
 import {
   History,
   Pencil,
@@ -253,8 +253,8 @@ export function InvoiceAuditTrail({ invoiceId, currentVersion, onRevert }: Invoi
                                 {item.item_type}: {item.description || `ID ${item.original_line_item_id}`}
                               </span>
                               <div className="flex gap-4 text-muted-foreground">
-                                <span>Qty: {item.qty_ordered}</span>
-                                <span>This invoice: {item.qty_fulfilled_this_invoice}</span>
+                                <span>Qty: {formatQuantity(item.qty_ordered)}</span>
+                                <span>This invoice: {formatQuantity(item.qty_fulfilled_this_invoice)}</span>
                                 {item.unit_price != null && (
                                   <span>${item.unit_price.toFixed(2)}</span>
                                 )}
