@@ -3,6 +3,7 @@ import { styles } from './styles'
 import { PDFHeader } from './PDFHeader'
 import { PDFFooter } from './PDFFooter'
 import { formatCurrency } from '@/lib/pricing'
+import { formatQuantity } from '@/lib/format'
 import type { Invoice, InvoiceLineItem, Quote, Project, CompanySettings } from '@/types'
 
 interface InvoicePDFProps {
@@ -61,9 +62,10 @@ function InvoiceLineItemTable({
             wrap={false}
           >
             <Text style={invCol.description}>{item.description || 'Unknown item'}</Text>
-            <Text style={invCol.qtyOrd}>{item.qty_ordered}</Text>
-            <Text style={invCol.qtyShip}>{item.qty_fulfilled_this_invoice}</Text>
-            <Text style={invCol.qtyBO}>{item.qty_pending_after}</Text>
+            {/* Quantities display-only: whole as 2, fractions as 1.5 (no float noise) */}
+            <Text style={invCol.qtyOrd}>{formatQuantity(item.qty_ordered)}</Text>
+            <Text style={invCol.qtyShip}>{formatQuantity(item.qty_fulfilled_this_invoice)}</Text>
+            <Text style={invCol.qtyBO}>{formatQuantity(item.qty_pending_after)}</Text>
             <Text style={invCol.unitPrice}>{formatCurrency(item.unit_price || 0)}</Text>
             <Text style={invCol.lineTotal}>{formatCurrency(lineTotal)}</Text>
           </View>

@@ -63,7 +63,16 @@ import {
   quantityStep,
   quantityInputError,
   parseQuantityInput,
+  allowsFractionalQuantity,
 } from "@/lib/format"
+import {
+  roundFulfillmentQuantity,
+  stepFulfillmentQuantity,
+  isFullyStaged,
+  fulfillmentInputError,
+  isClearFulfillmentInput,
+  typedFulfillmentBase,
+} from "@/lib/fulfillment"
 import type { CompanySettings, Project, SystemRate } from '@/types'
 import type { QuotePrintMode } from "@/components/pdf/QuotePDF"
 import { QuoteAuditTrail } from "./QuoteAuditTrail"
@@ -1757,10 +1766,16 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     }
     // Otherwise show staged value if exists
     const staged = stagedFulfillments.get(itemId)
-    return staged ? staged.toString() : ""
+    return staged ? formatQuantity(staged) : ""  // 1.5 -> "1.5", never float noise
   }
 
-  // Validate and apply stepper input
+  /**
+   * Validate typed "Qty to Fulfill" text and stage it when acceptable.
+   * Labour/misc may be fractional (up to 2 decimals), parts whole; never above Qty Pending.
+   *
+   * @param item - The quote line being invoiced.
+   * @param value - The stepper input's raw text.
+   */
   const validateAndApplyStepperValue = (item: QuoteLineItem, value: string) => {
     const newErrors = new Map(stepperErrors)
     const newStaged = new Map(stagedFulfillments)
@@ -1769,8 +1784,8 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     // Clear any existing error first
     newErrors.delete(item.id)
 
-    // Handle empty or zero - clear staging
-    if (value === "" || value === "0") {
+    // Empty or zero ("0", "0.00") -> clear staging
+    if (isClearFulfillmentInput(value)) {
       newStaged.delete(item.id)
       newStepperValues.delete(item.id)
       setStagedFulfillments(newStaged)
@@ -1779,37 +1794,18 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
       return
     }
 
-    const parsed = parseFloat(value)
-
-    // Check for non-numeric or non-positive values
-    if (isNaN(parsed) || parsed <= 0) {
-      newErrors.set(item.id, "Must be a positive whole number")
+    // Line-type rule + pending cap -> message, or null when stageable
+    const error = fulfillmentInputError(value, item.item_type, item.qty_pending)
+    if (error !== null) {
+      newErrors.set(item.id, error)
       newStepperValues.set(item.id, value) // Keep the invalid value for display
       setStepperValues(newStepperValues)
       setStepperErrors(newErrors)
       return
     }
 
-    // Check for decimal values (not integers)
-    if (!Number.isInteger(parsed)) {
-      newErrors.set(item.id, "Must be a positive whole number")
-      newStepperValues.set(item.id, value) // Keep the invalid value for display
-      setStepperValues(newStepperValues)
-      setStepperErrors(newErrors)
-      return
-    }
-
-    // Check if exceeds qty pending
-    if (parsed > item.qty_pending) {
-      newErrors.set(item.id, `Cannot exceed Qty Pending (${item.qty_pending})`)
-      newStepperValues.set(item.id, value) // Keep the invalid value for display
-      setStepperValues(newStepperValues)
-      setStepperErrors(newErrors)
-      return
-    }
-
-    // Valid value - apply staging
-    newStaged.set(item.id, parsed)
+    // Valid value - apply staging (clean 2-decimal number)
+    newStaged.set(item.id, roundFulfillmentQuantity(Number(value.trim())))
     newStepperValues.delete(item.id) // Clear temp value since we're using staged
     setStagedFulfillments(newStaged)
     setStepperValues(newStepperValues)
@@ -1853,19 +1849,12 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
   // Increment stepper value
   const handleStepperIncrement = (item: QuoteLineItem) => {
     // Derive working value from in-progress stepperValues first, then fall back to stagedFulfillments
-    let currentValue = 0
-    if (stepperValues.has(item.id)) {
-      const typedValue = stepperValues.get(item.id) || ""
-      const parsed = parseFloat(typedValue)
-      // Use parsed value if valid positive number, capped between 0 and qty_pending
-      if (!isNaN(parsed) && parsed >= 0) {
-        currentValue = Math.min(Math.max(parsed, 0), item.qty_pending)
-      }
-    } else {
-      currentValue = stagedFulfillments.get(item.id) || 0
-    }
+    const currentValue = stepperValues.has(item.id)
+      ? typedFulfillmentBase(stepperValues.get(item.id) || "", item.item_type, item.qty_pending)  // clamped, parts whole
+      : stagedFulfillments.get(item.id) || 0
 
-    const newValue = Math.min(currentValue + 1, item.qty_pending)
+    // +1, capped at pending and rounded (1 -> 1.5 when 1.5 pending)
+    const newValue = stepFulfillmentQuantity(currentValue, 1, item.qty_pending)
     if (newValue > 0) {
       const newStaged = new Map(stagedFulfillments)
       newStaged.set(item.id, newValue)
@@ -1884,19 +1873,12 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
   // Decrement stepper value
   const handleStepperDecrement = (item: QuoteLineItem) => {
     // Derive working value from in-progress stepperValues first, then fall back to stagedFulfillments
-    let currentValue = 0
-    if (stepperValues.has(item.id)) {
-      const typedValue = stepperValues.get(item.id) || ""
-      const parsed = parseFloat(typedValue)
-      // Use parsed value if valid positive number, capped between 0 and qty_pending
-      if (!isNaN(parsed) && parsed >= 0) {
-        currentValue = Math.min(Math.max(parsed, 0), item.qty_pending)
-      }
-    } else {
-      currentValue = stagedFulfillments.get(item.id) || 0
-    }
+    const currentValue = stepperValues.has(item.id)
+      ? typedFulfillmentBase(stepperValues.get(item.id) || "", item.item_type, item.qty_pending)  // clamped, parts whole
+      : stagedFulfillments.get(item.id) || 0
 
-    const newValue = currentValue - 1
+    // -1, floored at 0 and rounded (1.5 -> 0.5, 0.5 -> 0 = unstage)
+    const newValue = stepFulfillmentQuantity(currentValue, -1, item.qty_pending)
     const newStaged = new Map(stagedFulfillments)
     if (newValue <= 0) {
       newStaged.delete(item.id)
@@ -1918,7 +1900,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
   const handleQuickFulfill = (item: QuoteLineItem) => {
     if (item.qty_pending <= 0) return
     const newStaged = new Map(stagedFulfillments)
-    newStaged.set(item.id, Math.round(item.qty_pending))
+    newStaged.set(item.id, roundFulfillmentQuantity(item.qty_pending))  // exact pending: 1.5 stays 1.5
     setStagedFulfillments(newStaged)
     // Clear any error
     const newErrors = new Map(stepperErrors)
@@ -1956,7 +1938,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
 
       const fulfillments = Array.from(stagedFulfillments.entries()).map(([lineItemId, qty]) => ({
         line_item_id: lineItemId,
-        quantity: qty
+        quantity: roundFulfillmentQuantity(qty)  // 2 decimals max, as the backend requires
       }))
 
       const invoiceData: InvoiceCreate = {
@@ -2002,7 +1984,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     const newStepperErrors = new Map(stepperErrors)
 
     itemsToFulfill.forEach(item => {
-      newStagedFulfillments.set(item.id, Math.round(item.qty_pending))
+      newStagedFulfillments.set(item.id, roundFulfillmentQuantity(item.qty_pending))  // exact pending, 2 decimals
       // Clear stepper temp values and errors
       newStepperValues.delete(item.id)
       newStepperErrors.delete(item.id)
@@ -2040,8 +2022,8 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     if (pendingItems.length === 0) return 'disabled' // Nothing to stage
 
     const allFullyStaged = pendingItems.every(item => {
-      const staged = stagedFulfillments.get(item.id)
-      return staged === item.qty_pending
+      // Rounded compare: float pending (1.5) vs staged (1.5) must still match
+      return isFullyStaged(stagedFulfillments.get(item.id), item.qty_pending)
     })
 
     return allFullyStaged ? 'clear' : 'fulfill'
@@ -2492,8 +2474,9 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                             </Button>
                             <Input
                               type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
+                              // Decimal keypad for labour/misc (fractions allowed), numeric for parts
+                              inputMode={allowsFractionalQuantity(item.item_type) ? "decimal" : "numeric"}
+                              pattern={allowsFractionalQuantity(item.item_type) ? "[0-9]*[.]?[0-9]*" : "[0-9]*"}
                               value={getStepperDisplayValue(item.id)}
                               onChange={(e) => handleStepperInputChange(item, e.target.value)}
                               onBlur={() => handleStepperInputBlur(item)}
@@ -2513,7 +2496,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                               size="sm"
                               className="h-7 w-7 p-0"
                               onClick={() => handleStepperIncrement(item)}
-                              disabled={staged === item.qty_pending}
+                              disabled={isFullyStaged(staged, item.qty_pending)}  // nothing left to add
                               title="Increase quantity"
                             >
                               <Plus className="h-3 w-3" />
@@ -2911,7 +2894,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                   {/* Qty to Fulfill - only in invoicing mode */}
                   {editorMode === "invoicing" && (
                     <TableCell className="text-right font-semibold text-green-700 dark:text-green-300">
-                      {calculateStagedSectionTotals(items).stagedQty > 0 ? calculateStagedSectionTotals(items).stagedQty : ""}
+                      {calculateStagedSectionTotals(items).stagedQty > 0 ? formatQuantity(calculateStagedSectionTotals(items).stagedQty) : ""}
                     </TableCell>
                   )}
                   {/* Edit mode: Qty Fulfilled and Fulfilled Price come before Unit Price */}
@@ -2976,7 +2959,8 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                     <TableCell></TableCell>
                     {/* Qty to Fulfill */}
                     <TableCell className="text-right font-semibold text-green-700 dark:text-green-300">
-                      {calculateStagedSectionTotals(items).stagedQty}
+                      {/* Float sum of staged amounts -> clean display (0.5 + 1 -> 1.5) */}
+                      {formatQuantity(calculateStagedSectionTotals(items).stagedQty)}
                     </TableCell>
                     {/* Unit Cost */}
                     <TableCell></TableCell>
