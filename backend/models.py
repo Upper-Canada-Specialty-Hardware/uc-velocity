@@ -288,10 +288,10 @@ class QuoteLineItem(Base):
     misc_id = Column(Integer, ForeignKey('miscellaneous.id'), nullable=True)
     description = Column(String)  # For misc items or override
     description_override = Column(String, nullable=True)  # Per-quote display description override (issue #178)
-    quantity = Column(Integer, default=1)  # Qty Ordered (must be whole number)
+    quantity = Column(Float, default=1)  # Qty Ordered; labour/misc may hold up to 2 decimals, parts whole
     unit_price = Column(Float)  # Override price if needed
-    qty_pending = Column(Integer, default=0)  # Remaining to fulfill (must be whole number)
-    qty_fulfilled = Column(Integer, default=0)  # Total fulfilled across all invoices (must be whole number)
+    qty_pending = Column(Float, default=0)  # Remaining to fulfill; rounded to 2 decimals on every write
+    qty_fulfilled = Column(Float, default=0)  # Total fulfilled across all invoices; rounded to 2 decimals
     is_pms = Column(Boolean, default=False)  # True for PMS items (Project Management Services)
     pms_percent = Column(Float, nullable=True)  # Percentage value for PMS % items (null for PMS $ or non-PMS)
     original_markup_percent = Column(Float, nullable=True)  # Individual markup before global override
@@ -479,10 +479,10 @@ class InvoiceLineItem(Base):
     item_type = Column(String, nullable=False)
     description = Column(String)
     unit_price = Column(Float)
-    qty_ordered = Column(Integer)  # Original ordered quantity (must be whole number)
-    qty_fulfilled_this_invoice = Column(Integer)  # Amount fulfilled in THIS invoice (must be whole number)
-    qty_fulfilled_total = Column(Integer)  # Total fulfilled up to this point (must be whole number)
-    qty_pending_after = Column(Integer)  # Pending after this invoice (must be whole number)
+    qty_ordered = Column(Float)  # Original ordered quantity (up to 2 decimals for labour/misc)
+    qty_fulfilled_this_invoice = Column(Float)  # Amount fulfilled in THIS invoice (up to 2 decimals; parts whole)
+    qty_fulfilled_total = Column(Float)  # Total fulfilled up to this point (rounded to 2 decimals)
+    qty_pending_after = Column(Float)  # Pending after this invoice (rounded to 2 decimals)
 
     # Foreign keys for reference data
     labor_id = Column(Integer)
@@ -530,10 +530,11 @@ class InvoiceLineItemSnapshot(Base):
     item_type = Column(String, nullable=False)
     description = Column(String, nullable=True)
     unit_price = Column(Float, nullable=True)
-    qty_ordered = Column(Integer, nullable=True)
-    qty_fulfilled_this_invoice = Column(Integer, nullable=True)
-    qty_fulfilled_total = Column(Integer, nullable=True)
-    qty_pending_after = Column(Integer, nullable=True)
+    # Same Float type as the live invoice line columns, so fractions snapshot verbatim
+    qty_ordered = Column(Float, nullable=True)
+    qty_fulfilled_this_invoice = Column(Float, nullable=True)
+    qty_fulfilled_total = Column(Float, nullable=True)
+    qty_pending_after = Column(Float, nullable=True)
     labor_id = Column(Integer, nullable=True)
     part_id = Column(Integer, nullable=True)
     misc_id = Column(Integer, nullable=True)
@@ -609,10 +610,10 @@ class QuoteLineItemSnapshot(Base):
     misc_id = Column(Integer)
     description = Column(String)
     description_override = Column(String, nullable=True)  # Per-quote display description override (issue #178)
-    quantity = Column(Integer)  # qty_ordered (must be whole number)
+    quantity = Column(Float)  # qty_ordered; same Float type as the live line, stored verbatim
     unit_price = Column(Float)
-    qty_pending = Column(Integer)  # Must be whole number
-    qty_fulfilled = Column(Integer)  # Must be whole number
+    qty_pending = Column(Float)  # Same Float type as the live line column
+    qty_fulfilled = Column(Float)  # Same Float type as the live line column
     is_deleted = Column(Boolean, default=False)  # Track if item was deleted at this snapshot
     is_pms = Column(Boolean, default=False)  # True for PMS items (Project Management Services)
     pms_percent = Column(Float, nullable=True)  # Percentage value for PMS % items

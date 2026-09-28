@@ -32,6 +32,65 @@ MAX_LIMIT = 10000
 # and "date_edit" snapshot + bump the internal counter but leave the number alone.
 ITEM_LIST_ACTION_TYPES = {"create", "edit", "delete"}
 
+# Quantities are stored as floats rounded to this many decimals (labour/misc
+# lines may be fractional, e.g. 1.5 hours); matches schemas.validate_quantity.
+QUANTITY_DECIMALS = 2
+
+
+def round_quantity(qty: Optional[float]) -> Optional[float]:
+    """Round a computed quantity to 2 decimals so float noise never persists.
+
+    Every subtraction/addition on quantities (pending, fulfilled) goes through
+    this, so e.g. 1.5 - 0.7 - 0.8 lands on exactly 0.0 and the quote derives
+    "Closed" instead of carrying a pending remainder like 1e-16.
+
+    Args:
+        qty: The computed quantity, or None.
+
+    Returns:
+        The quantity rounded to 2 decimals, or None when ``qty`` is None.
+    """
+    if qty is None:
+        return None  # nullable columns stay null
+    # "+ 0.0" turns a negative zero (e.g. from 0.3 - 0.1 - 0.2) into plain 0.0
+    return round(qty, QUANTITY_DECIMALS) + 0.0
+
+
+def format_quantity(qty: Optional[float]) -> str:
+    """Render a quantity for audit/history text: ``2`` not ``2.0``, ``1.5`` as-is.
+
+    Args:
+        qty: The quantity (int or float), or None.
+
+    Returns:
+        A short human-readable string for action descriptions.
+    """
+    if qty is None:
+        return "0"  # treat a missing quantity as nothing
+    value = round_quantity(float(qty))  # normalise ints and strip float noise
+    if value.is_integer():
+        return str(int(value))  # whole quantities read like they always did
+    # Fixed 2 decimals, trailing zeros stripped: 1.5 / 0.25 / 12345.25 kept in full
+    # (":g" would cut to 6 significant digits and misstate large quantities)
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def require_whole_part_quantity(item_type: Optional[str], qty: Optional[float]) -> None:
+    """Reject a fractional quantity on a part line; labour and misc may be fractional.
+
+    Args:
+        item_type: The line's item type ("part", "labor", "misc").
+        qty: The requested quantity (ordered or invoiced), or None if unchanged.
+
+    Raises:
+        HTTPException: 400 when a part line is given a non-whole quantity.
+    """
+    if item_type != "part" or qty is None:
+        return  # only part lines are restricted; None means "not changing"
+    if not float(qty).is_integer():
+        # Parts are physical stock units, so they cannot be split
+        raise HTTPException(status_code=400, detail="Parts must be ordered in whole numbers")
+
 
 def create_snapshot(
     db: Session,
@@ -1196,6 +1255,9 @@ def add_quote_line(quote_id: int, line_data: QuoteLineItemCreate, db: Session = 
         elif not line_data.description:
             raise HTTPException(status_code=400, detail="misc_id or description required for misc line items")
 
+    # Parts must stay whole; labour/misc may carry up to 2 decimals
+    require_whole_part_quantity(line_data.item_type, line_data.quantity)
+
     db_line = QuoteLineItem(
         quote_id=quote_id,
         item_type=line_data.item_type,
@@ -1238,7 +1300,7 @@ def add_quote_line(quote_id: int, line_data: QuoteLineItemCreate, db: Session = 
         db=db,
         quote=quote,
         action_type="create",
-        action_description=f"Added {item_desc} (qty: {line_data.quantity})"
+        action_description=f"Added {item_desc} (qty: {format_quantity(line_data.quantity)})"  # "2" not "2.0"
     )
 
     db.commit()
@@ -1287,17 +1349,20 @@ def update_quote_line(
     old_quantity = db_line.quantity
 
     if line_data.quantity is not None:
+        # Parts must stay whole; the existing line's type decides
+        require_whole_part_quantity(db_line.item_type, line_data.quantity)
         # Validate: cannot reduce quantity below what's already fulfilled
         if line_data.quantity < db_line.qty_fulfilled:
             raise HTTPException(
                 status_code=400,
-                detail=f"Cannot reduce quantity below fulfilled amount ({db_line.qty_fulfilled})"
+                detail=f"Cannot reduce quantity below fulfilled amount ({format_quantity(db_line.qty_fulfilled)})"
             )
         if line_data.quantity != old_quantity:
-            changes.append(f"quantity: {old_quantity} → {line_data.quantity}")
-        # Update quantity and recalculate qty_pending
+            # Audit text: whole values render as "2", fractions as "1.5"
+            changes.append(f"quantity: {format_quantity(old_quantity)} → {format_quantity(line_data.quantity)}")
+        # Update quantity and recalculate qty_pending (rounded: no float remainder)
         db_line.quantity = line_data.quantity
-        db_line.qty_pending = line_data.quantity - db_line.qty_fulfilled
+        db_line.qty_pending = round_quantity(line_data.quantity - db_line.qty_fulfilled)
     if line_data.unit_price is not None:
         if db_line.unit_price != line_data.unit_price:
             changes.append(f"unit_price: ${db_line.unit_price or 0:.2f} → ${line_data.unit_price:.2f}")
@@ -1491,6 +1556,8 @@ def commit_edits(
 
             # Create the new line item
             quantity = change.quantity or 1
+            # Parts must stay whole; the staged add carries its own item_type
+            require_whole_part_quantity(change.item_type, quantity)
             new_item = QuoteLineItem(
                 quote_id=quote_id,
                 item_type=change.item_type,
@@ -1528,7 +1595,7 @@ def commit_edits(
                 new_item.markup_percent = 0
 
             item_desc = get_line_item_description(new_item, db)
-            change_descriptions.append(f"Added {item_desc} (qty: {quantity})")
+            change_descriptions.append(f"Added {item_desc} (qty: {format_quantity(quantity)})")  # "2" not "2.0"
             adds_count += 1
 
         elif change.action == "edit":
@@ -1554,14 +1621,18 @@ def commit_edits(
 
             # Update quantity if provided
             if change.quantity is not None and change.quantity != line_item.quantity:
+                # Parts must stay whole; type comes from the stored line, not the request
+                require_whole_part_quantity(line_item.item_type, change.quantity)
                 if change.quantity < line_item.qty_fulfilled:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Cannot reduce quantity below fulfilled amount ({line_item.qty_fulfilled}) for {item_desc}"
+                        detail=f"Cannot reduce quantity below fulfilled amount ({format_quantity(line_item.qty_fulfilled)}) for {item_desc}"
                     )
-                item_changes.append(f"qty: {line_item.quantity} → {change.quantity}")
+                # Audit text: whole values render as "2", fractions as "1.5"
+                item_changes.append(f"qty: {format_quantity(line_item.quantity)} → {format_quantity(change.quantity)}")
                 line_item.quantity = change.quantity
-                line_item.qty_pending = change.quantity - line_item.qty_fulfilled
+                # Rounded so pending never carries a float remainder
+                line_item.qty_pending = round_quantity(change.quantity - line_item.qty_fulfilled)
 
             # Update unit_price if provided
             if change.unit_price is not None and change.unit_price != line_item.unit_price:
@@ -1748,12 +1819,16 @@ def create_invoice(
                 status_code=400,
                 detail="Must be a positive number"
             )
-        if fulfillment.quantity > line_item.qty_pending:
+        # A part may only be invoiced in whole units; labour/misc may be fractional
+        require_whole_part_quantity(line_item.item_type, fulfillment.quantity)
+        # Compare rounded values so float noise cannot block fulfilling the exact remainder
+        fulfill_qty = round_quantity(fulfillment.quantity)
+        if fulfill_qty > round_quantity(line_item.qty_pending or 0):
             raise HTTPException(
                 status_code=400,
-                detail=f"Cannot fulfill {fulfillment.quantity} units of line item {fulfillment.line_item_id}. Only {line_item.qty_pending} pending."
+                detail=f"Cannot fulfill {format_quantity(fulfill_qty)} units of line item {fulfillment.line_item_id}. Only {format_quantity(line_item.qty_pending)} pending."
             )
-        line_items_to_fulfill.append((line_item, fulfillment.quantity))
+        line_items_to_fulfill.append((line_item, fulfill_qty))
 
     # Per-quote invoice sequence (1, 2, 3...) for the structured invoice number
     next_invoice_seq = (
@@ -1777,7 +1852,7 @@ def create_invoice(
     for line_item, fulfill_qty in line_items_to_fulfill:
         # Get description for audit trail
         item_desc = get_line_item_description(line_item, db)
-        fulfilled_descriptions.append(f"{item_desc} ({fulfill_qty})")
+        fulfilled_descriptions.append(f"{item_desc} ({format_quantity(fulfill_qty)})")  # "2" not "2.0"
 
         # Create invoice line item (snapshot)
         invoice_line = InvoiceLineItem(
@@ -1790,17 +1865,18 @@ def create_invoice(
             unit_price=line_item.unit_price,
             qty_ordered=line_item.quantity,
             qty_fulfilled_this_invoice=fulfill_qty,
-            qty_fulfilled_total=line_item.qty_fulfilled + fulfill_qty,
-            qty_pending_after=line_item.qty_pending - fulfill_qty,
+            # Running totals rounded to 2 decimals: 1.5 - 0.7 - 0.8 must land on exactly 0
+            qty_fulfilled_total=round_quantity(line_item.qty_fulfilled + fulfill_qty),
+            qty_pending_after=round_quantity(line_item.qty_pending - fulfill_qty),
             labor_id=line_item.labor_id,
             part_id=line_item.part_id,
             misc_id=line_item.misc_id
         )
         db.add(invoice_line)
 
-        # Update quote line item quantities
-        line_item.qty_fulfilled += fulfill_qty
-        line_item.qty_pending -= fulfill_qty
+        # Update quote line item quantities (rounded, so "Closed" derives from pending == 0)
+        line_item.qty_fulfilled = round_quantity(line_item.qty_fulfilled + fulfill_qty)
+        line_item.qty_pending = round_quantity(line_item.qty_pending - fulfill_qty)
 
     # Create snapshot for this invoice action (bumps quote.current_version)
     create_snapshot(
