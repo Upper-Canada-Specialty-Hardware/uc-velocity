@@ -57,7 +57,13 @@ import type {
 } from "@/types"
 import { Plus, Minus, Trash2, Wrench, Package, FileText, Pencil, ClipboardCheck, Receipt, Percent, Info, Copy, FolderInput, Car, MapPin, X, Lock, Unlock, GitCommit, AlertTriangle, Check, CheckCircle2, Printer, Loader2, Hash, ChevronUp, ChevronDown, ArrowLeft } from "lucide-react"
 import { StatusBadge } from "@/components/ui/status-badge"
-import { formatDateTime } from "@/lib/format"
+import {
+  formatDateTime,
+  formatQuantity,
+  quantityStep,
+  quantityInputError,
+  parseQuantityInput,
+} from "@/lib/format"
 import type { CompanySettings, Project, SystemRate } from '@/types'
 import type { QuotePrintMode } from "@/components/pdf/QuotePDF"
 import { QuoteAuditTrail } from "./QuoteAuditTrail"
@@ -92,6 +98,52 @@ export interface QuoteEditorHandle {
   canCommit: boolean
   /** Commits staged edits; resolves true on success, false if nothing committed or it failed. */
   commit: () => Promise<boolean>
+}
+
+interface QuoteQuantityInputProps {
+  /** The line's current (last valid) quantity. */
+  value: number
+  /** Line type: parts take whole numbers, labour/misc up to 2 decimals. */
+  itemType: LineItemType
+  /** Called with each valid quantity as the user types. */
+  onValidChange: (quantity: number) => void
+  disabled?: boolean
+}
+
+/**
+ * Inline Qty Ordered input for a quote line in edit mode.
+ *
+ * Keeps the typed text in a local draft so half-typed values ("1.", "0.0") are
+ * not reset mid-keystroke; only acceptable values reach `onValidChange`, and on
+ * blur the box snaps back to the last valid quantity.
+ *
+ * @param props - See {@link QuoteQuantityInputProps}.
+ * @returns The quantity `<Input>`.
+ */
+export function QuoteQuantityInput({ value, itemType, onValidChange, disabled }: QuoteQuantityInputProps) {
+  // null = not typing -> show the committed value; string = what the user has typed
+  const [draft, setDraft] = useState<string | null>(null)
+  // Error only while a draft exists, so the committed value never shows red
+  const error = draft === null ? null : quantityInputError(draft, itemType)
+  const step = quantityStep(itemType)  // "1" for parts, "0.01" for labour/misc
+  return (
+    <Input
+      type="number"
+      step={step}
+      min={step}  // smallest acceptable value equals the step
+      className={`w-20 h-7 text-right text-sm inline-block ${error ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+      value={draft ?? formatQuantity(value)}  // clean display: 2 not 2.0
+      onChange={(e) => {
+        setDraft(e.target.value)  // keep the raw text so typing isn't clobbered
+        const parsed = parseQuantityInput(e.target.value, itemType)  // null when not acceptable
+        if (parsed !== null) onValidChange(parsed)  // stage only valid quantities
+      }}
+      onBlur={() => setDraft(null)}  // drop an invalid draft -> last valid value shows
+      title={error ?? undefined}  // hover explains a red box
+      aria-invalid={error ? true : undefined}
+      disabled={disabled}
+    />
+  )
 }
 
 export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(function QuoteEditor(
@@ -424,8 +476,13 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     setAddDialogMode("select")
   }
 
+  // Add-dialog quantity problem for the selected line type (null = acceptable)
+  const addQuantityError = quantityInputError(quantity, addDialogType)
+
   const handleAddLineItem = async () => {
-    const qty = parseFloat(quantity) || 1
+    // Parts whole, labour/misc up to 2 decimals; null -> refuse to stage (message shown inline)
+    const qty = parseQuantityInput(quantity, addDialogType)
+    if (qty === null) return
 
     if (addDialogType === "part") {
       if (!selectedPartId) return
@@ -546,7 +603,8 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
 
   const handleConfirmAutoAddLabor = async () => {
     if (!pendingPart) return
-    const partQuantity = parseFloat(quantity) || 1
+    // Already validated as a whole part quantity before this dialog opened; 1 is a safe fallback
+    const partQuantity = parseQuantityInput(quantity, "part") ?? 1
 
     // In edit mode, stage the adds
     if (editorMode === "edit") {
@@ -619,7 +677,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
       const partLineItem: QuoteLineItemCreate = {
         item_type: "part",
         part_id: pendingPart.id,
-        quantity: parseFloat(quantity) || 1,
+        quantity: parseQuantityInput(quantity, "part") ?? 1,  // whole part quantity (validated on Add)
         unit_price: pendingPart.cost * (1 + (pendingPart.markup_percent ?? 0) / 100),
       }
       await api.quotes.addLine(quoteId, partLineItem)
@@ -1661,7 +1719,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     const stagedPercent = (stagedTotals.stagedQty / totals.qtyOrdered) * 100
 
     return (
-      <div className="h-2 w-32 bg-muted rounded-full overflow-hidden flex" title={`Fulfilled: ${totals.qtyFulfilled}, Staged: ${stagedTotals.stagedQty}, Remaining: ${totals.qtyPending - stagedTotals.stagedQty}`}>
+      <div className="h-2 w-32 bg-muted rounded-full overflow-hidden flex" title={`Fulfilled: ${formatQuantity(totals.qtyFulfilled)}, Staged: ${formatQuantity(stagedTotals.stagedQty)}, Remaining: ${formatQuantity(totals.qtyPending - stagedTotals.stagedQty)}`}>
         {/* Fulfilled portion - solid green */}
         <div
           className="h-full bg-green-600 dark:bg-green-500"
@@ -2385,22 +2443,17 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                     {/* Qty Ordered Column — inline-editable in edit mode (non-PMS) */}
                     <TableCell className="text-right">
                       {editorMode === "edit" && !item.is_pms ? (
-                        <Input
-                          type="number"
-                          step="1"
-                          min="1"
-                          className="w-20 h-7 text-right text-sm inline-block"
+                        // Parts whole, labour/misc up to 2 decimals (validated inside)
+                        <QuoteQuantityInput
                           value={editedItem?.quantity ?? item.quantity}
-                          onChange={(e) => {
-                            const val = e.target.value === "" ? 1 : parseInt(e.target.value, 10)
-                            if (!isNaN(val) && val >= 1) stageEdit(item, { quantity: val })
-                          }}
+                          itemType={item.item_type}
+                          onValidChange={(qty) => stageEdit(item, { quantity: qty })}
                           disabled={isDeleted || hasBeenInvoiced}
                         />
                       ) : editedItem?.quantity !== undefined && editedItem.quantity !== item.quantity ? (
-                        <span className="font-bold text-blue-600 dark:text-blue-400">{editedItem.quantity}</span>
+                        <span className="font-bold text-blue-600 dark:text-blue-400">{formatQuantity(editedItem.quantity)}</span>
                       ) : (
-                        item.quantity
+                        formatQuantity(item.quantity)
                       )}
                     </TableCell>
 
@@ -2412,7 +2465,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                     )}
                     {/* Qty Pending Column - now read-only display */}
                     <TableCell className="text-right">
-                      {item.qty_pending}
+                      {formatQuantity(item.qty_pending)}
                     </TableCell>
 
                     {/* Qty to Fulfill Column - only in invoicing mode */}
@@ -2476,7 +2529,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                         {/* Qty Fulfilled Column */}
                         <TableCell className="text-right">
                           <span className={item.qty_fulfilled > 0 ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}>
-                            {item.qty_fulfilled}
+                            {formatQuantity(item.qty_fulfilled)}
                           </span>
                         </TableCell>
 
@@ -2566,7 +2619,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                         {/* Qty Fulfilled Column */}
                         <TableCell className="text-right">
                           <span className={item.qty_fulfilled > 0 ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}>
-                            {item.qty_fulfilled}
+                            {formatQuantity(item.qty_fulfilled)}
                           </span>
                         </TableCell>
 
@@ -2734,19 +2787,14 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                     {/* Qty Ordered — PMS is always qty 1, mirror the locked existing-item behaviour */}
                     <TableCell className="text-right">
                       {editorMode === "edit" && !add.is_pms ? (
-                        <Input
-                          type="number"
-                          step="1"
-                          min="1"
-                          className="w-20 h-7 text-right text-sm inline-block"
+                        // Parts whole, labour/misc up to 2 decimals (validated inside)
+                        <QuoteQuantityInput
                           value={add.quantity}
-                          onChange={(e) => {
-                            const val = e.target.value === "" ? 1 : parseInt(e.target.value, 10)
-                            if (!isNaN(val) && val >= 1) updateStagedAdd(add.tempId, { quantity: val })
-                          }}
+                          itemType={add.item_type}
+                          onValidChange={(qty) => updateStagedAdd(add.tempId, { quantity: qty })}
                         />
                       ) : (
-                        <span className="text-green-700 dark:text-green-300 font-medium">{add.quantity}</span>
+                        <span className="text-green-700 dark:text-green-300 font-medium">{formatQuantity(add.quantity)}</span>
                       )}
                     </TableCell>
                     {/* Hours — labour only (issue #181) */}
@@ -2851,7 +2899,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                   {/* Description */}
                   <TableCell className="font-semibold">Section Total</TableCell>
                   {/* Qty Ordered */}
-                  <TableCell className="text-right font-semibold">{calculateSectionTotals(items, useEffectivePricing).qtyOrdered}</TableCell>
+                  <TableCell className="text-right font-semibold">{formatQuantity(calculateSectionTotals(items, useEffectivePricing).qtyOrdered)}</TableCell>
                   {/* Hours total — labour only (issue #181) */}
                   {type === "labor" && (
                     <TableCell className="text-right font-semibold">
@@ -2859,7 +2907,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                     </TableCell>
                   )}
                   {/* Qty Pending */}
-                  <TableCell className="text-right font-semibold">{calculateSectionTotals(items, useEffectivePricing).qtyPending}</TableCell>
+                  <TableCell className="text-right font-semibold">{formatQuantity(calculateSectionTotals(items, useEffectivePricing).qtyPending)}</TableCell>
                   {/* Qty to Fulfill - only in invoicing mode */}
                   {editorMode === "invoicing" && (
                     <TableCell className="text-right font-semibold text-green-700 dark:text-green-300">
@@ -2870,7 +2918,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                   {editorMode === "edit" && (
                     <>
                       {/* Qty Fulfilled */}
-                      <TableCell className="text-right font-semibold">{calculateSectionTotals(items, useEffectivePricing).qtyFulfilled}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatQuantity(calculateSectionTotals(items, useEffectivePricing).qtyFulfilled)}</TableCell>
                       {/* Fulfilled Price */}
                       <TableCell className="text-right font-semibold">
                         {calculateSectionTotals(items, useEffectivePricing).qtyFulfilled > 0 ? (
@@ -2895,7 +2943,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                   {editorMode !== "edit" && (
                     <>
                       {/* Qty Fulfilled */}
-                      <TableCell className="text-right font-semibold">{calculateSectionTotals(items, useEffectivePricing).qtyFulfilled}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatQuantity(calculateSectionTotals(items, useEffectivePricing).qtyFulfilled)}</TableCell>
                       {/* Fulfilled Price */}
                       <TableCell className="text-right font-semibold">
                         {calculateSectionTotals(items, useEffectivePricing).qtyFulfilled > 0 ? (
@@ -3898,17 +3946,24 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                 <Label>Quantity</Label>
                 <Input
                   type="number"
-                  step="1"
-                  min="1"
+                  step={quantityStep(addDialogType)}  // "1" for parts, "0.01" for labour/misc
+                  min={quantityStep(addDialogType)}  // smallest acceptable value equals the step
                   value={quantity}
                   onChange={(e) => setQuantity(e.target.value)}
+                  aria-invalid={addQuantityError ? true : undefined}
+                  className={addQuantityError ? "border-red-500 focus-visible:ring-red-500" : undefined}
                 />
+                {/* Inline reason the quantity can't be added (e.g. a fractional part) */}
+                {addQuantityError && (
+                  <p className="text-sm text-destructive">{addQuantityError}</p>
+                )}
               </div>
 
               <Button
                 onClick={handleAddLineItem}
                 className="w-full"
                 disabled={
+                  addQuantityError !== null ||  // bad quantity -> nothing to stage
                   (addDialogType === "labor" && (!selectedLaborId || laborItems.length === 0)) ||
                   (addDialogType === "part" && (!selectedPartId || parts.length === 0)) ||
                   (addDialogType === "misc" && (!selectedMiscId || miscItems.length === 0))
@@ -4581,7 +4636,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                         {item.item_type === "labor" && (item.labor?.description || item.description || "Labour")}
                         {item.item_type === "misc" && (item.miscellaneous?.description || item.description || "Miscellaneous")}
                       </span>
-                      <span className="text-muted-foreground ml-2">× {item.quantity}</span>
+                      <span className="text-muted-foreground ml-2">× {formatQuantity(item.quantity)}</span>
                     </div>
                   ))}
                 </div>
@@ -4603,7 +4658,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                       </span>
                       <div className="text-sm text-muted-foreground mt-1">
                         {edit.quantity !== undefined && (
-                          <div>Qty: {edit.originalItem.quantity} → {edit.quantity}</div>
+                          <div>Qty: {formatQuantity(edit.originalItem.quantity)} → {formatQuantity(edit.quantity)}</div>
                         )}
                         {edit.unit_price !== undefined && (
                           <div>Price: ${edit.originalItem.unit_price?.toFixed(2)} → ${edit.unit_price.toFixed(2)}</div>
@@ -4630,7 +4685,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                            item.description ||
                            "Item"}
                         </span>
-                        <span className="text-muted-foreground ml-2">× {item.quantity}</span>
+                        <span className="text-muted-foreground ml-2">× {formatQuantity(item.quantity)}</span>
                       </div>
                     ) : null
                   })}
