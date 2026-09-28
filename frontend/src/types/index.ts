@@ -388,7 +388,7 @@ export interface QuoteLineItem {
   misc_id?: number;
   description?: string;
   description_override?: string;  // Per-quote display description override (issue #178)
-  quantity: number;  // Qty Ordered
+  quantity: number;  // Qty Ordered: parts whole, labour/misc up to 2 decimals (e.g. 1.5)
   unit_price?: number;
   qty_pending: number;  // Remaining to fulfill
   qty_fulfilled: number;  // Total fulfilled across all invoices
