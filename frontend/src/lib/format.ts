@@ -4,6 +4,8 @@
  * (visual consistency).
  */
 
+import type { LineItemType } from "@/types"
+
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
@@ -129,6 +131,101 @@ export function dateTimeLocalToIso(localValue: string | null | undefined): strin
 /** Render a number as CAD currency with thousand separators (e.g. `$1,234.56`). */
 export function formatCurrency(amount: number): string {
   return currencyFormatter.format(amount)
+}
+
+// ===== Quote quantities =====
+// Labour and misc lines may be ordered in fractions (e.g. 1.5 hours) with at most
+// 2 decimals; parts stay whole. The backend enforces the same rules (a fractional
+// part is refused with 400, a 3rd decimal with 422), so these helpers let the
+// editor refuse bad input up front instead of letting Commit fail.
+
+// Most decimal places a quote quantity may carry (matches the backend).
+const QUANTITY_DECIMALS = 2
+// Float slack: 0.1 + 0.2 is 0.30000000000000004, still "0.3" (same tolerance as backend)
+const QUANTITY_EPSILON = 1e-9
+// Plain unsigned decimal as typed: digits, optional point, optional digits
+const QUANTITY_INPUT_RE = /^\d*\.?\d*$/
+
+/**
+ * Render a quantity cleanly: whole values without decimals, fractions with up to
+ * 2 decimals and no trailing zeros (2 -> "2", 1.5 -> "1.5", 0.25 -> "0.25").
+ *
+ * @param qty - The quantity to display; null/undefined/NaN count as 0.
+ * @returns The display string, never float noise such as `0.30000000000000004`.
+ */
+export function formatQuantity(qty: number | null | undefined): string {
+  if (qty == null || !Number.isFinite(qty)) return "0"  // missing -> "0", like an empty count
+  // toFixed(2) rounds off float noise; Number() then drops trailing zeros (and -0)
+  return String(Number(qty.toFixed(QUANTITY_DECIMALS)) || 0)
+}
+
+/**
+ * Whether a line of this type may be ordered in fractions.
+ *
+ * @param itemType - The quote line type.
+ * @returns True for labour and misc lines, false for parts.
+ */
+export function allowsFractionalQuantity(itemType: LineItemType): boolean {
+  return itemType !== "part"  // parts are physical units -> whole numbers only
+}
+
+/**
+ * The `step` (and `min`) for a quantity `<input type="number">` of this line type.
+ *
+ * @param itemType - The quote line type.
+ * @returns `"0.01"` for labour/misc, `"1"` for parts.
+ */
+export function quantityStep(itemType: LineItemType): string {
+  return allowsFractionalQuantity(itemType) ? "0.01" : "1"
+}
+
+/**
+ * Whether a numeric quantity is acceptable for a line of this type.
+ * Parts: a whole number of at least 1. Labour/misc: above 0, at most 2 decimals.
+ *
+ * @param value - The quantity to check.
+ * @param itemType - The quote line type.
+ * @returns True when the backend would accept this quantity for this line type.
+ */
+export function isValidQuantity(value: number, itemType: LineItemType): boolean {
+  if (!Number.isFinite(value)) return false  // NaN/Infinity never valid
+  const rounded = Number(value.toFixed(QUANTITY_DECIMALS))  // snap to 2 decimals
+  if (Math.abs(rounded - value) >= QUANTITY_EPSILON) return false  // a real 3rd decimal
+  if (rounded <= 0) return false  // ordered amounts must be positive
+  if (!allowsFractionalQuantity(itemType)) return Number.isInteger(rounded)  // parts whole (>= 1 follows)
+  return true
+}
+
+/**
+ * Explain why a typed quantity is not acceptable, for inline form messages.
+ *
+ * @param raw - The input's raw text (e.g. `"1.5"`, `"0.0"`, `""`).
+ * @param itemType - The quote line type.
+ * @returns A short user-facing message, or null when the value is acceptable.
+ */
+export function quantityInputError(raw: string, itemType: LineItemType): string | null {
+  const text = raw.trim()  // tolerate stray spaces
+  if (text === "" || text === ".") return "Enter a quantity"  // nothing numeric yet
+  if (!QUANTITY_INPUT_RE.test(text)) return "Enter a valid number"  // signs, letters, exponents
+  const value = Number(text)  // "1." -> 1, ".5" -> 0.5
+  if (!(value > 0)) return "Quantity must be greater than 0"
+  if (!allowsFractionalQuantity(itemType) && !Number.isInteger(value)) {
+    return "Parts must be ordered in whole numbers"  // same wording as the backend 400
+  }
+  if (!isValidQuantity(value, itemType)) return "Quantity can have at most 2 decimal places"
+  return null
+}
+
+/**
+ * Parse a typed quantity for a line of this type.
+ *
+ * @param raw - The input's raw text.
+ * @param itemType - The quote line type.
+ * @returns The quantity rounded to 2 decimals, or null when the text is not acceptable.
+ */
+export function parseQuantityInput(raw: string, itemType: LineItemType): number | null {
+  if (quantityInputError(raw, itemType) !== null) return null  // reject, caller keeps last good value
+  return Number(Number(raw.trim()).toFixed(QUANTITY_DECIMALS))  // clean 2-decimal number
 }
 
 /** The single empty-value glyph used everywhere a read-only value is missing. */
