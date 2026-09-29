@@ -4,6 +4,7 @@ import { PDFHeader } from './PDFHeader'
 import { PDFFooter } from './PDFFooter'
 import { formatCurrency } from '@/lib/pricing'
 import { computeLaborHoursReport } from '@/lib/laborHours'
+import { formatQuantity } from '@/lib/format'  // up to 2 decimals, trailing zeros dropped
 import type { Quote, Project, CompanySettings } from '@/types'
 
 interface LaborHoursPDFProps {
@@ -29,8 +30,15 @@ const lh = StyleSheet.create({
   },
 })
 
+/**
+ * Render an hours figure with up to 2 decimals and the " hr." suffix.
+ * Two decimals so a 0.25-qty line of a 1 hr item reads "0.25 hr.", not "0.3 hr.".
+ *
+ * @param hours - Hours to display.
+ * @returns e.g. "1.5 hr.", "0.25 hr.", "2 hr.".
+ */
 function formatHours(hours: number): string {
-  return `${hours.toFixed(1)} hr.`
+  return `${formatQuantity(hours)} hr.`  // same 2-decimal trim as quantities
 }
 
 export function LaborHoursPDF({ quote, project, companySettings }: LaborHoursPDFProps) {
@@ -107,8 +115,8 @@ export function LaborHoursPDF({ quote, project, companySettings }: LaborHoursPDF
               {row.description}
               {row.unresolved ? ' *' : ''}
             </Text>
-            <Text style={lh.colQty}>{row.quantity}</Text>
-            <Text style={lh.colHrsPerUnit}>{row.unresolved ? '—' : row.hours_per_unit.toFixed(1)}</Text>
+            <Text style={lh.colQty}>{formatQuantity(row.quantity)}</Text>
+            <Text style={lh.colHrsPerUnit}>{row.unresolved ? '—' : formatQuantity(row.hours_per_unit)}</Text>
             <Text style={lh.colTime}>{row.unresolved ? '—' : formatHours(row.time)}</Text>
             <Text style={lh.colCost}>{row.unresolved ? '—' : formatCurrency(row.cost)}</Text>
           </View>
