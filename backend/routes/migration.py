@@ -4,11 +4,24 @@ Legacy data migration endpoint.
 Imports CSV exports from UC Vision (Access database) into UC Velocity.
 Processing order respects FK dependencies. The entire import runs in a
 single transaction — if anything fails, everything rolls back.
+
+Close-state (issue #164): a quote's status is never hardcoded. Each work-order
+line reads Vision's shipped / back-ordered quantities to derive what is fulfilled
+and what is still pending; a work order Vision force-closed is treated as fully
+done; and the quote's status is then set by the app's own rule
+(``compute_status_from_lines``) from those quantities. So a job closed in Vision
+arrives Closed, and a job still open in Vision arrives open with its remaining
+quantities ready to invoice. Purchase orders derive their status from line
+receipts the same way (``compute_po_status``).
+
+Every imported row also carries its Vision origin (``legacy_source`` = the
+source table, ``legacy_id`` = the source row's primary key) and migrated quotes
+and POs are flagged ``legacy_imported``.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import csv
 import io
@@ -20,6 +33,8 @@ from models import (
     Part, Labor, Miscellaneous, Project, Quote, QuoteLineItem,
     PurchaseOrder, POLineItem, POStatus,
 )
+from routes.quotes import compute_status_from_lines      # the app's quote status rule
+from routes.purchase_orders import compute_po_status     # the app's PO status rule
 
 router = APIRouter(prefix="/migration", tags=["migration"])
 
@@ -119,6 +134,133 @@ def wo_prefixed_description(legacy_wo_id: int, raw_desc: str | None) -> str:
     return f"{prefix} {desc}" if desc else prefix
 
 
+# --------------------------------------------------------------------------- #
+# Close-state helpers (issue #164)
+# --------------------------------------------------------------------------- #
+# UC Vision records whether a work order is finished in fields the original
+# import ignored: ``chrStatus`` / ``blnForceClosed`` on the work-order header and
+# the shipped / back-ordered quantities on every line. These helpers read them so
+# an imported quote carries Vision's real state instead of a hardcoded "Closed".
+
+def parse_bool(val: str | None) -> Optional[bool]:
+    """Parse an Access yes/no value from a CSV cell.
+
+    Access exports TRUE as ``-1`` or ``1`` (or True/Yes) and FALSE as ``0`` (or
+    False/No). Anything else means "not recorded".
+
+    Args:
+        val: The raw CSV cell.
+
+    Returns:
+        True, False, or None when the cell is blank or unrecognised.
+    """
+    s = safe_str(val).lower()                              # normalise for matching
+    if s in ("1", "-1", "true", "yes", "y", "t"):          # Access TRUE encodings
+        return True
+    if s in ("0", "false", "no", "n", "f"):                # Access FALSE encodings
+        return False
+    return None                                            # blank / unknown -> not recorded
+
+
+def opt_int(val: str | None) -> Optional[int]:
+    """Parse an int, returning None (not 0) for a blank or unparseable cell.
+
+    Used where "nothing recorded" must be told apart from a real zero: shipped
+    quantities and legacy primary keys.
+
+    Args:
+        val: The raw CSV cell.
+
+    Returns:
+        The rounded integer, or None.
+    """
+    s = safe_str(val)
+    if not s:                                              # blank -> not recorded
+        return None
+    try:
+        return round(float(s))                             # Access may export "3.0"
+    except (ValueError, TypeError):
+        return None                                        # garbage -> not recorded
+
+
+def derive_line_fulfillment(row: dict, quantity: int) -> Optional[tuple[int, int]]:
+    """Derive ``(qty_fulfilled, qty_pending)`` from a work-order line's ship fields.
+
+    Signals, in priority order:
+      1. ``intTotalShippedQuantity`` - the running total shipped for the line.
+      2. ``intShipQuantity`` - a single shipment quantity, if no total.
+      3. ``intQuantityBO`` - back-ordered; shipped = quantity - back-ordered.
+
+    Args:
+        row: A tblWorkorderApplication / tblWorkorderMaterial / tblWorkorderZones
+            CSV row.
+        quantity: The line's ordered quantity (already floored at 1).
+
+    Returns:
+        ``(fulfilled, pending)`` clamped to ``[0, quantity]``, or None when the row
+        carries no usable signal, so the caller can tell "no ship data" apart from
+        "zero shipped".
+    """
+    shipped = opt_int(row.get("intTotalShippedQuantity"))   # 1. running total shipped
+    if shipped is None:
+        shipped = opt_int(row.get("intShipQuantity"))       # 2. single shipment quantity
+    if shipped is None:
+        # 3. Infer from back-order, but ONLY a POSITIVE back-order is evidence: a
+        # line reaches this branch precisely because neither shipped field is set,
+        # so a bare intQuantityBO=0 (Vision's default/empty) is NOT proof the line
+        # fully shipped -- treating it so would silently close never-shipped lines.
+        # A back-order > 0 does imply "ordered minus back-ordered was shipped".
+        backordered = opt_int(row.get("intQuantityBO"))
+        if backordered:                                     # positive back-order only (0/None -> no signal)
+            shipped = quantity - backordered
+    if shipped is None:                                    # nothing recorded at all
+        return None
+    shipped = max(0, min(shipped, quantity))               # clamp bad legacy data
+    return shipped, quantity - shipped
+
+
+def workorder_force_closed(row: dict) -> bool:
+    """Whether a work-order header was manually force-closed in Vision.
+
+    Force-close is a business override: staff marked the job done even though
+    not every line shipped, so it must trump the per-line quantities. Vision
+    signals it two ways, either of which counts: the ``blnForceClosed`` flag, or
+    a ``chrStatus`` beginning with "Force Closed" (the source has free-text
+    variants like "Force Closed by DPowell.").
+
+    Args:
+        row: The tblServiceRecords CSV row.
+
+    Returns:
+        True if force-closed, else False.
+    """
+    if parse_bool(row.get("blnForceClosed")) is True:                        # explicit flag
+        return True
+    return safe_str(row.get("chrStatus")).lower().startswith("force closed")  # free-text variant
+
+
+def line_close_state(row: dict, quantity: int, force_closed: bool) -> tuple[int, int, bool]:
+    """Fulfilled / pending split for one imported work-order line.
+
+    Args:
+        row: The line's CSV row.
+        quantity: The ordered quantity (floored at 1).
+        force_closed: True when the owning work order was force-closed.
+
+    Returns:
+        ``(qty_fulfilled, qty_pending, ship_data_present)``. A force-closed header
+        makes the whole line fulfilled; a line with no ship data is left fully
+        pending (never claim work was done that Vision did not record).
+    """
+    if force_closed:                                       # header override -> whole line done
+        return quantity, 0, True
+    derived = derive_line_fulfillment(row, quantity)
+    if derived is None:                                    # nothing recorded -> nothing claimed done
+        return 0, quantity, False
+    fulfilled, pending = derived
+    return fulfilled, pending, True
+
+
 def flush_batch(db: Session, batch: list, id_map: dict):
     """Flush a batch of (legacy_id, orm_object) and populate id_map."""
     if not batch:
@@ -215,21 +357,21 @@ async def import_legacy_data(
                     continue
 
                 if cat_type == "Application":
-                    cat = Category(name=name, type="labor")
+                    cat = Category(name=name, type="labor", legacy_source="tblPartsCategories", legacy_id=legacy_id)
                     db.add(cat)
                     batch_labor.append((legacy_id, cat))
                     count += 1
                 elif cat_type == "Material":
-                    cat = Category(name=name, type="part")
+                    cat = Category(name=name, type="part", legacy_source="tblPartsCategories", legacy_id=legacy_id)
                     db.add(cat)
                     batch_part.append((legacy_id, cat))
                     count += 1
                 elif cat_type == "Application & Material":
-                    cat_p = Category(name=name, type="part")
+                    cat_p = Category(name=name, type="part", legacy_source="tblPartsCategories", legacy_id=legacy_id)
                     db.add(cat_p)
                     batch_part.append((legacy_id, cat_p))
 
-                    cat_l = Category(name=name, type="labor")
+                    cat_l = Category(name=name, type="labor", legacy_source="tblPartsCategories", legacy_id=legacy_id)
                     db.add(cat_l)
                     batch_labor.append((legacy_id, cat_l))
                     count += 2
@@ -278,6 +420,8 @@ async def import_legacy_data(
                     pst=safe_str(row.get("chrProvincialTax", "")),
                     address=address,
                     postal_code=safe_str(row.get("chrPostalCode", "")),
+                    legacy_source="tblClients",   # Vision table this row came from
+                    legacy_id=legacy_id,          # Vision "Client ID"
                 )
                 db.add(profile)
                 batch.append((legacy_id, profile))
@@ -379,6 +523,8 @@ async def import_legacy_data(
                     pst=safe_str(row.get("chrProvincialTax", "")),
                     address=address,
                     postal_code=safe_str(row.get("chrPostalCode", "")),
+                    legacy_source="tblVendors",   # Vision table this row came from
+                    legacy_id=legacy_id,          # Vision VendorID
                 )
                 db.add(profile)
                 batch.append((legacy_id, profile))
@@ -456,6 +602,8 @@ async def import_legacy_data(
                     markup_percent=markup,
                     category_id=cat_map_part.get(cat_legacy_id),
                     vendor_id=vendor_map.get(vendor_legacy_id),
+                    legacy_source="tblMaterial",  # Vision table this row came from
+                    legacy_id=legacy_id,          # Vision ProductID
                 )
                 db.add(part)
                 batch.append((legacy_id, part))
@@ -501,6 +649,8 @@ async def import_legacy_data(
                     rate=rate,
                     markup_percent=markup,
                     category_id=cat_map_labor.get(cat_legacy_id),
+                    legacy_source="tblApplication",  # Vision table this row came from
+                    legacy_id=legacy_id,             # Vision ProductID
                 )
                 db.add(labor_item)
                 batch.append((legacy_id, labor_item))
@@ -544,6 +694,8 @@ async def import_legacy_data(
                     unit_price=unit_price,
                     markup_percent=markup,
                     is_system_item=False,
+                    legacy_source="tblZones",     # Vision table this row came from
+                    legacy_id=legacy_id,          # Vision ZoneRateID
                 )
                 db.add(misc)
                 batch.append((legacy_id, misc))
@@ -591,8 +743,9 @@ async def import_legacy_data(
                 seen_uca.add(uca_number)
 
                 created_on = parse_date(row.get("dtmStartDate", "")) or datetime.utcnow()
-                archive_flag = safe_str(row.get("blnArchive", ""))
-                status = "archived" if archive_flag == "1" else "active"
+                # blnArchive is an Access boolean: TRUE exports as -1 (or 1). Use the
+                # shared parser so a -1 export is read as archived, not active.
+                status = "archived" if parse_bool(row.get("blnArchive")) else "active"
 
                 project = Project(
                     name=name,
@@ -602,6 +755,8 @@ async def import_legacy_data(
                     ucsh_project_number=safe_str(row.get("UCSHProjectNr", "")) or None,
                     uca_project_number=uca_number,
                     project_lead=safe_str(row.get("EmployeeID", "")) or None,
+                    legacy_source="tblProjects",  # Vision table this row came from
+                    legacy_id=legacy_id,          # Vision ProjectID
                 )
                 db.add(project)
                 batch.append((legacy_id, project))
@@ -614,6 +769,12 @@ async def import_legacy_data(
             counts["projects"] = count
 
         # === 8. Quotes (tblServiceRecords) ===
+        # Status is NOT hardcoded (issue #164): every quote starts as a placeholder
+        # "Draft" and is recomputed from its imported lines in step 11b.
+        quote_objs: dict[int, Quote] = {}                  # legacy WorkorderID -> Quote, for the recompute
+        force_closed_wos: set[int] = set()                 # WorkorderIDs Vision force-closed
+        lines_by_wo: dict[int, list[QuoteLineItem]] = {}   # legacy WorkorderID -> its imported lines
+        lines_without_ship_data = 0                        # lines that carried no ship fields at all
         if "tblServiceRecords.csv" in file_contents:
             rows = parse_csv(file_contents["tblServiceRecords.csv"])
             count = 0
@@ -649,6 +810,9 @@ async def import_legacy_data(
                 for seq, row in enumerate(quote_rows, start=1):
                     legacy_wo_id = int(row["_legacy_wo_id"])
 
+                    if workorder_force_closed(row):        # business override: job declared done
+                        force_closed_wos.add(legacy_wo_id)  # its lines import fully fulfilled
+
                     # Issue #54: prepend the legacy UC Vision work-order number
                     # (WorkorderID) to the start of the work description so the old
                     # quote-number reference survives the migration.
@@ -660,13 +824,17 @@ async def import_legacy_data(
                         project_id=project_map[proj_legacy_id],
                         quote_sequence=seq,
                         created_at=parse_date(row.get("dtmDateStarted", "")) or datetime.utcnow(),
-                        status="Closed",
+                        status="Draft",                     # placeholder; recomputed from lines (step 11b)
                         work_description=work_description,
                         client_po_number=safe_str(row.get("intPONumber", "")) or None,
                         cost_code_id=None,
                         current_version=0,
+                        legacy_imported=True,               # migrated row: reopen guard + reports rely on it
+                        legacy_source="tblServiceRecords",  # Vision table this row came from
+                        legacy_id=legacy_wo_id,             # Vision WorkorderID
                     )
                     db.add(quote)
+                    quote_objs[legacy_wo_id] = quote        # keep the object for the status recompute
                     batch.append((legacy_wo_id, quote))
                     count += 1
 
@@ -689,6 +857,11 @@ async def import_legacy_data(
                     continue
 
                 quantity = max(1, safe_int(row.get("intQuantity", ""), 1))
+                fulfilled, pending, has_ship_data = line_close_state(   # real close-state (issue #164)
+                    row, quantity, wo_legacy_id in force_closed_wos
+                )
+                if not has_ship_data:
+                    lines_without_ship_data += 1                        # reported in the response
 
                 item = QuoteLineItem(
                     quote_id=quote_map[wo_legacy_id],
@@ -698,10 +871,13 @@ async def import_legacy_data(
                     quantity=quantity,
                     unit_price=clean_currency(row.get("curUnitPrice", "")),
                     base_cost=clean_currency(row.get("curNetPrice", "")),
-                    qty_pending=0,
-                    qty_fulfilled=quantity,
+                    qty_pending=pending,                                # remaining to invoice
+                    qty_fulfilled=fulfilled,                            # shipped in Vision
+                    legacy_source="tblWorkorderApplication",            # Vision table this row came from
+                    legacy_id=opt_int(row.get("WorkorderPartID", "")),  # the line's own Vision key
                 )
                 db.add(item)
+                lines_by_wo.setdefault(wo_legacy_id, []).append(item)  # for the status recompute
                 count += 1
 
             counts["quote_labor_items"] = count
@@ -719,6 +895,11 @@ async def import_legacy_data(
                     continue
 
                 quantity = max(1, safe_int(row.get("intQuantity", ""), 1))
+                fulfilled, pending, has_ship_data = line_close_state(   # real close-state (issue #164)
+                    row, quantity, wo_legacy_id in force_closed_wos
+                )
+                if not has_ship_data:
+                    lines_without_ship_data += 1                        # reported in the response
 
                 item = QuoteLineItem(
                     quote_id=quote_map[wo_legacy_id],
@@ -728,10 +909,13 @@ async def import_legacy_data(
                     quantity=quantity,
                     unit_price=clean_currency(row.get("curUnitPrice", "")),
                     base_cost=clean_currency(row.get("curNetPrice", "")),
-                    qty_pending=0,
-                    qty_fulfilled=quantity,
+                    qty_pending=pending,                                # remaining to invoice
+                    qty_fulfilled=fulfilled,                            # shipped in Vision
+                    legacy_source="tblWorkorderMaterial",               # Vision table this row came from
+                    legacy_id=opt_int(row.get("WorkorderPartID", "")),  # the line's own Vision key
                 )
                 db.add(item)
+                lines_by_wo.setdefault(wo_legacy_id, []).append(item)  # for the status recompute
                 count += 1
 
             counts["quote_part_items"] = count
@@ -749,6 +933,11 @@ async def import_legacy_data(
                     continue
 
                 quantity = max(1, safe_int(row.get("intQuantity", ""), 1))
+                fulfilled, pending, has_ship_data = line_close_state(   # real close-state (issue #164)
+                    row, quantity, wo_legacy_id in force_closed_wos
+                )
+                if not has_ship_data:
+                    lines_without_ship_data += 1                        # reported in the response
 
                 item = QuoteLineItem(
                     quote_id=quote_map[wo_legacy_id],
@@ -758,15 +947,47 @@ async def import_legacy_data(
                     quantity=quantity,
                     unit_price=clean_currency(row.get("curPrice", "")),
                     base_cost=clean_currency(row.get("curNetPrice", "")),
-                    qty_pending=0,
-                    qty_fulfilled=quantity,
+                    qty_pending=pending,                                # remaining to invoice
+                    qty_fulfilled=fulfilled,                            # shipped in Vision
+                    legacy_source="tblWorkorderZones",                  # Vision table this row came from
+                    legacy_id=opt_int(row.get("WorkorderPartID", "")),  # the line's own Vision key
                 )
                 db.add(item)
+                lines_by_wo.setdefault(wo_legacy_id, []).append(item)  # for the status recompute
                 count += 1
 
             counts["quote_misc_items"] = count
 
+        # === 11b. Quote close-state (issue #164) ===
+        # Every line now carries its real fulfilment, so set each quote's status
+        # with the app's own rule; the import and the editor can never disagree.
+        quotes_open = 0
+        quotes_closed = 0
+        for wo_legacy_id, quote in quote_objs.items():
+            quote.status = compute_status_from_lines(                   # Closed / Invoiced / Work Order / Draft
+                lines_by_wo.get(wo_legacy_id, []), quote.client_po_number
+            )
+            if quote.status == "Closed":
+                quotes_closed += 1
+            else:
+                quotes_open += 1
+        if quote_objs:                                                  # report the split to the operator
+            counts["quotes_closed"] = quotes_closed
+            counts["quotes_open"] = quotes_open
+            counts["quotes_force_closed"] = len(force_closed_wos)
+            counts["quote_lines_without_ship_data"] = lines_without_ship_data
+            if lines_without_ship_data:
+                warnings.append(
+                    f"Quote lines: {lines_without_ship_data} carried no ship quantities "
+                    "and were imported as fully pending"
+                )
+
         # === 12. Purchase Orders (tblPurchaseOrders) ===
+        # Status is NOT hardcoded closed: each PO starts as a placeholder Draft and
+        # is recomputed from its line receipts in step 13b.
+        po_objs: dict[int, PurchaseOrder] = {}             # legacy PurchaseOrderID -> PO, for the recompute
+        po_lines_by_po: dict[int, list[POLineItem]] = {}   # legacy PurchaseOrderID -> its imported lines
+        po_received_all: dict[int, Optional[bool]] = {}    # Vision's own "received all" flag, for a sanity warning
         if "tblPurchaseOrders.csv" in file_contents:
             rows = parse_csv(file_contents["tblPurchaseOrders.csv"])
             count = 0
@@ -820,12 +1041,17 @@ async def import_legacy_data(
                         vendor_id=vendor_map[vendor_legacy_id],
                         po_sequence=seq,
                         created_at=parse_date(row.get("dtmOrderDate", "")) or datetime.utcnow(),
-                        status=POStatus.closed,
+                        status=POStatus.draft,              # placeholder; recomputed from receipts (step 13b)
                         work_description=safe_str(row.get("memNote", "")) or None,
                         cost_code_id=None,
                         current_version=0,
+                        legacy_imported=True,               # migrated row
+                        legacy_source="tblPurchaseOrders",  # Vision table this row came from
+                        legacy_id=legacy_po_id,             # Vision PurchaseOrderID
                     )
                     db.add(po)
+                    po_objs[legacy_po_id] = po              # keep the object for the status recompute
+                    po_received_all[legacy_po_id] = parse_bool(row.get("blnRecievedAll", ""))  # sic: Vision's spelling
                     batch.append((legacy_po_id, po))
                     count += 1
 
@@ -863,11 +1089,35 @@ async def import_legacy_data(
                     unit_price=clean_currency(row.get("curUnitPrice", "")),
                     qty_received=qty_received,
                     qty_pending=qty_pending,
+                    legacy_source="tblPurchaseOrdersMaterial",              # Vision table this row came from
+                    legacy_id=opt_int(row.get("PurchaseOrderPartID", "")),  # the line's own Vision key
                 )
                 db.add(item)
+                po_lines_by_po.setdefault(po_legacy_id, []).append(item)  # for the status recompute
                 count += 1
 
             counts["po_line_items"] = count
+
+        # === 13b. Purchase-order close-state ===
+        # Same idea as 11b: derive each PO's status from its line receipts with the
+        # app's own rule (no receipts -> Draft, all received -> Received, else Sent).
+        po_status_counts = {"draft": 0, "sent": 0, "received": 0}
+        flag_disagreements = 0                                 # Vision's flag vs. the line receipts
+        for legacy_po_id, po in po_objs.items():
+            po.status = compute_po_status(po_lines_by_po.get(legacy_po_id, []))
+            po_status_counts[po.status.name] += 1
+            flag = po_received_all.get(legacy_po_id)           # Vision's own "received all" claim
+            if flag is not None and flag != (po.status == POStatus.received):
+                flag_disagreements += 1                        # receipts win; just report it
+        if po_objs:                                            # report the split to the operator
+            counts["purchase_orders_draft"] = po_status_counts["draft"]
+            counts["purchase_orders_sent"] = po_status_counts["sent"]
+            counts["purchase_orders_received"] = po_status_counts["received"]
+            if flag_disagreements:
+                warnings.append(
+                    f"Purchase orders: {flag_disagreements} where Vision's received-all flag "
+                    "disagrees with the line receipts (line receipts win)"
+                )
 
         # Commit the entire import
         db.commit()
