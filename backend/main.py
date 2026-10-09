@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base, SessionLocal
-from routes import parts, labor, profiles, projects, quotes, purchase_orders, miscellaneous, invoices, company_settings, reports, cost_codes, vendor_pricebook, migration, system_rates, testing, feedback
+from routes import parts, labor, profiles, projects, quotes, purchase_orders, miscellaneous, invoices, company_settings, reports, cost_codes, vendor_pricebook, migration, system_rates, testing, feedback, clerk_email
 from seed import seed_system_items
 from auth import ActorMiddleware
 from telemetry_middleware import TelemetryMiddleware
@@ -128,6 +128,7 @@ app.include_router(migration.router)
 app.include_router(system_rates.router)
 app.include_router(testing.router)
 app.include_router(feedback.router)
+app.include_router(clerk_email.router)
 
 # Announce process start to telemetry (inert unless TELEMETRY_URL/KEY are set).
 telemetry.lifecycle("startup")

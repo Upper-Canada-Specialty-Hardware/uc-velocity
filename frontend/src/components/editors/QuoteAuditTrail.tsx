@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from "lucide-react"
+import { formatQuantity } from "@/lib/format"  // clean qty: 2, 1.5, 0.25
 
 interface QuoteAuditTrailProps {
   quoteId: number
@@ -273,9 +274,9 @@ export function QuoteAuditTrail({ quoteId, currentVersion, onRevert }: QuoteAudi
                                 {item.item_type}: {item.description || `ID ${item.original_line_item_id}`}
                               </span>
                               <div className="flex gap-4 text-muted-foreground">
-                                <span>Qty: {item.quantity}</span>
-                                <span>Pending: {item.qty_pending}</span>
-                                <span>Fulfilled: {item.qty_fulfilled}</span>
+                                <span>Qty: {formatQuantity(item.quantity)}</span>
+                                <span>Pending: {formatQuantity(item.qty_pending)}</span>
+                                <span>Fulfilled: {formatQuantity(item.qty_fulfilled)}</span>
                                 {item.unit_price && (
                                   <span>${item.unit_price.toFixed(2)}</span>
                                 )}

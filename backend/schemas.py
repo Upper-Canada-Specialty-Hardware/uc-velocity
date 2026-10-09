@@ -2,6 +2,62 @@ from pydantic import BaseModel, validator
 from typing import Generic, List, Optional, TypeVar
 from datetime import datetime
 from enum import Enum
+import math
+
+
+# ===== Shared Quantity Validation =====
+# Quote and invoice quantities may hold up to this many decimal places.
+QUANTITY_DECIMALS = 2
+
+
+def validate_quantity(v, *, allow_zero: bool = False) -> Optional[float]:
+    """Validate a quote/invoice quantity and normalise it to 2 decimal places.
+
+    Labour and misc lines may carry fractional quantities (e.g. 1.5 hours);
+    whether a *part* line is whole is checked in the routes, which know the
+    line's item type. PO quantities do not use this helper and stay whole.
+
+    Args:
+        v: Raw incoming value (int, float, numeric string, or None).
+        allow_zero: True for running totals (pending/fulfilled) that may be 0;
+            False for ordered/fulfilment amounts that must be above 0.
+
+    Returns:
+        None when ``v`` is None, otherwise the value rounded to 2 decimals.
+
+    Raises:
+        ValueError: If the value is not a finite number, is out of range, or
+            has more than 2 decimal places.
+    """
+    if v is None:
+        return None  # Optional fields pass through; required ones fail the type check
+    if isinstance(v, bool):
+        raise ValueError('Quantity must be a number')  # bool is an int subclass; refuse it
+    try:
+        v_float = float(v)  # accept int, float, or numeric string
+    except (TypeError, ValueError):
+        raise ValueError('Quantity must be a number')
+    if not math.isfinite(v_float):
+        raise ValueError('Quantity must be a number')  # NaN/inf would poison totals
+    rounded = round(v_float, QUANTITY_DECIMALS)
+    # Tolerate binary float noise (0.1 + 0.2), reject a real 3rd decimal (1.234)
+    if abs(rounded - v_float) >= 1e-9:
+        raise ValueError('Quantity can have at most 2 decimal places')
+    if allow_zero:
+        if rounded < 0:
+            raise ValueError('Quantity cannot be negative')  # running totals floor at 0
+    elif rounded <= 0:
+        raise ValueError('Quantity must be greater than 0')  # ordered/invoiced amounts
+    return rounded  # always an exact 2-decimal float, so later maths stays clean
+
+
+def coerce_quantity_for_read(v) -> Optional[float]:
+    """Pass a stored quantity through as a float (None stays None), with no checks."""
+    # Reads are lenient on purpose: response schemas validate rows already in the
+    # live database (incl. legacy imports), so a strict check would 500 the page.
+    if v is None:
+        return None
+    return float(v)  # int or float from the DB -> float for the wire
 
 
 # ===== Generic Pagination Envelope =====
@@ -109,9 +165,9 @@ class BacklogLineItem(BaseModel):
     line_item_id: int
     item_type: str
     description: str
-    quantity: int
-    qty_fulfilled: int
-    qty_pending: int
+    quantity: float  # Fractional for labour/misc lines
+    qty_fulfilled: float
+    qty_pending: float
     unit_price: float
     backlog_value: float
 
@@ -482,7 +538,7 @@ class QuoteLineItemBase(BaseModel):
     misc_id: Optional[int] = None
     description: Optional[str] = None
     description_override: Optional[str] = None  # Per-quote display description override (issue #178)
-    quantity: int = 1  # Must be a positive whole number
+    quantity: float = 1  # Positive, up to 2 decimals; parts whole (checked in routes)
     unit_price: Optional[float] = None
     is_pms: bool = False  # True for PMS items (Project Management Services)
     pms_percent: Optional[float] = None  # Percentage value for PMS % items
@@ -491,14 +547,9 @@ class QuoteLineItemBase(BaseModel):
     markup_percent: Optional[float] = None  # Per-line-item markup (when global OFF)
 
     @validator('quantity', pre=True)
-    def quantity_must_be_positive_integer(cls, v) -> int:
-        # Check if value is a whole number before coercion
-        if isinstance(v, float) and not v.is_integer():
-            raise ValueError('Quantity must be a positive whole number')
-        v_int = int(v)
-        if v_int <= 0:
-            raise ValueError('Quantity must be a positive whole number')
-        return v_int
+    def quantity_must_be_valid(cls, v) -> Optional[float]:
+        """Require a positive quantity with at most 2 decimals."""
+        return validate_quantity(v)
 
 
 class QuoteLineItemCreate(QuoteLineItemBase):
@@ -506,28 +557,21 @@ class QuoteLineItemCreate(QuoteLineItemBase):
 
 
 class QuoteLineItemUpdate(BaseModel):
-    quantity: Optional[int] = None  # Must be a positive whole number
+    quantity: Optional[float] = None  # Positive, up to 2 decimals; parts whole (checked in routes)
     unit_price: Optional[float] = None
     description_override: Optional[str] = None  # Per-quote display description override (issue #178)
 
     @validator('quantity', pre=True)
-    def quantity_must_be_positive_integer(cls, v) -> Optional[int]:
-        if v is None:
-            return None
-        # Check if value is a whole number before coercion
-        if isinstance(v, float) and not v.is_integer():
-            raise ValueError('Quantity must be a positive whole number')
-        v_int = int(v)
-        if v_int <= 0:
-            raise ValueError('Quantity must be a positive whole number')
-        return v_int
+    def quantity_must_be_valid(cls, v) -> Optional[float]:
+        """Require a positive quantity with at most 2 decimals (None = unchanged)."""
+        return validate_quantity(v)
 
 
 class QuoteLineItem(QuoteLineItemBase):
     id: int
     quote_id: int
-    qty_pending: int = 0  # Must be whole number
-    qty_fulfilled: int = 0  # Must be whole number
+    qty_pending: float = 0  # Remaining to invoice, up to 2 decimals
+    qty_fulfilled: float = 0  # Invoiced so far, up to 2 decimals
     labor: Optional[Labor] = None
     part: Optional[Part] = None
     miscellaneous: Optional[Miscellaneous] = None
@@ -895,20 +939,18 @@ class InvoiceLineItemBase(BaseModel):
     item_type: str
     description: Optional[str] = None
     unit_price: Optional[float] = None
-    qty_ordered: int  # Must be whole number
-    qty_fulfilled_this_invoice: int  # Must be whole number
-    qty_fulfilled_total: int  # Must be whole number
-    qty_pending_after: int  # Must be whole number
+    qty_ordered: float  # Up to 2 decimals for labour/misc lines
+    qty_fulfilled_this_invoice: float  # Up to 2 decimals for labour/misc lines
+    qty_fulfilled_total: float  # Up to 2 decimals
+    qty_pending_after: float  # Up to 2 decimals; 0 once the line is fully invoiced
     labor_id: Optional[int] = None
     part_id: Optional[int] = None
     misc_id: Optional[int] = None
 
     @validator('qty_ordered', 'qty_fulfilled_this_invoice', 'qty_fulfilled_total', 'qty_pending_after', pre=True)
-    def quantities_must_be_whole_numbers(cls, v) -> int:
-        # Check if value is a whole number before coercion
-        if isinstance(v, float) and not v.is_integer():
-            raise ValueError('Must be a positive whole number')
-        return int(v)
+    def quantities_as_float(cls, v) -> Optional[float]:
+        """Response-only: pass stored values through as floats, never reject them."""
+        return coerce_quantity_for_read(v)
 
 
 class InvoiceLineItem(InvoiceLineItemBase):
@@ -927,17 +969,12 @@ class InvoiceBase(BaseModel):
 
 class LineItemFulfillment(BaseModel):
     line_item_id: int
-    quantity: int  # Amount to fulfill - must be a positive whole number
+    quantity: float  # Amount to invoice now; positive, up to 2 decimals, parts whole (checked in routes)
 
     @validator('quantity', pre=True)
-    def quantity_must_be_positive_integer(cls, v) -> int:
-        # Check if value is a whole number before coercion
-        if isinstance(v, float) and not v.is_integer():
-            raise ValueError('Must be a positive whole number')
-        v_int = int(v)
-        if v_int <= 0:
-            raise ValueError('Must be a positive whole number')
-        return v_int
+    def quantity_must_be_valid(cls, v) -> Optional[float]:
+        """Require a positive fulfilment amount with at most 2 decimals."""
+        return validate_quantity(v)
 
 
 class InvoiceCreate(BaseModel):
@@ -977,10 +1014,11 @@ class InvoiceLineItemSnapshotBase(BaseModel):
     item_type: str
     description: Optional[str] = None
     unit_price: Optional[float] = None
-    qty_ordered: Optional[int] = None
-    qty_fulfilled_this_invoice: Optional[int] = None
-    qty_fulfilled_total: Optional[int] = None
-    qty_pending_after: Optional[int] = None
+    # Same float type as the live invoice line, so history shows fractions verbatim
+    qty_ordered: Optional[float] = None
+    qty_fulfilled_this_invoice: Optional[float] = None
+    qty_fulfilled_total: Optional[float] = None
+    qty_pending_after: Optional[float] = None
     labor_id: Optional[int] = None
     part_id: Optional[int] = None
     misc_id: Optional[int] = None
@@ -1029,10 +1067,10 @@ class QuoteLineItemSnapshotBase(BaseModel):
     misc_id: Optional[int] = None
     description: Optional[str] = None
     description_override: Optional[str] = None  # Per-quote display description override (issue #178)
-    quantity: int  # Must be whole number
+    quantity: float  # Same type as the live line; up to 2 decimals
     unit_price: Optional[float] = None
-    qty_pending: int  # Must be whole number
-    qty_fulfilled: int  # Must be whole number
+    qty_pending: float  # Up to 2 decimals
+    qty_fulfilled: float  # Up to 2 decimals
     is_deleted: bool = False
     is_pms: bool = False  # True for PMS items (Project Management Services)
     pms_percent: Optional[float] = None  # Percentage value for PMS % items
@@ -1041,11 +1079,9 @@ class QuoteLineItemSnapshotBase(BaseModel):
     markup_percent: Optional[float] = None  # Per-line-item markup
 
     @validator('quantity', 'qty_pending', 'qty_fulfilled', pre=True)
-    def quantities_must_be_whole_numbers(cls, v) -> int:
-        # Check if value is a whole number before coercion
-        if isinstance(v, float) and not v.is_integer():
-            raise ValueError('Must be a positive whole number')
-        return int(v)
+    def quantities_as_float(cls, v) -> Optional[float]:
+        """Response-only: pass stored history values through as floats, never reject them."""
+        return coerce_quantity_for_read(v)
 
 
 class QuoteLineItemSnapshot(QuoteLineItemSnapshotBase):
@@ -1109,7 +1145,7 @@ class StagedLineItemChange(BaseModel):
     misc_id: Optional[int] = None
     description: Optional[str] = None
     description_override: Optional[str] = None  # Per-quote display description override (issue #178)
-    quantity: Optional[int] = None  # Must be a positive whole number
+    quantity: Optional[float] = None  # Positive, up to 2 decimals; parts whole (checked in commit_edits)
     unit_price: Optional[float] = None
     is_pms: bool = False
     pms_percent: Optional[float] = None
@@ -1117,16 +1153,9 @@ class StagedLineItemChange(BaseModel):
     base_cost: Optional[float] = None  # Unit cost override
 
     @validator('quantity', pre=True)
-    def quantity_must_be_positive_integer(cls, v) -> Optional[int]:
-        if v is None:
-            return None
-        # Check if value is a whole number before coercion
-        if isinstance(v, float) and not v.is_integer():
-            raise ValueError('Quantity must be a positive whole number')
-        v_int = int(v)
-        if v_int <= 0:
-            raise ValueError('Quantity must be a positive whole number')
-        return v_int
+    def quantity_must_be_valid(cls, v) -> Optional[float]:
+        """Require a positive quantity with at most 2 decimals (None = unchanged)."""
+        return validate_quantity(v)
 
 
 class CommitEditsRequest(BaseModel):

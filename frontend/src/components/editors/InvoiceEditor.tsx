@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button"
 import { api } from "@/api/client"
 import type { Invoice, Project } from "@/types"
 import { Receipt, Package, Wrench, FileText, AlertTriangle, Printer, Loader2, Pencil } from "lucide-react"
-import { formatDateTime } from "@/lib/format"
+import { formatDateTime, formatQuantity } from "@/lib/format"
 import { EditCreatedAtDialog } from "./EditCreatedAtDialog"
 import { InvoiceAuditTrail } from "./InvoiceAuditTrail"
 
@@ -279,17 +279,18 @@ export function InvoiceEditor({ invoiceId, onUpdate }: InvoiceEditorProps) {
                       <TableCell className="font-medium">
                         {item.description || "-"}
                       </TableCell>
-                      <TableCell className="text-right">{item.qty_ordered}</TableCell>
+                      {/* Quantities: 1.5 stays 1.5, 2 shows as 2 (labour/misc may be fractional) */}
+                      <TableCell className="text-right">{formatQuantity(item.qty_ordered)}</TableCell>
                       <TableCell className="text-right">
                         <span className="font-medium text-green-600">
-                          {item.qty_fulfilled_this_invoice}
+                          {formatQuantity(item.qty_fulfilled_this_invoice)}
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
-                        {item.qty_fulfilled_total}
+                        {formatQuantity(item.qty_fulfilled_total)}
                       </TableCell>
                       <TableCell className="text-right">
-                        {item.qty_pending_after}
+                        {formatQuantity(item.qty_pending_after)}
                       </TableCell>
                       <TableCell className="text-right">
                         ${(item.unit_price || 0).toFixed(2)}

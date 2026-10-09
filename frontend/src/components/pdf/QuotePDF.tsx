@@ -10,6 +10,7 @@ import {
   calculateQuoteTotal,
   formatCurrency,
 } from '@/lib/pricing'
+import { formatQuantity } from '@/lib/format'  // clean qty: 2, 1.5, 0.25
 import type { Quote, QuoteLineItem, Project, CompanySettings } from '@/types'
 
 /**
@@ -69,7 +70,7 @@ function LineItemTable({
             wrap={false}
           >
             <Text style={styles.colDescriptionWide}>{getItemDescription(item)}</Text>
-            <Text style={styles.colQtyWide}>{item.quantity}</Text>
+            <Text style={styles.colQtyWide}>{formatQuantity(item.quantity)}</Text>
           </View>
         ))}
         {showSubtotal && (
@@ -116,7 +117,7 @@ function LineItemTable({
               {description}
               {item.is_pms && item.pms_percent != null ? ` (PMS ${item.pms_percent}%)` : ''}
             </Text>
-            <Text style={styles.colQty}>{item.quantity}</Text>
+            <Text style={styles.colQty}>{formatQuantity(item.quantity)}</Text>
             <Text style={styles.colUnitPrice}>{formatCurrency(unitPrice)}</Text>
             <Text style={styles.colTotal}>{formatCurrency(total)}</Text>
           </View>
