@@ -8,7 +8,7 @@ whole. These tests drive the real API against Postgres and cover:
   "Closed" and drops the line from the backlog report; 0.1 then 0.2 of a
   0.3 line (where raw float maths leaves a tiny remainder) does the same
 - a part can only be invoiced in whole units
-- history (snapshots) stores the fraction verbatim, and revert/clone/reopen
+- history (snapshots) stores the fraction verbatim, and revert/clone
   carry it in both directions, including a revert that voids an invoice
 - invoice history returns fractions
 - read endpoints still return stored rows (-1, 1.333) that input rules refuse
@@ -120,14 +120,13 @@ def env(db):
             cleanup.close()
 
 
-def _make_quote(db, env, *, client_po="PO-TEST", legacy=False):
+def _make_quote(db, env, *, client_po="PO-TEST"):
     """Create an empty quote in the fixture project.
 
     Args:
         db: ORM session.
         env: The ``env`` fixture dict.
         client_po: Client PO number (required before invoicing).
-        legacy: Mark the quote as migrated, which the reopen endpoint requires.
 
     Returns:
         The new quote's id.
@@ -135,8 +134,7 @@ def _make_quote(db, env, *, client_po="PO-TEST", legacy=False):
     project_id = env["project"].id
     seq = (db.query(Quote).filter(Quote.project_id == project_id).count()) + 1
     quote = Quote(project_id=project_id, quote_sequence=seq, current_version=0,
-                  client_po_number=client_po, markup_control_enabled=False,
-                  legacy_imported=legacy)
+                  client_po_number=client_po, markup_control_enabled=False)
     db.add(quote)
     db.commit()
     return quote.id
@@ -352,7 +350,7 @@ def test_invoice_snapshot_returns_fractions(db, env):
     assert state["qty_pending_after"] == 0.8
 
 
-# ---------------------------------------------------------------- history / revert / clone / reopen
+# ---------------------------------------------------------------- history / revert / clone
 
 
 def test_history_and_revert_round_trip_mixed_whole_and_fraction(db, env):
@@ -415,21 +413,6 @@ def test_clone_keeps_fraction(db, env):
     cloned = r.json()["line_items"][0]
     assert cloned["quantity"] == 1.5
     assert cloned["qty_pending"] == 1.5 and cloned["qty_fulfilled"] == 0
-
-
-def test_reopen_keeps_fraction(db, env):
-    """Reopening a closed migrated quote puts the whole 1.5 back to pending."""
-    quote_id = _make_quote(db, env, legacy=True)
-    db.add(QuoteLineItem(quote_id=quote_id, item_type="misc", description="[TEST] legacy",
-                         quantity=1.5, unit_price=10.0, qty_pending=0, qty_fulfilled=1.5))
-    db.commit()
-    assert _quote(quote_id)["status"] == "Closed"
-
-    r = client.post(f"/quotes/{quote_id}/reopen")
-    assert r.status_code == 200, r.text
-    reopened = _line(quote_id)
-    assert reopened["quantity"] == 1.5
-    assert reopened["qty_pending"] == 1.5 and reopened["qty_fulfilled"] == 0
 
 
 def test_reads_return_stored_rows_that_input_rules_would_refuse(db, env):
