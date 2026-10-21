@@ -337,6 +337,20 @@ class LaborUpdate(BaseModel):
 class Labor(LaborBase):
     id: int
 
+    @validator('hours', pre=True)
+    def hours_must_be_positive(cls, v) -> float:
+        """Pass stored hours through unchecked (overrides the input rule by name).
+
+        Args:
+            v: Hours as stored in the database.
+
+        Returns:
+            The stored hours as a float.
+        """
+        # Read model: a stored row (e.g. an imported 0.083 h item) must still load;
+        # the positive / 2-decimal rule stays on LaborCreate and LaborUpdate
+        return float(v)
+
     class Config:
         from_attributes = True
 
@@ -537,6 +551,20 @@ class QuoteLineItem(QuoteLineItemBase):
     part: Optional[Part] = None
     miscellaneous: Optional[Miscellaneous] = None
 
+    @validator('quantity', pre=True)
+    def quantity_must_be_valid(cls, v) -> Optional[float]:
+        """Pass a stored quantity through unchecked (overrides the input rule by name).
+
+        Args:
+            v: Quantity as stored in the database.
+
+        Returns:
+            The stored quantity as a float.
+        """
+        # Read model: imported zero (quoted, not ordered) and credit (negative) lines
+        # must still load; QuoteLineItemCreate/Update keep the positive rule
+        return coerce_quantity_for_read(v)
+
     class Config:
         from_attributes = True
 
@@ -619,6 +647,20 @@ class POLineItem(POLineItemBase):
     qty_received: int = 0
     actual_unit_price: Optional[float] = None
     part: Optional[Part] = None
+
+    @validator('quantity', pre=True)
+    def quantity_must_be_positive_integer(cls, v) -> int:
+        """Pass a stored PO quantity through unchecked (overrides the input rule by name).
+
+        Args:
+            v: Quantity as stored in the database (an integer column).
+
+        Returns:
+            The stored quantity as an int.
+        """
+        # Read model: imported zero and credit (negative) PO lines must still load;
+        # POLineItemCreate and staged PO edits keep the positive whole-number rule
+        return int(v)
 
     class Config:
         from_attributes = True

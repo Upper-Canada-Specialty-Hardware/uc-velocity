@@ -88,6 +88,7 @@ FIXTURES = {
     "tblApplication.csv": _csv(
         "ProductID,chrProductDescription,intTime,curNetPrice,intMarkup,intCategory",
         "1,Hang door,2,90.00,50,2",
+        "2,Short call,0.083,6.81,50,2",          # 3-decimal hours: stored as 0.08, cost kept
     ),
     "tblZones.csv": _csv(
         "ZoneRateID,chrZones,chrDistance,curNetPrice,intMarkup",
@@ -358,6 +359,50 @@ def test_import_keeps_zero_and_credit_lines_out_of_pending():
         assert (lines[3101].quantity, lines[3101].qty_fulfilled, lines[3101].qty_pending) == (-1, 0, 0)
     finally:
         db.close()
+
+
+def test_imported_rows_load_through_the_read_endpoints():
+    """Every imported quote, PO and labour item opens, zero and credit lines included.
+
+    Those rows break the input rules (quantity above 0, at most 2-decimal hours), and the
+    read models used to apply the same rules, so one such row failed its whole page.
+    """
+    _upload()
+    db = SessionLocal()
+    try:
+        quote_ids = [q.id for q in _quotes_by_wo(db).values()]
+        po_ids = [po.id for po in _pos_by_id(db).values()]
+    finally:
+        db.close()
+    for qid in quote_ids:                                   # WO 110 carries a 0 and two credit lines
+        assert client.get(f"/quotes/{qid}").status_code == 200, qid
+    for pid in po_ids:                                      # PO 204 carries a 0 and a credit line
+        assert client.get(f"/purchase-orders/{pid}").status_code == 200, pid
+    assert client.get("/quotes/").status_code == 200        # lists load every row at once
+    assert client.get("/purchase-orders/").status_code == 200
+    r = client.get("/labor/")
+    assert r.status_code == 200, r.text
+    short = next(l for l in r.json() if l["description"] == "Short call")
+    assert short["hours"] == 0.08                           # rounded to what the app can hold
+    assert round(short["hours"] * short["rate"], 2) == 6.81  # cost unchanged by the rounding
+
+
+def test_read_leniency_does_not_loosen_input():
+    """A quote line or PO line still cannot be entered at 0 or below."""
+    _upload()
+    db = SessionLocal()
+    try:
+        quote_id = _quotes_by_wo(db)[101].id
+        po_id = next(iter(_pos_by_id(db).values())).id
+    finally:
+        db.close()
+    for qty in (0, -1):
+        r = client.post(f"/quotes/{quote_id}/lines",
+                        json={"item_type": "misc", "description": "[TEST]", "quantity": qty, "unit_price": 1})
+        assert r.status_code == 422, (qty, r.text)
+        r = client.post(f"/purchase-orders/{po_id}/lines",
+                        json={"item_type": "misc", "description": "[TEST]", "quantity": qty, "unit_price": 1})
+        assert r.status_code == 422, (qty, r.text)
 
 
 def test_import_keeps_fractional_quote_quantities():
