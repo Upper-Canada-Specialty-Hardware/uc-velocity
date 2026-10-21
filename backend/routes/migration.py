@@ -949,7 +949,7 @@ async def import_legacy_data(
                         client_po_number=safe_str(row.get("intPONumber", "")) or None,
                         cost_code_id=None,
                         current_version=0,
-                        legacy_imported=True,               # migrated row: reopen guard + reports rely on it
+                        legacy_imported=True,               # migrated row: reports rely on it
                         legacy_source="tblServiceRecords",  # Vision table this row came from
                         legacy_id=legacy_wo_id,             # Vision WorkorderID
                     )
