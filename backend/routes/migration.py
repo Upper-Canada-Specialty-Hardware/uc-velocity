@@ -745,8 +745,13 @@ async def import_legacy_data(
                 cat_legacy_id = safe_int(row.get("intCategory", ""))
 
                 if hours_raw > 0:
-                    rate = net_price / hours_raw
-                    hours = hours_raw
+                    hours = round(hours_raw, 2) or 0.01   # app holds hours to 2 decimals (0.083 -> 0.08)
+                    rate = net_price / hours              # rate from stored hours: hours x rate = Vision net price
+                    if hours != hours_raw:
+                        warnings.append(
+                            f"Labor: ProductID {legacy_id} hours {hours_raw:g} rounded to {hours:g}, "
+                            f"rate adjusted so its cost stays {net_price:.2f}"
+                        )
                 else:
                     rate = net_price
                     hours = 1
@@ -949,7 +954,7 @@ async def import_legacy_data(
                         client_po_number=safe_str(row.get("intPONumber", "")) or None,
                         cost_code_id=None,
                         current_version=0,
-                        legacy_imported=True,               # migrated row: reopen guard + reports rely on it
+                        legacy_imported=True,               # migrated row: reports rely on it
                         legacy_source="tblServiceRecords",  # Vision table this row came from
                         legacy_id=legacy_wo_id,             # Vision WorkorderID
                     )
