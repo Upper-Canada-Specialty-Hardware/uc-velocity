@@ -66,6 +66,7 @@ import { formatDate, formatDateTime, formatCurrency } from "@/lib/format"
 import { PartForm } from "@/components/forms/PartForm"
 import { POAuditTrail } from "./POAuditTrail"
 import { EditCreatedAtDialog } from "./EditCreatedAtDialog"
+import { getPOLineDescriptionText, getPOLineLabel } from "@/lib/poLines"
 
 interface POEditorProps {
   poId: number
@@ -306,7 +307,10 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     const isUnchanged =
       (staged.quantity === undefined || staged.quantity === item.quantity) &&
       (staged.unit_price === undefined || staged.unit_price === (item.unit_price ?? 0)) &&
-      (staged.description === undefined || staged.description === (item.description ?? ""))
+      // Compare the text the line would show, so a part line typed back to its
+      // inventory wording (or cleared) counts as unchanged
+      (staged.description === undefined ||
+        getPOLineDescriptionText(item, staged.description) === getPOLineDescriptionText(item))
 
     if (isUnchanged) {
       newStagedEdits.delete(item.id)
@@ -440,12 +444,6 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     return staged?.unit_price ?? item.unit_price ?? 0
   }
 
-  const getDisplayDescription = (item: POLineItem): string => {
-    const staged = stagedEdits.get(item.id)
-    if (staged?.description !== undefined) return staged.description
-    return item.description ?? ""
-  }
-
   // ===== Line Item CRUD Handlers =====
 
   const openAddDialog = (type: POLineItemType) => {
@@ -479,14 +477,15 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     const staged = stagedEdits.get(item.id)
     setEditQuantity((staged?.quantity ?? item.quantity).toString())
     setEditUnitPrice((staged?.unit_price ?? item.unit_price ?? 0).toString())
-    setEditDescription(staged?.description ?? item.description ?? "")
+    // Part lines open with their own text, or the inventory text when they have none
+    setEditDescription(getPOLineDescriptionText(item, staged?.description))
     setEditDialogOpen(true)
   }
 
   /**
    * Open the Edit Line Item dialog for a staged add (a green "New" row).
    * Prefills the fields from the staged row so the user can revise the
-   * quantity, unit price, or misc description before committing.
+   * quantity, unit price, or description before committing.
    * @param item - The staged add to edit.
    */
   const openStagedAddEditDialog = (item: StagedPOAdd) => {
@@ -494,7 +493,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     setEditingStagedAdd(item)
     setEditQuantity(item.quantity.toString())
     setEditUnitPrice((item.unit_price ?? 0).toString())
-    setEditDescription(item.description ?? "")
+    setEditDescription(getPOLineDescriptionText(item))  // new part rows start from inventory text
     setEditDialogOpen(true)
   }
 
@@ -573,11 +572,15 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
 
     // Staged add: overwrite the row in client state; nothing hits the API until Commit.
     if (editingStagedAdd) {
+      // A part row typed back to its inventory wording (or cleared) sends no text,
+      // so the server stores the inventory description as usual
+      const isInventoryText =
+        editingStagedAdd.item_type === "part" &&
+        (newDescription === "" || newDescription === editingStagedAdd.part?.description)
       updateStagedAdd(editingStagedAdd.tempId, {
         quantity: newQuantity,
         unit_price: newUnitPrice,
-        // Parts keep their catalog description; only misc rows carry a free-text one.
-        ...(editingStagedAdd.item_type === "misc" ? { description: newDescription } : {}),
+        description: isInventoryText ? undefined : newDescription,
       })
       setEditDialogOpen(false)
       setEditingStagedAdd(null)
@@ -595,9 +598,13 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
       if (newUnitPrice !== (editingLineItem.unit_price ?? 0)) {
         changes.unit_price = newUnitPrice
       }
-      if (editingLineItem.item_type === "misc" && newDescription !== (editingLineItem.description ?? "")) {
-        changes.description = newDescription
-      }
+      // Stage the text only when it differs from what the line shows now; setting
+      // undefined otherwise also drops an earlier staged change the user typed back
+      // (blank on a part line resets it to the inventory text on commit)
+      const textChanged =
+        getPOLineDescriptionText(editingLineItem, newDescription) !== getPOLineDescriptionText(editingLineItem)
+      const blankMisc = editingLineItem.item_type === "misc" && newDescription === "" // misc lines need text
+      changes.description = textChanged && !blankMisc ? newDescription : undefined
 
       if (Object.keys(changes).length > 0) {
         stageEdit(editingLineItem, changes)
@@ -947,11 +954,13 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
 
   // ===== Calculation Functions =====
 
+  /**
+   * The label a committed line shows, including any staged description edit.
+   * @param item - A committed PO line.
+   * @returns "part number - description" for parts, the line's text for misc.
+   */
   const getLineItemDescription = (item: POLineItem): string => {
-    if (item.item_type === "part" && item.part) {
-      return `${item.part.part_number} - ${item.part.description}`
-    }
-    return getDisplayDescription(item) || item.description || "Miscellaneous"
+    return getPOLineLabel(item, "Miscellaneous", stagedEdits.get(item.id)?.description)
   }
 
   const getLineItemTotal = (item: POLineItem): number => {
@@ -1305,10 +1314,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <span className="font-medium">
-                          {item.item_type === "part" && item.part
-                            ? `${item.part.part_number} - ${item.part.description}`
-                            : item.description || "Miscellaneous"
-                          }
+                          {getPOLineLabel(item, "Miscellaneous")}
                         </span>
                         <Badge variant="outline" className="text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 border-green-300">
                           New
@@ -2208,7 +2214,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
           <div className="space-y-4 pt-4">
             {editTarget && (
               <>
-                {/* Show item description (read-only for parts) */}
+                {/* Which item this is: part lines show the inventory part as a reference */}
                 <div className="p-3 bg-muted/50 rounded-md">
                   <span className="text-sm font-medium">
                     {editTarget.item_type === "part" && editTarget.part
@@ -2218,17 +2224,25 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                   </span>
                 </div>
 
-                {/* Description (editable for misc items) */}
-                {editTarget.item_type === "misc" && (
-                  <div className="space-y-2">
-                    <Label>Description</Label>
-                    <Input
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      placeholder="Enter description"
-                    />
-                  </div>
-                )}
+                {/* Description: editable on every line; on a part line it only changes this PO */}
+                <div className="space-y-2">
+                  <Label htmlFor="po-line-description">Description</Label>
+                  <Input
+                    id="po-line-description"
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    placeholder={
+                      editTarget.item_type === "part" && editTarget.part
+                        ? editTarget.part.description
+                        : "Enter description"
+                    }
+                  />
+                  {editTarget.item_type === "part" && (
+                    <p className="text-xs text-muted-foreground">
+                      Changes this PO only, not inventory. Clear it to use the inventory description.
+                    </p>
+                  )}
+                </div>
 
                 <div className="space-y-2">
                   <Label>Quantity</Label>
@@ -2310,10 +2324,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                   {stagedAdds.map(item => (
                     <div key={item.tempId} className="p-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800">
                       <span className="font-medium">
-                        {item.item_type === "part" && item.part
-                          ? `${item.part.part_number} - ${item.part.description}`
-                          : item.description || "Miscellaneous"
-                        }
+                        {getPOLineLabel(item, "Miscellaneous")}
                       </span>
                       <span className="text-muted-foreground ml-2">× {item.quantity}</span>
                       <span className="text-muted-foreground ml-2">@ {formatCurrency(item.unit_price ?? 0)}</span>
@@ -2330,10 +2341,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                   {Array.from(stagedEdits.entries()).map(([id, edit]) => (
                     <div key={id} className="p-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
                       <span className="font-medium">
-                        {edit.originalItem.part?.part_number
-                          ? `${edit.originalItem.part.part_number} - ${edit.originalItem.part.description}`
-                          : edit.originalItem.description || "Item"
-                        }
+                        {getPOLineLabel(edit.originalItem, "Item")}
                       </span>
                       <div className="text-sm text-muted-foreground mt-1">
                         {edit.quantity !== undefined && (
@@ -2343,7 +2351,10 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                           <div>Price: {formatCurrency(edit.originalItem.unit_price ?? 0)} → {formatCurrency(edit.unit_price)}</div>
                         )}
                         {edit.description !== undefined && (
-                          <div>Description: "{edit.originalItem.description}" → "{edit.description}"</div>
+                          <div>
+                            {/* Shown as the line will read; blank on a part line means the inventory text */}
+                            Description: "{getPOLineDescriptionText(edit.originalItem)}" → "{getPOLineDescriptionText(edit.originalItem, edit.description)}"
+                          </div>
                         )}
                       </div>
                     </div>
@@ -2361,10 +2372,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                     return item ? (
                       <div key={id} className="p-2 bg-red-50 dark:bg-red-950 rounded border border-red-200 dark:border-red-800 line-through opacity-60">
                         <span className="font-medium">
-                          {item.part?.part_number
-                            ? `${item.part.part_number} - ${item.part.description}`
-                            : item.description || "Item"
-                          }
+                          {getPOLineLabel(item, "Item")}
                         </span>
                         <span className="text-muted-foreground ml-2">× {item.quantity}</span>
                       </div>
