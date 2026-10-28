@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { api } from "@/api/client"
 import { formatCurrency } from "@/lib/format"
-import type { POSnapshot, PORevertPreview } from "@/types"
+import type { Part, POSnapshot, PORevertPreview } from "@/types"
+import { getPOLineLabel } from "@/lib/poLines"
 import { RevertConfirmDialog } from "./RevertConfirmDialog"
 import {
   History,
@@ -19,12 +20,14 @@ import {
 } from "lucide-react"
 
 interface POAuditTrailProps {
+  parts?: Part[]  // inventory parts, to label snapshot lines (they store only part_id)
   purchaseOrderId: number
   currentVersion: number
   onRevert?: () => void
 }
 
-export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAuditTrailProps) {
+export function POAuditTrail({ parts = [], purchaseOrderId, currentVersion, onRevert }: POAuditTrailProps) {
+  const partsById = new Map(parts.map((p) => [p.id, p]))  // part_id -> part, for line labels
   const [snapshots, setSnapshots] = useState<POSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -281,13 +284,13 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
                       )}
                     </div>
 
-                    {isExpanded && snapshot.line_items_states.length > 0 && (
+                    {isExpanded && snapshot.line_item_states.length > 0 && (
                       <div className="px-3 pb-3 pt-1 border-t bg-muted/30">
                         <p className="text-xs font-medium text-muted-foreground mb-2">
                           Line Items at this version:
                         </p>
                         <div className="space-y-1">
-                          {snapshot.line_items_states.map((item) => (
+                          {snapshot.line_item_states.map((item) => (
                             <div
                               key={item.id}
                               className={`flex items-center justify-between text-xs p-2 rounded ${
@@ -297,7 +300,12 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
                               }`}
                             >
                               <span>
-                                {item.item_type}: {item.description || `ID ${item.original_line_item_id}`}
+                                {/* Same "part number - description" label as the editor and PDFs */}
+                                {item.item_type}:{" "}
+                                {getPOLineLabel(
+                                  { ...item, part: item.part_id != null ? partsById.get(item.part_id) : undefined },
+                                  `ID ${item.original_line_item_id}`,
+                                )}
                               </span>
                               <div className="flex gap-4 text-muted-foreground">
                                 <span>Qty: {item.quantity}</span>

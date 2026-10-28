@@ -3,6 +3,7 @@ import { styles } from './styles'
 import { PDFHeader } from './PDFHeader'
 import { PDFFooter } from './PDFFooter'
 import { formatCurrency } from '@/lib/pricing'
+import { getPOLineLabel } from '@/lib/poLines'
 import type { PurchaseOrder, POLineItem, Project, CompanySettings } from '@/types'
 
 interface PurchaseOrderPDFProps {
@@ -95,10 +96,9 @@ function LineItemTable({
   )
 }
 
+/** The line as printed: part number plus the line's own description (issue #283). */
 function getItemDescription(item: POLineItem): string {
-  if (item.item_type === 'part' && item.part)
-    return `${item.part.part_number} - ${item.part.description}`
-  return item.description || 'Unknown item'
+  return getPOLineLabel(item, 'Unknown item')
 }
 
 export function PurchaseOrderPDF({ po, project, companySettings, includeBreakdown = true }: PurchaseOrderPDFProps) {

@@ -26,6 +26,46 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 10000
 
 
+def resolve_part_line_description(part: Part, description: Optional[str]) -> str:
+    """The text a PO part line keeps as its own description.
+
+    A part line stores its description on the line, so the PO stays as written
+    even if the inventory part changes later, and purchasing can reword it for
+    one PO without touching inventory. Blank or missing text falls back to the
+    inventory description, which is also how a cleared edit resets the line.
+
+    Args:
+        part: The inventory part the line orders.
+        description: Text sent by the editor; may be None or blank.
+
+    Returns:
+        The trimmed text when given, otherwise the part's inventory description.
+    """
+    text = (description or "").strip()  # whitespace-only counts as blank
+    return text or part.description     # blank -> inventory text
+
+
+def require_misc_description(description: Optional[str]) -> str:
+    """The trimmed text of a PO misc line, which must not be blank.
+
+    A misc line has no inventory part to fall back on, so its text is all the
+    PDFs can print; blank or whitespace-only text would print "Unknown item".
+
+    Args:
+        description: Text sent by the editor or an API caller; may be None.
+
+    Returns:
+        The text with surrounding whitespace removed.
+
+    Raises:
+        HTTPException: 400 when the text is missing, empty or only whitespace.
+    """
+    text = (description or "").strip()  # "   " counts as blank
+    if not text:
+        raise HTTPException(status_code=400, detail="description required for misc line items")
+    return text
+
+
 def create_po_snapshot(
     db: Session,
     po: PurchaseOrder,
@@ -544,16 +584,17 @@ def add_po_line(po_id: int, line_data: POLineItemCreate, db: Session = Depends(g
         part = db.query(Part).filter(Part.id == line_data.part_id).first()
         if not part:
             raise HTTPException(status_code=400, detail="Part not found")
+        # Part lines keep their own copy of the description (inventory text by default)
+        description = resolve_part_line_description(part, line_data.description)
 
     elif line_data.item_type == "misc":
-        if not line_data.description:
-            raise HTTPException(status_code=400, detail="description required for misc line items")
+        description = require_misc_description(line_data.description)  # trimmed; blank -> 400
 
     db_line = POLineItem(
         purchase_order_id=po_id,
         item_type=line_data.item_type,
         part_id=line_data.part_id,
-        description=line_data.description,
+        description=description,
         quantity=line_data.quantity,
         unit_price=line_data.unit_price,
         qty_pending=line_data.quantity
@@ -562,7 +603,7 @@ def add_po_line(po_id: int, line_data: POLineItemCreate, db: Session = Depends(g
     db.flush()
 
     # Create snapshot
-    create_po_snapshot(db, po, "edit", f"Added line item: {line_data.description or 'Part'}")
+    create_po_snapshot(db, po, "edit", f"Added line item: {description}")
 
     db.commit()
     db.refresh(db_line)
@@ -602,14 +643,15 @@ def update_po_line(
         part = db.query(Part).filter(Part.id == line_data.part_id).first()
         if not part:
             raise HTTPException(status_code=400, detail="Part not found")
+        # Blank text resets the line to the inventory description
+        description = resolve_part_line_description(part, line_data.description)
 
     elif line_data.item_type == "misc":
-        if not line_data.description:
-            raise HTTPException(status_code=400, detail="description required for misc line items")
+        description = require_misc_description(line_data.description)  # trimmed; blank -> 400
 
     db_line.item_type = line_data.item_type
     db_line.part_id = line_data.part_id
-    db_line.description = line_data.description
+    db_line.description = description
     db_line.quantity = line_data.quantity
     db_line.unit_price = line_data.unit_price
 
@@ -767,8 +809,8 @@ def commit_po_edits(po_id: int, request: POCommitEditsRequest, db: Session = Dep
                 if not part:
                     raise HTTPException(status_code=400, detail=f"Part {effective_part_id} not found")
             elif effective_item_type == "misc":
-                if not edit.description and not db_line.description:
-                    raise HTTPException(status_code=400, detail="description required for misc line items")
+                # Text sent must not be blank; text omitted keeps the stored text, which must exist
+                require_misc_description(edit.description if edit.description is not None else db_line.description)
 
             # The editor sends only the fields the user changed, so a price-only
             # edit arrives with no quantity and a quantity-only edit with no price.
@@ -787,10 +829,23 @@ def commit_po_edits(po_id: int, request: POCommitEditsRequest, db: Session = Dep
                     detail=f"Cannot reduce quantity below already received amount ({db_line.qty_received})"
                 )
 
+            # Work out the description before part_id is overwritten below
+            if effective_item_type == "part" and edit.description is not None:
+                # Edited text on a part line; blank resets it to the inventory description
+                new_description = resolve_part_line_description(part, edit.description)
+            elif effective_item_type == "part" and effective_part_id != db_line.part_id:
+                # Swapped to another part with no new text: take that part's description
+                new_description = part.description
+            else:
+                # Misc lines take the trimmed text as sent; anything omitted keeps the stored value
+                new_description = (
+                    require_misc_description(edit.description) if edit.description is not None else db_line.description
+                )
+
             # Update fields (every value falls back to the existing one when omitted)
             db_line.item_type = effective_item_type
             db_line.part_id = edit.part_id if edit.part_id is not None else db_line.part_id
-            db_line.description = edit.description if edit.description is not None else db_line.description
+            db_line.description = new_description
             db_line.quantity = effective_quantity
             db_line.unit_price = effective_unit_price
 
@@ -816,9 +871,10 @@ def commit_po_edits(po_id: int, request: POCommitEditsRequest, db: Session = Dep
                 part = db.query(Part).filter(Part.id == add.part_id).first()
                 if not part:
                     raise HTTPException(status_code=400, detail=f"Part {add.part_id} not found")
+                # Part lines keep their own copy of the description (inventory text by default)
+                add_description = resolve_part_line_description(part, add.description)
             elif add.item_type == "misc":
-                if not add.description:
-                    raise HTTPException(status_code=400, detail="description required for misc line items")
+                add_description = require_misc_description(add.description)  # trimmed; blank -> 400
 
             # Validate quantity is positive
             if add.quantity <= 0:
@@ -829,7 +885,7 @@ def commit_po_edits(po_id: int, request: POCommitEditsRequest, db: Session = Dep
                 purchase_order_id=po_id,
                 item_type=add.item_type,
                 part_id=add.part_id,
-                description=add.description,
+                description=add_description,
                 quantity=add.quantity,
                 unit_price=add.unit_price,
                 qty_pending=add.quantity,

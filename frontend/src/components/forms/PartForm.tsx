@@ -11,6 +11,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { api } from "@/api/client"
 import type { Part, PartCreate, Labor, Profile } from "@/types"
 import { LaborForm } from "./LaborForm"
@@ -19,13 +29,16 @@ interface PartFormProps {
   part?: Part // If provided, we're editing; otherwise creating
   onSuccess?: (item?: Part) => void
   onCancel?: () => void
+  // When set, Save Changes on an existing part asks "are you sure?" with this message first
+  confirmSaveMessage?: string
 }
 
-export function PartForm({ part, onSuccess, onCancel }: PartFormProps) {
+export function PartForm({ part, onSuccess, onCancel, confirmSaveMessage }: PartFormProps) {
   const [laborItems, setLaborItems] = useState<Labor[]>([])
   const [vendors, setVendors] = useState<Profile[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)  // the are-you-sure prompt before saving
 
   const isEditing = !!part
 
@@ -115,8 +128,22 @@ export function PartForm({ part, onSuccess, onCancel }: PartFormProps) {
     return total
   }, 0)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  /**
+   * Submit the form: when editing with a confirm message, ask first; otherwise save.
+   * @param e - The form submit event.
+   */
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    if (isEditing && confirmSaveMessage) {
+      setConfirmOpen(true)  // savePart runs only after "Save to inventory"
+      return
+    }
+    void savePart()
+  }
+
+  /** Create or update the part in inventory, then hand the result to onSuccess. */
+  const savePart = async () => {
+    setConfirmOpen(false)
     setLoading(true)
     setError(null)
 
@@ -374,6 +401,20 @@ export function PartForm({ part, onSuccess, onCancel }: PartFormProps) {
           {loading ? (isEditing ? "Saving..." : "Creating...") : (isEditing ? "Save Changes" : "Create Part")}
         </Button>
       </div>
+
+      {/* Are-you-sure before an inventory edit made from another screen (e.g. a PO) */}
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save changes to inventory?</AlertDialogTitle>
+            <AlertDialogDescription>{confirmSaveMessage}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void savePart()}>Save to inventory</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </form>
   )
 }
