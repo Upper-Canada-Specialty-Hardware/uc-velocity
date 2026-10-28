@@ -15,8 +15,7 @@ Guarantees, in order of importance:
 Attribution note: events are NOT tagged with the acting user. The drop-in client
 carries one identity per envelope (it was built for a single-user desktop app), so
 tagging a shared server-side client per request would misattribute events across
-concurrent users. Per-user analytics is deliberately left to a follow-up; user
-identity IS handled correctly on the feedback path, which sends it per request.
+concurrent users. Per-user analytics is deliberately left to a follow-up.
 """
 import time
 from typing import Optional
