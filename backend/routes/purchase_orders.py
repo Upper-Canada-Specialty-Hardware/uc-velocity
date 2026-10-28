@@ -68,6 +68,27 @@ def compute_po_status(line_items) -> POStatus:
     return POStatus.sent                                                # partially received
 
 
+def require_misc_description(description: Optional[str]) -> str:
+    """The trimmed text of a PO misc line, which must not be blank.
+
+    A misc line has no inventory part to fall back on, so its text is all the
+    PDFs can print; blank or whitespace-only text would print "Unknown item".
+
+    Args:
+        description: Text sent by the editor or an API caller; may be None.
+
+    Returns:
+        The text with surrounding whitespace removed.
+
+    Raises:
+        HTTPException: 400 when the text is missing, empty or only whitespace.
+    """
+    text = (description or "").strip()  # "   " counts as blank
+    if not text:
+        raise HTTPException(status_code=400, detail="description required for misc line items")
+    return text
+
+
 def create_po_snapshot(
     db: Session,
     po: PurchaseOrder,
@@ -590,9 +611,7 @@ def add_po_line(po_id: int, line_data: POLineItemCreate, db: Session = Depends(g
         description = resolve_part_line_description(part, line_data.description)
 
     elif line_data.item_type == "misc":
-        if not line_data.description:
-            raise HTTPException(status_code=400, detail="description required for misc line items")
-        description = line_data.description
+        description = require_misc_description(line_data.description)  # trimmed; blank -> 400
 
     db_line = POLineItem(
         purchase_order_id=po_id,
@@ -651,9 +670,7 @@ def update_po_line(
         description = resolve_part_line_description(part, line_data.description)
 
     elif line_data.item_type == "misc":
-        if not line_data.description:
-            raise HTTPException(status_code=400, detail="description required for misc line items")
-        description = line_data.description
+        description = require_misc_description(line_data.description)  # trimmed; blank -> 400
 
     db_line.item_type = line_data.item_type
     db_line.part_id = line_data.part_id
@@ -815,8 +832,8 @@ def commit_po_edits(po_id: int, request: POCommitEditsRequest, db: Session = Dep
                 if not part:
                     raise HTTPException(status_code=400, detail=f"Part {effective_part_id} not found")
             elif effective_item_type == "misc":
-                if not edit.description and not db_line.description:
-                    raise HTTPException(status_code=400, detail="description required for misc line items")
+                # Text sent must not be blank; text omitted keeps the stored text, which must exist
+                require_misc_description(edit.description if edit.description is not None else db_line.description)
 
             # The editor sends only the fields the user changed, so a price-only
             # edit arrives with no quantity and a quantity-only edit with no price.
@@ -843,8 +860,10 @@ def commit_po_edits(po_id: int, request: POCommitEditsRequest, db: Session = Dep
                 # Swapped to another part with no new text: take that part's description
                 new_description = part.description
             else:
-                # Misc lines take the text as sent; anything omitted keeps the stored value
-                new_description = edit.description if edit.description is not None else db_line.description
+                # Misc lines take the trimmed text as sent; anything omitted keeps the stored value
+                new_description = (
+                    require_misc_description(edit.description) if edit.description is not None else db_line.description
+                )
 
             # Update fields (every value falls back to the existing one when omitted)
             db_line.item_type = effective_item_type
@@ -878,9 +897,7 @@ def commit_po_edits(po_id: int, request: POCommitEditsRequest, db: Session = Dep
                 # Part lines keep their own copy of the description (inventory text by default)
                 add_description = resolve_part_line_description(part, add.description)
             elif add.item_type == "misc":
-                if not add.description:
-                    raise HTTPException(status_code=400, detail="description required for misc line items")
-                add_description = add.description
+                add_description = require_misc_description(add.description)  # trimmed; blank -> 400
 
             # Validate quantity is positive
             if add.quantity <= 0:

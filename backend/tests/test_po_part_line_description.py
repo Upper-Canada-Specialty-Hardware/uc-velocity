@@ -178,3 +178,52 @@ def test_single_line_endpoint_stores_inventory_text(db):
         assert r.json()["description"] == INVENTORY_TEXT
     finally:
         _cleanup(db, po, part, project, vendor, customer)
+
+
+def _add_misc(description):
+    """A staged 'add' change for one misc line with the given text."""
+    return {"action": "add", "item_type": "misc", "description": description,
+            "quantity": 1, "unit_price": 5.0}
+
+
+def test_misc_line_text_is_trimmed_and_blank_is_refused(db):
+    """Misc text is stored trimmed; blank or whitespace-only text is a 400 on add and edit."""
+    customer, project, vendor, part, po = _make_draft_po(db)
+    try:
+        assert _commit(po.id, _add_misc("   ")).status_code == 400  # whitespace-only add refused
+        assert _lines(db, po.id) == []                               # whole commit rolled back
+
+        r = _commit(po.id, _add_misc("  [TEST] shipping  "))
+        assert r.status_code == 200, r.text
+        [line] = _lines(db, po.id)
+        assert line.description == "[TEST] shipping"                 # stored trimmed
+
+        for blank in ("", "   "):                                    # explicit blank edit refused
+            r = _commit(po.id, {"action": "edit", "line_item_id": line.id, "description": blank})
+            assert r.status_code == 400, r.text
+        [line] = _lines(db, po.id)
+        assert line.description == "[TEST] shipping"                 # text unchanged
+
+        r = _commit(po.id, {"action": "edit", "line_item_id": line.id, "quantity": 3})
+        assert r.status_code == 200, r.text                          # omitted text keeps the stored text
+        [line] = _lines(db, po.id)
+        assert line.description == "[TEST] shipping" and line.quantity == 3
+    finally:
+        _cleanup(db, po, part, project, vendor, customer)
+
+
+def test_single_line_endpoints_refuse_blank_misc_text(db):
+    """The one-line add and update endpoints refuse blank misc text too."""
+    customer, project, vendor, part, po = _make_draft_po(db)
+    try:
+        body = {"item_type": "misc", "description": "  ", "quantity": 1, "unit_price": 5.0}
+        assert client.post(f"/purchase-orders/{po.id}/lines", json=body).status_code == 400
+
+        r = client.post(f"/purchase-orders/{po.id}/lines", json={**body, "description": " [TEST] crate "})
+        assert r.status_code == 200, r.text
+        assert r.json()["description"] == "[TEST] crate"
+        line_id = r.json()["id"]
+        r = client.put(f"/purchase-orders/{po.id}/lines/{line_id}", json=body)
+        assert r.status_code == 400, r.text
+    finally:
+        _cleanup(db, po, part, project, vendor, customer)

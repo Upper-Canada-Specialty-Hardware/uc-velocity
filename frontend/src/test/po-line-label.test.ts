@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getPOLineDescriptionText, getPOLineLabel } from '@/lib/poLines'
+import { getPOLineDescriptionText, getPOLineLabel, isInventoryDescription } from '@/lib/poLines'
 import type { Part } from '@/types'
 
 /** An inventory part with only the fields the PO line label reads. */
@@ -29,5 +29,13 @@ describe('PO line description (issue #283)', () => {
 
   it('shows the stored text of a part line whose inventory part is gone', () => {
     expect(getPOLineLabel({ item_type: 'part', description: 'Imported line' }, 'Unknown item')).toBe('Imported line')
+  })
+
+  it('treats blank or inventory wording (spaces aside) as the inventory text', () => {
+    const padded = { ...part, description: 'Push bar ' } as Part        // imported text with a trailing space
+    expect(isInventoryDescription({ item_type: 'part', part: padded }, 'Push bar')).toBe(true)
+    expect(isInventoryDescription({ item_type: 'part', part }, '  ')).toBe(true)
+    expect(isInventoryDescription({ item_type: 'part', part }, 'Push bar, anodized')).toBe(false)
+    expect(isInventoryDescription({ item_type: 'misc', description: 'Push bar' }, 'Push bar')).toBe(false)  // misc has no inventory
   })
 })

@@ -66,7 +66,7 @@ import { formatDate, formatDateTime, formatCurrency } from "@/lib/format"
 import { PartForm } from "@/components/forms/PartForm"
 import { POAuditTrail } from "./POAuditTrail"
 import { EditCreatedAtDialog } from "./EditCreatedAtDialog"
-import { getPOLineDescriptionText, getPOLineLabel } from "@/lib/poLines"
+import { getPOLineDescriptionText, getPOLineLabel, isInventoryDescription } from "@/lib/poLines"
 
 interface POEditorProps {
   poId: number
@@ -100,6 +100,8 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
 
   // ===== Add Form Fields =====
   const [selectedPartId, setSelectedPartId] = useState<string>("")
+  // Text for the part line being added; starts as the picked part's inventory text, this PO only
+  const [addDescription, setAddDescription] = useState("")
   const [miscDescription, setMiscDescription] = useState("")
   const [quantity, setQuantity] = useState("1")
   const [unitPrice, setUnitPrice] = useState("")
@@ -450,6 +452,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     setAddDialogType(type)
     setAddDialogMode("select")
     setSelectedPartId("")
+    setAddDescription("")
     setMiscDescription("")
     setQuantity("1")
     setUnitPrice("")
@@ -461,11 +464,25 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
       ? parts.find((p) => p.id === parseInt(selectedPartId)) ?? null
       : null
 
+  /**
+   * Pick the part to add: the line's text starts as that part's inventory description.
+   * @param partId - The picked part's id, as the select's string value.
+   * @param pool - Parts to look it up in (defaults to the loaded list; a just-created part is passed in).
+   */
+  const handleSelectAddPart = (partId: string, pool: Part[] = parts) => {
+    setSelectedPartId(partId)
+    setAddDescription(pool.find((p) => p.id.toString() === partId)?.description ?? "")  // prefill, editable
+  }
+
   // After editing the part master inline, refresh the local cache so the details
   // panel + add-pricing reflect the new values, then return to the picker.
   const handlePartUpdateSuccess = (updated?: Part) => {
     if (updated) {
       setParts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+      // Untouched line text follows the new inventory wording; typed text is kept
+      if (selectedPart && isInventoryDescription({ item_type: "part", part: selectedPart }, addDescription)) {
+        setAddDescription(updated.description)
+      }
     }
     setAddDialogMode("select")
   }
@@ -507,11 +524,16 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
 
       // For POs we use base cost (no markup)
       const partUnitPrice = part.cost
+      // Inventory wording (or blank) sends no text, so the server copies the inventory text
+      const partDescription = isInventoryDescription({ item_type: "part", part }, addDescription)
+        ? undefined
+        : addDescription.trim()
 
       if (editorMode === "edit") {
         stageAdd({
           item_type: "part",
           part_id: part.id,
+          description: partDescription,  // this PO only; never written to inventory
           quantity: qty,
           unit_price: partUnitPrice,
           part: part,
@@ -525,6 +547,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
         await api.purchaseOrders.addLine(poId, {
           item_type: "part",
           part_id: part.id,
+          description: partDescription,  // this PO only; never written to inventory
           quantity: qty,
           unit_price: partUnitPrice,
         })
@@ -572,11 +595,10 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
 
     // Staged add: overwrite the row in client state; nothing hits the API until Commit.
     if (editingStagedAdd) {
+      if (editingStagedAdd.item_type === "misc" && newDescription === "") return  // misc lines need text (Save is disabled)
       // A part row typed back to its inventory wording (or cleared) sends no text,
       // so the server stores the inventory description as usual
-      const isInventoryText =
-        editingStagedAdd.item_type === "part" &&
-        (newDescription === "" || newDescription === editingStagedAdd.part?.description)
+      const isInventoryText = isInventoryDescription(editingStagedAdd, newDescription)
       updateStagedAdd(editingStagedAdd.tempId, {
         quantity: newQuantity,
         unit_price: newUnitPrice,
@@ -592,12 +614,10 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
     if (editorMode === "edit") {
       const changes: Partial<Omit<StagedPOEdit, "originalItem">> = {}
 
-      if (newQuantity !== editingLineItem.quantity) {
-        changes.quantity = newQuantity
-      }
-      if (newUnitPrice !== (editingLineItem.unit_price ?? 0)) {
-        changes.unit_price = newUnitPrice
-      }
+      // Every field is set, to undefined when it matches the committed line, so a value
+      // typed back to the original drops an earlier staged change instead of keeping it
+      changes.quantity = newQuantity !== editingLineItem.quantity ? newQuantity : undefined
+      changes.unit_price = newUnitPrice !== (editingLineItem.unit_price ?? 0) ? newUnitPrice : undefined
       // Stage the text only when it differs from what the line shows now; setting
       // undefined otherwise also drops an earlier staged change the user typed back
       // (blank on a part line resets it to the inventory text on commit)
@@ -606,9 +626,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
       const blankMisc = editingLineItem.item_type === "misc" && newDescription === "" // misc lines need text
       changes.description = textChanged && !blankMisc ? newDescription : undefined
 
-      if (Object.keys(changes).length > 0) {
-        stageEdit(editingLineItem, changes)
-      }
+      stageEdit(editingLineItem, changes)  // drops the staged edit when nothing differs
 
       setEditDialogOpen(false)
       setEditingLineItem(null)
@@ -1854,6 +1872,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
       {/* Audit Trail */}
       {editorMode !== "edit" && (
         <POAuditTrail
+          parts={parts}
           purchaseOrderId={poId}
           currentVersion={po.current_version}
           onRevert={() => {
@@ -2070,7 +2089,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                       description: `$${(part.cost ?? 0).toFixed(2)}`,
                     }))}
                     value={selectedPartId}
-                    onChange={setSelectedPartId}
+                    onChange={(id) => handleSelectAddPart(id)}
                     placeholder="Select part"
                     searchPlaceholder="Search parts..."
                     emptyMessage="No parts found."
@@ -2080,7 +2099,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                     createForm={<PartForm />}
                     onCreateSuccess={(newPart) => {
                       setParts([...parts, newPart])
-                      setSelectedPartId(newPart.id.toString())
+                      handleSelectAddPart(newPart.id.toString(), [newPart])  // not in the parts list until re-render
                     }}
                   />
                 </div>
@@ -2101,7 +2120,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                       className="h-7 gap-2"
                     >
                       <Pencil className="h-3.5 w-3.5" />
-                      Edit details
+                      Edit inventory part
                     </Button>
                   </div>
                   <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
@@ -2134,7 +2153,25 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                       </div>
                     )}
                   </dl>
-                  <p className="text-xs text-muted-foreground">PO line items use the base cost.</p>
+                  <p className="text-xs text-muted-foreground">
+                    PO line items use the base cost. Edit inventory part changes this part for every future quote and PO.
+                  </p>
+                </div>
+              )}
+
+              {/* The new line's own text: prefilled from inventory, changes this PO only */}
+              {addDialogType === "part" && selectedPart && (
+                <div className="space-y-2">
+                  <Label htmlFor="po-add-description">Description (this PO only)</Label>
+                  <Input
+                    id="po-add-description"
+                    value={addDescription}
+                    onChange={(e) => setAddDescription(e.target.value)}
+                    placeholder={selectedPart.description}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Changes this PO only, not inventory. Clear it to use the inventory description.
+                  </p>
                 </div>
               )}
 
@@ -2242,6 +2279,9 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
                       Changes this PO only, not inventory. Clear it to use the inventory description.
                     </p>
                   )}
+                  {editTarget.item_type === "misc" && editDescription.trim() === "" && (
+                    <p className="text-xs text-destructive">Misc lines need a description.</p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -2272,7 +2312,10 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
             <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleEditLineItem}>
+            <Button
+              onClick={handleEditLineItem}
+              disabled={editTarget?.item_type === "misc" && editDescription.trim() === ""}  // misc lines need text
+            >
               {editingStagedAdd ? "Update New Item" : "Save Changes"}
             </Button>
           </DialogFooter>

@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { api } from "@/api/client"
 import { formatCurrency } from "@/lib/format"
-import type { POSnapshot, PORevertPreview } from "@/types"
+import type { Part, POSnapshot, PORevertPreview } from "@/types"
+import { getPOLineLabel } from "@/lib/poLines"
 import { RevertConfirmDialog } from "./RevertConfirmDialog"
 import {
   History,
@@ -19,12 +20,14 @@ import {
 } from "lucide-react"
 
 interface POAuditTrailProps {
+  parts?: Part[]  // inventory parts, to label snapshot lines (they store only part_id)
   purchaseOrderId: number
   currentVersion: number
   onRevert?: () => void
 }
 
-export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAuditTrailProps) {
+export function POAuditTrail({ parts = [], purchaseOrderId, currentVersion, onRevert }: POAuditTrailProps) {
+  const partsById = new Map(parts.map((p) => [p.id, p]))  // part_id -> part, for line labels
   const [snapshots, setSnapshots] = useState<POSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -297,7 +300,12 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
                               }`}
                             >
                               <span>
-                                {item.item_type}: {item.description || `ID ${item.original_line_item_id}`}
+                                {/* Same "part number - description" label as the editor and PDFs */}
+                                {item.item_type}:{" "}
+                                {getPOLineLabel(
+                                  { ...item, part: item.part_id != null ? partsById.get(item.part_id) : undefined },
+                                  `ID ${item.original_line_item_id}`,
+                                )}
                               </span>
                               <div className="flex gap-4 text-muted-foreground">
                                 <span>Qty: {item.quantity}</span>
