@@ -2227,6 +2227,7 @@ export function POEditor({ poId, onUpdate, onSelectPO, onMoved, onDirtyStateChan
             <div className="pt-4">
               <PartForm
                 part={selectedPart}
+                confirmSaveMessage="Edit inventory part changes this part for every future quote and PO."
                 onSuccess={handlePartUpdateSuccess}
                 onCancel={() => setAddDialogMode("select")}
               />
