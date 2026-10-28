@@ -281,13 +281,13 @@ export function POAuditTrail({ purchaseOrderId, currentVersion, onRevert }: POAu
                       )}
                     </div>
 
-                    {isExpanded && snapshot.line_items_states.length > 0 && (
+                    {isExpanded && snapshot.line_item_states.length > 0 && (
                       <div className="px-3 pb-3 pt-1 border-t bg-muted/30">
                         <p className="text-xs font-medium text-muted-foreground mb-2">
                           Line Items at this version:
                         </p>
                         <div className="space-y-1">
-                          {snapshot.line_items_states.map((item) => (
+                          {snapshot.line_item_states.map((item) => (
                             <div
                               key={item.id}
                               className={`flex items-center justify-between text-xs p-2 rounded ${
