@@ -591,7 +591,7 @@ export interface POSnapshot {
   actor_user_id?: string | null;
   actor_email?: string | null;
   receiving_id?: number;
-  line_items_states: POLineItemSnapshot[];
+  line_item_states: POLineItemSnapshot[];  // name the API sends (POSnapshot schema); a mismatch crashed the audit trail
 }
 
 // ===== PO Revert Preview =====
