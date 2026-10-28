@@ -22,6 +22,19 @@ export function getPOLineDescriptionText(line: POLineLike, description?: string)
 }
 
 /**
+ * Whether typed text on a part line is just its inventory description (or blank).
+ * New part lines send no text in that case, so the server copies the inventory text.
+ * @param line - A committed or staged PO line, or a part being added.
+ * @param text - The text the user typed.
+ * @returns True for a part line whose typed text is blank or the inventory wording; false otherwise.
+ */
+export function isInventoryDescription(line: POLineLike, text: string): boolean {
+  if (line.item_type !== 'part' || !line.part) return false // only part lines have inventory text
+  const typed = text.trim()
+  return typed === '' || typed === line.part.description.trim() // surrounding spaces don't count
+}
+
+/**
  * The full label of a PO line as screens and PDFs print it.
  * Part lines read "part number - description"; misc lines read their own text.
  * @param line - A committed or staged PO line.
