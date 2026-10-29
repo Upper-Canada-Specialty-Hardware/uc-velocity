@@ -1096,6 +1096,7 @@ async def import_legacy_data(
             from_lines = compute_status_from_lines(lines, quote.client_po_number)  # Closed / Invoiced / Work Order / Draft
             if wo_legacy_id in closed_wos:                              # Vision's verdict wins
                 quote.status = "Closed"
+                quote.vision_closed = True                              # so the app's rule keeps it Closed
                 if not lines or not any(li.qty_fulfilled > 0 for li in lines):
                     closed_over_lines += 1                              # nothing shipped on record, still closed
             elif from_lines in ("Draft", "Work Order") and any(li.qty_fulfilled < 0 for li in lines):
@@ -1103,6 +1104,7 @@ async def import_legacy_data(
                 # positive fulfilment only, so decide here: nothing left -> Closed,
                 # positive lines still pending -> Invoiced.
                 quote.status = "Closed" if all(li.qty_pending == 0 for li in lines) else "Invoiced"
+                quote.vision_closed = quote.status == "Closed" or None  # credit-only job Vision finished
             else:
                 quote.status = from_lines
             if quote.status == "Closed":

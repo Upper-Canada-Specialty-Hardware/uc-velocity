@@ -355,7 +355,7 @@ def format_quote_number(uca_project_number: str, quote_sequence: int, current_ve
     return f"{uca_project_number}-{quote_sequence:04d}-{current_version}"
 
 
-def compute_status_from_lines(line_items, client_po_number: Optional[str]) -> str:
+def compute_status_from_lines(line_items, client_po_number: Optional[str], vision_closed: Optional[bool] = None) -> str:
     """Derive a quote's status from its line fulfillment and client PO.
 
     This is THE status rule. ``compute_quote_status`` wraps it for a loaded ORM
@@ -366,6 +366,9 @@ def compute_status_from_lines(line_items, client_po_number: Optional[str]) -> st
         line_items: The quote's line items (anything with ``qty_fulfilled`` and
             ``qty_pending``); may be empty.
         client_po_number: The quote's client PO number, or None.
+        vision_closed: True when Vision shows the job finished (``Quote.vision_closed``).
+            With nothing pending, such a quote is Closed even when nothing
+            positive was fulfilled (zero-quantity or credit-only jobs).
 
     Returns:
         "Closed" (every line fulfilled, something fulfilled), "Invoiced" (something
@@ -376,7 +379,10 @@ def compute_status_from_lines(line_items, client_po_number: Optional[str]) -> st
     has_fulfillment = any(li.qty_fulfilled > 0 for li in line_items)      # anything shipped/invoiced?
     all_fulfilled = has_line_items and all(li.qty_pending == 0 for li in line_items)  # nothing left?
     has_client_po = bool(client_po_number and client_po_number.strip())   # PO makes a Work Order
+    nothing_pending = all(li.qty_pending == 0 for li in line_items)       # True for no lines too
 
+    if vision_closed and nothing_pending:                                 # finished in Vision, nothing reopened it
+        return "Closed"
     if all_fulfilled and has_fulfillment:
         return "Closed"
     if has_fulfillment:
@@ -392,7 +398,7 @@ def compute_quote_status(quote: Quote) -> str:
     Requires quote.line_items to be loaded. Delegates to
     ``compute_status_from_lines`` so there is one rule.
     """
-    return compute_status_from_lines(quote.line_items, quote.client_po_number)
+    return compute_status_from_lines(quote.line_items, quote.client_po_number, quote.vision_closed)
 
 
 def populate_quote_number(quote: Quote, uca_project_number: str) -> QuoteSchema:
