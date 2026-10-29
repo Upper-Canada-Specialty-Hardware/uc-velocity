@@ -180,14 +180,33 @@ def vision_version(v: dict, uca: str) -> dict:
     return {"project": project, "work_orders": by(v["quotes"]), "pos": by(v["pos"])}
 
 
+def build_file_parts(uca: str, last_activity, velocity_id: Optional[int], vis: dict, vel: Optional[dict]) -> dict:
+    """Assemble one project's archive file from parts already in hand (no database access).
+
+    The admin build route (#304) uses this: it has Vision's version from the
+    request and reads Velocity's rows itself, so it never needs the Vision export.
+
+    Args:
+        uca: The UCA project number.
+        last_activity: Newest Vision activity (a date, or its string form in a stored file).
+        velocity_id: The Velocity project id, or None for a Vision-only project.
+        vis: Vision's version (see :func:`vision_version`): project, work orders, POs.
+        vel: Velocity's rows (see :func:`velocity_rows`), or None when not in Velocity.
+
+    Returns:
+        The archive file dict (not yet JSON-normalised: the caller stores it).
+    """
+    p = vis.get("project") or {}                           # the Vision project row, or none for a Velocity-only match
+    return {"format": FORMAT, "uca": uca, "name": p.get("name"), "customer": p.get("customer"),
+            "created_on": p.get("created_on"), "last_activity": last_activity,
+            "velocity_project_id": velocity_id, "vision": vis, "velocity": vel}
+
+
 def build_file(v: dict, db, pick: dict) -> dict:
-    """One project's archive file."""
-    vis = vision_version(v, pick["uca"])
-    vel = velocity_rows(db, pick["velocity_id"]) if pick["velocity_id"] else None
-    p = vis["project"] or {}
-    return {"format": FORMAT, "uca": pick["uca"], "name": p.get("name"), "customer": p.get("customer"),
-            "created_on": p.get("created_on"), "last_activity": pick["last_activity"],
-            "velocity_project_id": pick["velocity_id"], "vision": vis, "velocity": vel}
+    """One project's archive file (local build path: reads the export and the database)."""
+    vis = vision_version(v, pick["uca"])                   # Vision's version from the export
+    vel = velocity_rows(db, pick["velocity_id"]) if pick["velocity_id"] else None   # Velocity's rows, if any
+    return build_file_parts(pick["uca"], pick["last_activity"], pick["velocity_id"], vis, vel)
 
 
 def index_entry(f: dict, key: str) -> dict:

@@ -39,14 +39,15 @@ def old_project(monkeypatch, tmp_path):
     db.add_all([QuoteLineItem(quote_id=q.id, item_type="misc", description=d, quantity=1, unit_price=5,
                               qty_fulfilled=1, qty_pending=0) for d in ("a", "b")])
     db.commit()
-    yield {"db": db, "project": proj, "quote": q, "customer": cust}
+    pid, qid, cid = proj.id, q.id, cust.id                 # plain ids: a test may delete these rows, expiring the ORM objects
+    yield {"db": db, "project": proj, "quote": q, "customer": cust, "project_id": pid, "quote_id": qid}
     db.rollback()
     from models import Invoice
-    db.query(Invoice).filter(Invoice.quote_id == q.id).delete()
-    db.query(QuoteLineItem).filter(QuoteLineItem.quote_id == q.id).delete()
-    db.query(Quote).filter(Quote.project_id == proj.id).delete()
-    db.query(Project).filter(Project.id == proj.id).delete()
-    db.query(Profile).filter(Profile.id == cust.id).delete()
+    db.query(Invoice).filter(Invoice.quote_id == qid).delete()           # by captured id, not a (possibly gone) object
+    db.query(QuoteLineItem).filter(QuoteLineItem.quote_id == qid).delete()
+    db.query(Quote).filter(Quote.project_id == pid).delete()
+    db.query(Project).filter(Project.id == pid).delete()
+    db.query(Profile).filter(Profile.id == cid).delete()
     db.commit()
     db.close()
 
@@ -83,9 +84,10 @@ def test_remove_deletes_exactly_the_archived_rows(old_project):
     assert len(f["velocity"]["quote_line_items"]) == 2 and len(f["velocity"]["projects"]) == 1
     out = remove_project(db, f, JUNE)
     db.commit()
+    db.expunge_all()                                       # the rows are gone; drop the stale objects so get() reloads
     assert out["quote_line_items"] == 2 and out["quotes"] == 1 and out["projects"] == 1
-    assert db.get(Project, old_project["project"].id) is None
-    assert db.query(QuoteLineItem).filter(QuoteLineItem.quote_id == old_project["quote"].id).count() == 0
+    assert db.get(Project, old_project["project_id"]) is None
+    assert db.query(QuoteLineItem).filter(QuoteLineItem.quote_id == old_project["quote_id"]).count() == 0
 
 
 def test_remove_refuses_a_project_that_changed_after_it_was_archived(old_project):
@@ -125,3 +127,61 @@ def test_admin_routes_write_read_back_and_remove_once(old_project):
     assert again["removed"][key]["quotes"] == 1 and not again["refused"]    # answered from the removal record
     got = c.get(f"/archive/projects/{f['uca']}").json()
     assert got["uca"] == f["uca"] and c.get("/archive/projects/..%2Fx").status_code in (400, 404)
+
+
+def test_build_route_builds_a_file_then_finish_writes_the_index(old_project):
+    from fastapi.testclient import TestClient
+    import main
+    from models import Invoice, Project
+    from scripts.vision_delta.archive import PREFIX
+    c = TestClient(main.app)
+    h = {"X-Cutover-Key": "test-key"}
+    uca = old_project["project"].uca_project_number
+    body = {"active_since": "2018-01-01", "june_day": str(JUNE),
+            "projects": [{"uca": uca, "last_activity": "2010-02-01",
+                          "vision": {"project": None, "work_orders": [], "pos": []}}]}
+    key = f"{PREFIX}/projects/{uca}.json"
+    assert c.post("/admin/vision-cutover/archive/build", json=body,
+                  headers={"X-Cutover-Key": "no"}).status_code == 403          # wrong key
+    r = c.post("/admin/vision-cutover/archive/build", json=body, headers=h)
+    assert r.status_code == 200, r.text
+    res = r.json()["projects"][uca]
+    assert res["key"] == key and res["velocity_project_id"] == old_project["project_id"]
+    assert len(res["rows"]["quote_line_items"]) == 2 and len(res["rows"]["projects"]) == 1   # Velocity's rows read here
+    assert res["index"]["uca"] == uca and res["index"]["velocity_quotes"] == 1
+    got = c.get(f"/archive/projects/{uca}").json()                             # the file is in the store now
+    assert got["uca"] == uca and len(got["velocity"]["quote_line_items"]) == 2
+    fin = c.post("/admin/vision-cutover/archive/finish", headers=h, json={
+        "meta": {"june_day": str(JUNE)}, "index": [res["index"]],
+        "manifest": {key: {"sha256": res["sha256"], "velocity_project_id": res["velocity_project_id"],
+                           "rows": res["rows"]}}})
+    assert fin.status_code == 200 and fin.json() == {"index": 1, "files": 1}
+    assert old_project["db"].get(Project, old_project["project_id"]) is not None   # build only reads the database
+    db = old_project["db"]                                                      # a touched project is kept, not built
+    db.add(Invoice(quote_id=old_project["quote_id"], invoice_sequence=1, quote_version=0, current_version=0))
+    db.commit()
+    kept = c.post("/admin/vision-cutover/archive/build", json=body, headers=h).json()["projects"][uca]
+    assert kept["kept"] == ["an invoice"]
+    db.query(Invoice).filter(Invoice.quote_id == old_project["quote_id"]).delete()
+    db.commit()
+
+
+def test_build_again_after_removal_keeps_the_stored_file(old_project, tmp_path):
+    from fastapi.testclient import TestClient
+    import main
+    from log_store import FolderStore
+    from models import QuoteLineItem
+    from scripts.vision_delta.archive import PREFIX, sha
+    c, h = TestClient(main.app), {"X-Cutover-Key": "test-key"}
+    uca = old_project["project"].uca_project_number
+    body = {"june_day": str(JUNE), "projects": [{"uca": uca, "last_activity": "2010-02-01",
+                                                 "vision": {"project": None, "work_orders": [], "pos": []}}]}
+    first = c.post("/admin/vision-cutover/archive/build", json=body, headers=h).json()["projects"][uca]
+    store = FolderStore(str(tmp_path / "store"))           # the fixture's store folder
+    store.put_json(f"{PREFIX}/removed/{uca}.json", {"uca": uca, "rows": {}})   # as if removal ran
+    db = old_project["db"]
+    db.query(QuoteLineItem).filter(QuoteLineItem.quote_id == old_project["quote_id"]).delete()
+    db.commit()                                            # the live rows changed: a rebuild would differ
+    again = c.post("/admin/vision-cutover/archive/build", json=body, headers=h).json()["projects"][uca]
+    assert again == first                                  # the stored file, not a rebuild from what is left
+    assert sha(store.get_json(first["key"])) == first["sha256"]
