@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum, Table, DateTime, Boolean, UniqueConstraint, Text, Index, text, func
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum, Table, DateTime, Boolean, UniqueConstraint, Text, Index, JSON, text, func
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -231,6 +231,9 @@ class Project(Base):
     ucsh_project_number = Column(String, nullable=True)
     uca_project_number = Column(String, unique=True, nullable=False)
     project_lead = Column(String, nullable=True)  # Static contact name
+    # UCA number Vision used; differs from uca_project_number when both systems
+    # gave one number to two projects after the June import (shown to staff)
+    vision_project_number = Column(String, nullable=True)
     legacy_source = _legacy_source_col()  # Vision import: which source table
     legacy_id = _legacy_id_col()          # Vision import: source row's id
     __table_args__ = (_legacy_unique_index("projects"),)
@@ -266,6 +269,12 @@ class Quote(Base):
     misc_markup_percent = Column(Float, nullable=True)  # Section-level markup for misc
     cost_code_id = Column(Integer, ForeignKey('cost_codes.id'), nullable=True)
     legacy_imported = Column(Boolean, nullable=False, server_default='false')
+    # Vision work order this quote is, or that staff confirmed it is the same job as.
+    # Not unique: a job typed into both systems has two quotes with one number.
+    vision_wo_number = Column(Integer, nullable=True, index=True)
+    # True when Vision shows the job finished: Closed once nothing is pending, even
+    # with only zero-quantity or credit lines (see compute_status_from_lines)
+    vision_closed = Column(Boolean, nullable=True)
     legacy_source = _legacy_source_col()  # Vision import: which source table
     legacy_id = _legacy_id_col()          # Vision import: source row's id
 
@@ -327,6 +336,7 @@ class PurchaseOrder(Base):
     status = Column(Enum(POStatus), default=POStatus.draft)
     cost_code_id = Column(Integer, ForeignKey('cost_codes.id'), nullable=True)
     legacy_imported = Column(Boolean, nullable=False, server_default='false')
+    vision_po_number = Column(String, nullable=True)  # PO number Vision printed (e.g. A3670-05004-JC)
     legacy_source = _legacy_source_col()  # Vision import: which source table
     legacy_id = _legacy_id_col()          # Vision import: source row's id
 
@@ -638,3 +648,54 @@ class ClerkEmailDelivery(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Vision cutover log
+# --------------------------------------------------------------------------- #
+# Written by scripts/vision_delta in the same transaction as the changes it
+# records, so a committed run's log matches the data exactly.
+
+class VisionSyncRun(Base):
+    """One run of the Vision cutover tool."""
+
+    __tablename__ = "vision_sync_runs"
+
+    id = Column(Integer, primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    mode = Column(String, nullable=False)                 # "dry run" or "commit"
+    actor = Column(String, nullable=True)                 # who ran it
+    vision_export = Column(String, nullable=True)         # folder the CSVs came from
+    export_fingerprint = Column(JSON, nullable=True)      # CSV name -> sha256, proves which export was used
+    june_cutoff = Column(String, nullable=True)
+    counts_before = Column(JSON, nullable=True)           # table -> row count
+    counts_after = Column(JSON, nullable=True)
+    totals = Column(JSON, nullable=True)                  # action -> number of changes
+    verify_status = Column(String, nullable=True)         # "pass" / "fail", set by the verify step
+    verified_at = Column(DateTime, nullable=True)
+    verify_detail = Column(JSON, nullable=True)
+
+    changes = relationship("VisionSyncChange", back_populates="run")
+
+
+class VisionSyncChange(Base):
+    """One change a cutover run made, or a difference it left for a person."""
+
+    __tablename__ = "vision_sync_changes"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("vision_sync_runs.id"), nullable=False, index=True)
+    level = Column(String, nullable=False)                # "quotes", "quote lines", "projects", ...
+    action = Column(String, nullable=False)               # added / updated / stamped / kept / skipped / failed
+    record_table = Column(String, nullable=True)          # Velocity table written
+    record_id = Column(Integer, nullable=True)            # Velocity row id
+    vision_key = Column(String, nullable=True)            # Vision id / work order / UCA number
+    project = Column(String, nullable=True)
+    context = Column(Text, nullable=True)
+    field = Column(String, nullable=True)
+    before = Column(Text, nullable=True)                  # value before (None for an insert)
+    after = Column(Text, nullable=True)                   # value after
+    reason = Column(Text, nullable=True)
+
+    run = relationship("VisionSyncRun", back_populates="changes")
