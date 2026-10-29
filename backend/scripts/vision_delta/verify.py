@@ -3,6 +3,12 @@
 Run from ``backend/`` right after ``python -m scripts.vision_delta.apply --commit``::
 
     python -m scripts.vision_delta.verify --csv <export folder> --target <postgres url> --run <run id> --out <folder>
+                                         [--log-dir <push.py out>/log]
+
+A run made from a plan (plan.py, then push.py) keeps its change log in the log
+store, not in ``vision_sync_changes``: pass the local copy push.py kept with
+``--log-dir``. Rows on projects the plan left for the archive (no Vision
+activity since the plan's ``active_since``) are not expected to be applied.
 
 Four checks, all read-only except the result written onto the run's own row
 in ``vision_sync_runs`` (``verify_status``, ``verified_at``, ``verify_detail``):
@@ -122,6 +128,30 @@ def read_back(db, changes: list[dict]) -> list[dict]:
     return problems
 
 
+def planned_log(run, log_dir: str) -> list[dict]:
+    """A planned run's change log, read from the local copy of the log store.
+
+    Args:
+        run: The run's row (``totals`` names every batch and left part with its log key).
+        log_dir: The local log folder (push.py's ``<out>/log``).
+
+    Returns:
+        Every logged row, shaped like ``vision_sync_changes`` rows.
+
+    Raises:
+        SystemExit: A log object is missing from the folder.
+    """
+    from log_store import FolderStore
+    store, out = FolderStore(log_dir), []
+    parts = list((run.totals.get("left") or {}).values()) + list((run.totals.get("batches") or {}).values())
+    for part in parts:
+        try:
+            out += [{**e, "run_id": run.id} for e in store.get_json(part["log"])]
+        except KeyError:
+            raise SystemExit(f"log {part['log']} is not in {log_dir}; run push.py again to fetch it")
+    return out
+
+
 def count_check(run, now: dict, added: Counter) -> list[dict]:
     """Table counts against the logged adds (check 3).
 
@@ -164,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--target", default=os.getenv("VISION_DELTA_TARGET_URL"), help="Velocity Postgres URL")
     ap.add_argument("--run", type=int, required=True, help="the run id apply.py printed")
     ap.add_argument("--out", required=True, help="output folder for verify.xlsx / verify.json")
+    ap.add_argument("--log-dir", help="a planned run's change log (push.py's <out>/log, or plan.py's for a local run)")
     args = ap.parse_args(argv)
     if not args.target:
         ap.error("--target (or VISION_DELTA_TARGET_URL) is required")
@@ -186,8 +217,15 @@ def main(argv: list[str] | None = None) -> int:
             if run is None or run.mode != "commit":
                 print(f"run {args.run} is not a committed run", file=sys.stderr)
                 return 2
-            log = [{c.name: getattr(ch, c.name) for c in VisionSyncChange.__table__.columns}
-                   for ch in db.query(VisionSyncChange).filter(VisionSyncChange.run_id == run.id)]
+            planned = (run.totals or {}).get("plan")      # made from a plan: the log is in the store
+            if planned:
+                if not args.log_dir:
+                    print("this run was made from a plan: pass --log-dir", file=sys.stderr)
+                    return 2
+                log = planned_log(run, args.log_dir)
+            else:
+                log = [{c.name: getattr(ch, c.name) for c in VisionSyncChange.__table__.columns}
+                       for ch in db.query(VisionSyncChange).filter(VisionSyncChange.run_id == run.id)]
 
             # 1. Same export
             prints = fingerprint(args.csv)
@@ -214,11 +252,18 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 conn.close()
             delta = compare.run(v, t, date.fromisoformat(run.june_cutoff))
+            archived = lambda label: False                  # a single-transaction run archives nothing
+            if planned and (run.totals or {}).get("active_since"):
+                from .plan import last_activity
+                since, active = date.fromisoformat(run.totals["active_since"]), last_activity(v, delta.project_map)
+                archived = lambda label: bool(label) and label in active and active[label] < since
             left = {key(c["level"], c["vision_key"], c["record_id"], c["field"]) for c in log if c["action"] in LEFT}
             still, new, info = [], [], []
             for r in delta.rows:
                 if r["kind"] in (compare.EXTRA, compare.COPY):
                     continue                                # only in Velocity: never touched
+                if archived(r["project"] or ""):
+                    continue                                # left for the archive by the plan
                 outcome, reason = rule(r)
                 logged = key(r["level"], r["vision_key"], r["velocity_key"], r["field"]) in left
                 row = {k: x for k, x in r.items() if not k.startswith("_")} | {"rule": reason}
@@ -230,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
                     info.append(row)                        # derived or recorded: reported only
                 else:
                     new.append(row)                         # a difference the run never saw
-            stamps = stamp_plan(delta)[1]
+            stamps = [r for r in stamp_plan(delta)[1] if not archived(r["project"] or "")]
             detail["nothing left"] = {"still to apply": len(still), "vision numbers to record": len(stamps),
                                       "new differences": len(new), "new information rows": len(info)}
 

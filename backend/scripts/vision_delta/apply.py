@@ -2,11 +2,15 @@
 
 Run from ``backend/``::
 
-    python -m scripts.vision_delta.apply --csv <export folder> --target <postgres url> --out <folder>
+    python -m scripts.vision_delta.apply --csv <export folder> --target <local postgres url> --out <folder>
                                          [--commit] [--decisions decisions.csv]
                                          [--june-cutoff YYYY-MM-DD] [--projects-since YYYY-MM-DD]
 
 then check it with ``python -m scripts.vision_delta.verify`` (see verify.py).
+
+It runs on a LOCAL copy only. Production is applied in measured batches
+through the admin API instead (plan.py, then push.py): one transaction this
+size filled the production volume on 2026-10-29.
 
 It runs the same compare as ``python -m scripts.vision_delta``, decides row by
 row what to do (see :func:`rule`), and writes in ONE database transaction:
@@ -414,10 +418,25 @@ class Writer:
         It keeps its Vision number unless Velocity uses that number for
         another project; then it gets the next free number, as the app numbers
         new projects. The Vision number is recorded on it either way.
+
+        The compare already chose which: its records are labelled with the
+        Vision number (kept) or ``"vision <number>"`` (renumbered). A kept
+        number that Velocity took after the compare skips the project, since
+        its records would otherwise land in the project now holding it (a
+        plan applied in batches meets this; one run in one transaction does not).
+
+        Raises:
+            Skip: The kept number was taken after the compare, or the customer is missing.
         """
         from models import Project
         from routes.projects import generate_next_uca_number
-        number = v["uca"] if v["uca"] not in self.projects else generate_next_uca_number(self.db)
+        label = self.delta.project_map.get(v["uca"], "")   # how the compare labelled its records
+        if v["uca"] not in self.projects:
+            number = v["uca"]                              # still free: keep it
+        elif label.startswith("vision "):
+            number = generate_next_uca_number(self.db)     # records follow the "vision" label: safe to renumber
+        else:
+            raise Skip(f"number {v['uca']} was taken in velocity after the compare")
         p = Project(name=v["name"], customer_id=self.profile_id("customer", v["customer"]),
                     created_on=v["created_on"] or datetime.utcnow(), status=v["status"], ucsh_project_number=v["ucsh"],
                     uca_project_number=number, project_lead=v["lead"], vision_project_number=v["uca"],
@@ -777,6 +796,9 @@ def stamp_plan(delta, updated_quotes: frozenset | set = frozenset()) -> tuple[li
     Only values that are missing or different are planned, so after a run the
     plan is empty (verify.py checks that). ``legacy_id`` is set only where it
     is empty: it is the exact key later compares pair on, never re-keyed.
+    A record that already carries its Vision id gets no Vision number either:
+    the id leads back to the Vision record, so the number would only cost
+    writes (about 50,000 on the production data).
 
     A quote Vision finished gets ``vision_closed``; unless the run already
     rewrote its lines (``updated_quotes``, whose status is set there), its
@@ -804,9 +826,10 @@ def stamp_plan(delta, updated_quotes: frozenset | set = frozenset()) -> tuple[li
         batch = []
         for v, t in pairs:
             values = {}
-            if number(v) is not None and number(v) != t.get(column):
+            keyed = t.get("legacy_id") is not None         # June import keyed it: Vision id already on it
+            if not keyed and number(v) is not None and number(v) != t.get(column):
                 values[column] = number(v)                 # the number Vision printed
-            if t.get("legacy_id") is None and vid(v) is not None:
+            if not keyed and vid(v) is not None:
                 values["legacy_id"], values["legacy_source"] = vid(v), SOURCE[level]   # already keyed: never re-keyed
             if level == "quotes" and vision_closed(v) and not t.get("vision_closed"):
                 values["vision_closed"] = True             # Vision finished it: Closed once nothing is pending
@@ -841,7 +864,45 @@ def stamp_plan(delta, updated_quotes: frozenset | set = frozenset()) -> tuple[li
 INSERT_ORDER = ["customers and vendors", "parts", "labour", "misc", "projects", "quotes", "pos"]
 
 
-def apply(db, delta, decisions: dict, holds: Optional[dict] = None) -> tuple[list[dict], "Writer"]:
+def report_row(row: dict, outcome: str, reason: str = "", record_id=None, written=None) -> dict:
+    """A compare row as a report row: its ``_ref`` dropped, the outcome added."""
+    return {**{k: v for k, v in row.items() if not k.startswith("_")}, "outcome": outcome, "reason": reason,
+            "record_id": record_id, "written": written}
+
+
+def decide(delta, decisions: dict, holds: Optional[dict] = None) -> tuple[list[dict], list[dict]]:
+    """Run every compare row through the rule, the holds and the decisions.
+
+    Args:
+        delta: The compare's results.
+        decisions: :func:`load_decisions` output.
+        holds: :func:`find_holds` output; rows it names wait for a person
+            (a decisions-file "apply" releases them).
+
+    Returns:
+        ``(to_apply, left)``: the compare rows to write (``_ref`` kept), and a
+        report row for every row left as it is (skipped, held, a conflict, information).
+    """
+    to_apply, left = [], []
+    for row in delta.rows:
+        outcome, reason = rule(row)
+        why = held(row, holds) if outcome == APPLIED else None
+        if why:
+            outcome, reason = SKIPPED, f"{HELD}: {why}"    # certain, but a person says whether
+        choice = decided(decisions, row)
+        if choice == "apply" and outcome == SKIPPED and not reason.startswith("only in velocity"):
+            outcome, reason = APPLIED, "decided: apply"    # a person overrides the default skip
+        elif choice == "skip" and outcome == APPLIED:
+            outcome, reason = SKIPPED, "decided: skip"
+        if outcome == APPLIED:
+            to_apply.append(row)
+        else:
+            left.append(report_row(row, outcome, reason))
+    return to_apply, left
+
+
+def apply(db, delta, decisions: dict, holds: Optional[dict] = None,
+          planned: bool = False) -> tuple[list[dict], "Writer"]:
     """Decide and write every row; returns the report rows and the writer.
 
     Each record is written inside its own savepoint, so a failure rolls back
@@ -854,6 +915,8 @@ def apply(db, delta, decisions: dict, holds: Optional[dict] = None) -> tuple[lis
         decisions: :func:`load_decisions` output.
         holds: :func:`find_holds` output; rows it names wait for a person
             (a decisions-file "apply" releases them).
+        planned: True when ``delta.rows`` were decided already (one batch of a
+            plan, see plan.py): every row is written, nothing is decided again.
 
     Returns:
         ``(report, writer)``: every compare row (plus rows the writer added:
@@ -867,8 +930,7 @@ def apply(db, delta, decisions: dict, holds: Optional[dict] = None) -> tuple[lis
     report: list[dict] = []
 
     def done(row, outcome, reason="", record_id=None, written=None):
-        report.append({**{k: v for k, v in row.items() if not k.startswith("_")}, "outcome": outcome, "reason": reason,
-                       "record_id": record_id, "written": written})
+        report.append(report_row(row, outcome, reason, record_id, written))
 
     def attempt(rows: list[dict], write: Callable[[], object]):
         """Write one record in a savepoint; record each row's outcome."""
@@ -887,22 +949,12 @@ def apply(db, delta, decisions: dict, holds: Optional[dict] = None) -> tuple[lis
         for item in result or [(r, APPLIED, "") for r in rows]:
             done(*item)
 
-    # 1. Decide every row
-    to_apply = []
-    for row in delta.rows:
-        outcome, reason = rule(row)
-        why = held(row, holds) if outcome == APPLIED else None
-        if why:
-            outcome, reason = SKIPPED, f"{HELD}: {why}"    # certain, but a person says whether
-        choice = decided(decisions, row)
-        if choice == "apply" and outcome == SKIPPED and not reason.startswith("only in velocity"):
-            outcome, reason = APPLIED, "decided: apply"    # a person overrides the default skip
-        elif choice == "skip" and outcome == APPLIED:
-            outcome, reason = SKIPPED, "decided: skip"
-        if outcome == APPLIED:
-            to_apply.append(row)
-        else:
-            done(row, outcome, reason)
+    # 1. Decide every row (a plan's batch was decided when the plan was made)
+    if planned:
+        to_apply = list(delta.rows)
+    else:
+        to_apply, left = decide(delta, decisions, holds)
+        report += left
 
     # 2. Inserts, in dependency order
     inserts = {
@@ -1163,6 +1215,9 @@ def main(argv: list[str] | None = None) -> int:
 
     started = time.time()
     host = urlparse(args.target).hostname
+    if host not in ("localhost", "127.0.0.1", "::1"):      # one big transaction crashed prod on 2026-10-29
+        ap.error(f"--target must be a local copy (got host {host}); production is applied in batches: "
+                 "scripts.vision_delta.plan, then scripts.vision_delta.push")
     mode = "commit" if args.commit else "dry run"
     print(f"vision export: {args.csv}\nvelocity:      {host}\nmode:          "
           f"{'COMMIT' if args.commit else 'dry run (rolled back)'}")
