@@ -10,3 +10,4 @@ alembic==1.13.1
 httpx==0.25.2
 PyJWT[crypto]==2.8.0
 Jinja2==3.1.6
+boto3==1.35.36
