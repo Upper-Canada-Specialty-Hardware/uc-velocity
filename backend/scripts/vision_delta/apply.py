@@ -437,10 +437,10 @@ class Writer:
         """Why a quote line's values cannot be stored, or None when they can.
 
         Quantities are stored as Vision has them: credits (negative), zeros
-        and fractions, parts included. A positive or zero line must add up:
-        fulfilled + pending = quantity, neither below zero. A credit follows
-        the importer's rule: never pending, and fulfilled is the whole credit
-        once Vision processed it, else nothing.
+        and fractions, parts included. Every line must add up: fulfilled +
+        pending = quantity. On a positive or zero line neither is below zero;
+        on a credit neither is above zero (the credit is invoiced toward zero,
+        the way the app invoices it).
 
         Args:
             item_type: "part", "labor" or "misc" (kept for the callers; no rule uses it).
@@ -449,9 +449,9 @@ class Writer:
         Returns:
             A reason, or None.
         """
-        if quantity < 0:                                   # a credit: processed whole or not at all
-            if pending != 0 or round(fulfilled, 2) not in (0, round(quantity, 2)):
-                return "a credit line is never pending and is fulfilled whole or not at all"
+        if quantity < 0:                                   # a credit: both parts on the credit's side of zero
+            if fulfilled > 0 or pending > 0 or round(fulfilled + pending, 2) != round(quantity, 2):
+                return "a credit's fulfilled and pending must add up to it, neither above zero"
             return None
         if fulfilled < 0 or pending < 0 or round(fulfilled + pending, 2) != round(quantity, 2):
             return "fulfilled and pending do not add up to the quantity"
@@ -554,8 +554,7 @@ class Writer:
                 target[r["field"]] = r["vision_value"]
             touched = {r["field"] for r in lrows}
             if not touched & {"qty_fulfilled", "qty_pending"} and "quantity" in touched:
-                target["qty_pending"] = (0 if target["quantity"] < 0                   # a credit is never pending
-                                         else target["quantity"] - target["qty_fulfilled"])   # else what is left to do
+                target["qty_pending"] = target["quantity"] - target["qty_fulfilled"]   # what is left to do, credits too
             qty, done, left = (round_quantity(float(target[k] or 0)) for k in ("quantity", "qty_fulfilled", "qty_pending"))
             problem = self.line_problem(li.item_type, qty, done, left)
             if problem and "quantity" not in touched and round(done + left, 2) != round(qty, 2):

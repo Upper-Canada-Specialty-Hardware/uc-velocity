@@ -165,9 +165,10 @@ def test_decisions_reject_unknown_words(tmp_path):
     ("part", 1.5, 0, 1.5, True),                           # stored as Vision has it
     ("misc", 0, 0, 0, True),                               # zero: quoted, not ordered
     ("misc", -1, -1, 0, True),                             # a processed credit
-    ("misc", -1, 0, 0, True),                              # a credit not yet processed
-    ("misc", -1, 0, -1, False),                            # a credit is never pending
-    ("misc", -2, -1, 0, False),                            # nor half processed
+    ("misc", -1, 0, -1, True),                             # a credit not yet processed: still to invoice
+    ("misc", -2, -1, -1, True),                            # half invoiced, toward zero
+    ("misc", -1, 0, 0, False),                             # does not add up
+    ("misc", -2, 1, -3, False),                            # nothing above zero on a credit
     ("labor", 3, 1, 1, False),                             # does not add up
     ("labor", 3, -1, 4, False),                            # nothing below zero on a positive line
 ])

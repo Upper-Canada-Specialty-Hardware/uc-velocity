@@ -225,15 +225,15 @@ def test_line_close_state_zero_line_has_nothing_to_do():
     assert line_close_state({}, 0.0, closed=True) == (0.0, 0.0, True)
 
 
-def test_line_close_state_negative_line_is_never_pending():
-    # Credit line, open job, never shipped -> nothing fulfilled, nothing pending.
-    assert line_close_state({}, -2.0, closed=False) == (0.0, 0.0, True)
-    assert line_close_state({"intTotalShippedQuantity": "0"}, -2.0, closed=False) == (0.0, 0.0, True)  # zero is not "shipped"
+def test_line_close_state_negative_line_is_pending_until_processed():
+    # Credit line, open job, never shipped -> nothing fulfilled, the whole credit pending.
+    assert line_close_state({}, -2.0, closed=False) == (0.0, -2.0, True)
+    assert line_close_state({"intTotalShippedQuantity": "0"}, -2.0, closed=False) == (0.0, -2.0, True)  # zero is not "shipped"
     # Open credit as Vision stores it: single shipment = quantity, running total 0.
     # The recorded total wins, so it is NOT processed (would wrongly settle open jobs).
     assert line_close_state(
         {"intTotalShippedQuantity": "0", "intShipQuantity": "-1"}, -1.0, closed=False
-    ) == (0.0, 0.0, True)
+    ) == (0.0, -1.0, True)
     # Credit line Vision processed (nonzero total or single shipment) -> fulfilled at its own quantity.
     assert line_close_state({"intTotalShippedQuantity": "-2"}, -2.0, closed=False) == (-2.0, 0.0, True)
     assert line_close_state({"intShipQuantity": "1"}, -2.0, closed=False) == (-2.0, 0.0, True)
@@ -275,16 +275,16 @@ def _imported_line(row: dict, quantity: float, closed: bool) -> SimpleNamespace:
     return SimpleNamespace(quantity=quantity, qty_fulfilled=fulfilled, qty_pending=pending)
 
 
-def test_zero_and_credit_lines_do_not_hold_an_open_quote_open():
-    # Open job: positive line fully shipped, plus a zero line and an unshipped credit line.
+def test_zero_lines_do_not_hold_an_open_quote_open_but_unapplied_credits_do():
+    # Open job: positive line fully shipped, plus a zero line and a processed credit.
     lines = [
         _imported_line({"intTotalShippedQuantity": "4"}, 4.0, closed=False),   # shipped in full
         _imported_line({}, 0.0, closed=False),                                 # quoted, not ordered
-        _imported_line({}, -1.0, closed=False),                                # credit, not processed
+        _imported_line({"intTotalShippedQuantity": "-1"}, -1.0, closed=False), # credit, processed
     ]
     assert compute_status_from_lines(lines, None) == "Closed"
-    # Same quote but the positive line is only half shipped -> still open (Invoiced).
-    lines[0] = _imported_line({"intTotalShippedQuantity": "2"}, 4.0, closed=False)
+    # The credit not yet processed -> still to invoice, so the job stays open (Invoiced).
+    lines[2] = _imported_line({}, -1.0, closed=False)
     assert compute_status_from_lines(lines, None) == "Invoiced"
 
 

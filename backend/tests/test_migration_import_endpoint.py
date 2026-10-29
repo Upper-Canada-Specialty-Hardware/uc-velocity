@@ -112,7 +112,7 @@ FIXTURES = {
     #   107 blnAllShipped -1, lines say 2/10-> Closed (Vision's verdict beats the lines)
     #   108 blnAllShipped True, no lines    -> Closed (counted: nothing shipped on record)
     #   109 blnForceClosed flag, zero+credit-> Closed (counted: nothing shipped on record)
-    #   110 open, all positive lines shipped plus a zero and two credit lines -> Closed
+    #   110 open, positive lines shipped, a zero, a processed and an unapplied credit -> Invoiced
     #   111 open, fractional lines, 0.5 of 1.5 shipped -> Invoiced
     #   112 blank start date                -> created_at from dtmDateEntered (no lines: Draft)
     #   113 on a project with an unknown customer -> still imported (no lines: Draft)
@@ -252,9 +252,9 @@ def test_import_derives_quote_status_from_vision_ship_data():
     assert result["success"] is True
     assert result["counts"]["quotes"] == 15
     # The operator sees the split up front:
-    # closed = 102, 103, 107, 108, 109, 110, 114; open = 101, 104, 105, 106, 111, 112, 113, 115.
-    assert result["counts"]["quotes_closed"] == 7
-    assert result["counts"]["quotes_open"] == 8
+    # closed = 102, 103, 107, 108, 109, 114; open = 101, 104, 105, 106, 110, 111, 112, 113, 115.
+    assert result["counts"]["quotes_closed"] == 6
+    assert result["counts"]["quotes_open"] == 9
     assert result["counts"]["quotes_force_closed"] == 2              # 103 by text, 109 by flag
     # Only WO 104's misc line: a finished job's no-data line (2071) is done, not "missing data".
     assert result["counts"]["quote_lines_without_ship_data"] == 1
@@ -341,22 +341,22 @@ def test_import_closes_work_orders_vision_finished():
         db.close()
 
 
-def test_import_keeps_zero_and_credit_lines_out_of_pending():
+def test_import_keeps_zero_lines_out_of_pending_and_unapplied_credits_in():
     _upload()
     db = SessionLocal()
     try:
-        # Open job: its one positive line shipped in full; a zero line and two credit
-        # lines ride along with nothing pending, so the quote closes by its lines.
+        # Open job: its one positive line shipped in full, a zero line, a processed
+        # credit and a credit Vision never applied, so the quote stays open (Invoiced).
         q110 = _quotes_by_wo(db)[110]
-        assert q110.status == "Closed"
+        assert q110.status == "Invoiced"
         lines = _lines_by_id(q110)
         assert (lines[2101].qty_fulfilled, lines[2101].qty_pending) == (4, 0)
         # Zero line: kept at 0 (was floored to 1), nothing fulfilled or pending.
         assert (lines[1101].quantity, lines[1101].qty_fulfilled, lines[1101].qty_pending) == (0, 0, 0)
-        # Credit Vision processed (shipped total -3) -> fulfilled at -3, never pending.
+        # Credit Vision processed (shipped total -3) -> fulfilled at -3, nothing pending.
         assert (lines[1102].quantity, lines[1102].qty_fulfilled, lines[1102].qty_pending) == (-3, -3, 0)
-        # Credit never processed on an open job -> nothing fulfilled, still never pending.
-        assert (lines[3101].quantity, lines[3101].qty_fulfilled, lines[3101].qty_pending) == (-1, 0, 0)
+        # Credit never processed on an open job -> nothing fulfilled, the whole credit pending.
+        assert (lines[3101].quantity, lines[3101].qty_fulfilled, lines[3101].qty_pending) == (-1, 0, -1)
     finally:
         db.close()
 
