@@ -143,8 +143,9 @@ export function formatCurrency(amount: number): string {
 const QUANTITY_DECIMALS = 2
 // Float slack: 0.1 + 0.2 is 0.30000000000000004, still "0.3" (same tolerance as backend)
 const QUANTITY_EPSILON = 1e-9
-// Plain unsigned decimal as typed: digits, optional point, optional digits
-const QUANTITY_INPUT_RE = /^\d*\.?\d*$/
+// Decimal as typed, with an optional leading minus for a credit line (#277):
+// optional "-", digits, optional point, optional digits
+const QUANTITY_INPUT_RE = /^-?\d*\.?\d*$/
 
 /**
  * Render a quantity cleanly: whole values without decimals, fractions with up to
@@ -181,7 +182,8 @@ export function quantityStep(itemType: LineItemType): string {
 
 /**
  * Whether a numeric quantity is acceptable for a line of this type.
- * Parts: a whole number of at least 1. Labour/misc: above 0, at most 2 decimals.
+ * Parts: a whole number, non-zero. Labour/misc: non-zero, at most 2 decimals.
+ * A negative value is a credit (#277) and is accepted; only exactly zero is not.
  *
  * @param value - The quantity to check.
  * @param itemType - The quote line type.
@@ -191,8 +193,8 @@ export function isValidQuantity(value: number, itemType: LineItemType): boolean 
   if (!Number.isFinite(value)) return false  // NaN/Infinity never valid
   const rounded = Number(value.toFixed(QUANTITY_DECIMALS))  // snap to 2 decimals
   if (Math.abs(rounded - value) >= QUANTITY_EPSILON) return false  // a real 3rd decimal
-  if (rounded <= 0) return false  // ordered amounts must be positive
-  if (!allowsFractionalQuantity(itemType)) return Number.isInteger(rounded)  // parts whole (>= 1 follows)
+  if (rounded === 0) return false  // a line of nothing is meaningless; credits (< 0) are fine
+  if (!allowsFractionalQuantity(itemType)) return Number.isInteger(rounded)  // parts whole, credit or not
   return true
 }
 
@@ -205,12 +207,14 @@ export function isValidQuantity(value: number, itemType: LineItemType): boolean 
  */
 export function quantityInputError(raw: string, itemType: LineItemType): string | null {
   const text = raw.trim()  // tolerate stray spaces
-  if (text === "" || text === ".") return "Enter a quantity"  // nothing numeric yet
-  if (!QUANTITY_INPUT_RE.test(text)) return "Enter a valid number"  // signs, letters, exponents
-  const value = Number(text)  // "1." -> 1, ".5" -> 0.5
-  if (!(value > 0)) return "Quantity must be greater than 0"
+  // Nothing numeric yet: empty, a lone point, or just a minus sign a credit (#277) starts with
+  if (text === "" || text === "." || text === "-" || text === "-.") return "Enter a quantity"
+  if (!QUANTITY_INPUT_RE.test(text)) return "Enter a valid number"  // letters, exponents, extra signs
+  const value = Number(text)  // "1." -> 1, ".5" -> 0.5, "-2" -> -2 (a credit)
+  if (!Number.isFinite(value)) return "Enter a valid number"  // belt-and-braces against NaN
+  if (value === 0) return "Quantity cannot be zero"  // credits (< 0) allowed; only zero is not
   if (!allowsFractionalQuantity(itemType) && !Number.isInteger(value)) {
-    return "Parts must be ordered in whole numbers"  // same wording as the backend 400
+    return "Parts must be ordered in whole numbers"  // same wording as the backend 400; -2 is whole
   }
   if (!isValidQuantity(value, itemType)) return "Quantity can have at most 2 decimal places"
   return null

@@ -388,7 +388,10 @@ def test_imported_rows_load_through_the_read_endpoints():
 
 
 def test_read_leniency_does_not_loosen_input():
-    """A quote line or PO line still cannot be entered at 0 or below."""
+    """A quote line still cannot be entered at 0, nor a PO line at 0 or below.
+
+    A negative quote line is a credit (issue #277) and is accepted; PO lines stay positive.
+    """
     _upload()
     db = SessionLocal()
     try:
@@ -396,10 +399,10 @@ def test_read_leniency_does_not_loosen_input():
         po_id = next(iter(_pos_by_id(db).values())).id
     finally:
         db.close()
+    r = client.post(f"/quotes/{quote_id}/lines",
+                    json={"item_type": "misc", "description": "[TEST]", "quantity": 0, "unit_price": 1})
+    assert r.status_code == 422, r.text                     # a quote line of nothing is refused
     for qty in (0, -1):
-        r = client.post(f"/quotes/{quote_id}/lines",
-                        json={"item_type": "misc", "description": "[TEST]", "quantity": qty, "unit_price": 1})
-        assert r.status_code == 422, (qty, r.text)
         r = client.post(f"/purchase-orders/{po_id}/lines",
                         json={"item_type": "misc", "description": "[TEST]", "quantity": qty, "unit_price": 1})
         assert r.status_code == 422, (qty, r.text)

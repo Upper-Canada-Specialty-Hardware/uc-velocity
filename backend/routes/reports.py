@@ -62,8 +62,9 @@ def get_backlog_quotes(db: Session = Depends(get_db)):
         if status not in ("Work Order", "Invoiced"):
             continue
 
-        # Only include line items with remaining qty
-        pending_items = [li for li in quote.line_items if li.qty_pending > 0]
+        # Only include line items with remaining qty; non-zero (not ">0") so a still-pending
+        # credit (negative qty_pending, #277) also shows, reducing the backlog value by its amount
+        pending_items = [li for li in quote.line_items if li.qty_pending != 0]
         if not pending_items:
             continue
 

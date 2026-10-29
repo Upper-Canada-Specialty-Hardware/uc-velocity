@@ -47,6 +47,14 @@ describe('stepFulfillmentQuantity', () => {
     expect(stepFulfillmentQuantity(3, 1, 3)).toBe(3)
     expect(stepFulfillmentQuantity(3, -1, 3)).toBe(2)
   })
+
+  it('steps a credit by magnitude toward the negative pending and back (#277)', () => {
+    expect(stepFulfillmentQuantity(0, 1, -5)).toBe(-1)   // + grows the credit magnitude
+    expect(stepFulfillmentQuantity(-2, 1, -5)).toBe(-3)
+    expect(stepFulfillmentQuantity(-5, 1, -5)).toBe(-5)  // stops at pending
+    expect(stepFulfillmentQuantity(-3, -1, -5)).toBe(-2) // - shrinks toward 0
+    expect(stepFulfillmentQuantity(-1, -1, -5)).toBe(0)  // reaches 0 = unstage
+  })
 })
 
 describe('typedFulfillmentBase', () => {
@@ -60,6 +68,13 @@ describe('typedFulfillmentBase', () => {
   it('never starts a part from a fraction', () => {
     expect(typedFulfillmentBase('1.5', 'part', 3)).toBe(1)
   })
+
+  it('reads a credit amount signed like the negative pending (#277)', () => {
+    expect(typedFulfillmentBase('-2', 'labor', -5)).toBe(-2)
+    expect(typedFulfillmentBase('-9', 'labor', -5)).toBe(-5)  // magnitude clamped at pending
+    expect(typedFulfillmentBase('2', 'labor', -5)).toBe(0)    // wrong side of zero -> start fresh
+    expect(typedFulfillmentBase('-1.5', 'part', -3)).toBe(-1) // part credit floored to a whole unit
+  })
 })
 
 describe('isFullyStaged', () => {
@@ -68,6 +83,11 @@ describe('isFullyStaged', () => {
     expect(isFullyStaged(1.5, 1.4999999999)).toBe(true)
     expect(isFullyStaged(1, 1.5)).toBe(false)
     expect(isFullyStaged(undefined, 1.5)).toBe(false)
+  })
+
+  it('judges a credit by magnitude (#277)', () => {
+    expect(isFullyStaged(-5, -5)).toBe(true)
+    expect(isFullyStaged(-2, -5)).toBe(false)
   })
 })
 
@@ -97,7 +117,18 @@ describe('fulfillmentInputError', () => {
 
   it('refuses junk text', () => {
     expect(fulfillmentInputError('abc', 'labor', 1.5)).toBe('Enter a valid number')
-    expect(fulfillmentInputError('-1', 'labor', 1.5)).toBe('Enter a valid number')
+  })
+
+  it('a positive line refuses a negative amount, a credit refuses a positive one (#277)', () => {
+    // Positive pending: a negative amount is on the wrong side of zero
+    expect(fulfillmentInputError('-1', 'labor', 1.5)).toBe('Enter a positive amount')
+    // Credit pending: the amount must be negative, and within the credit's magnitude
+    expect(fulfillmentInputError('2', 'labor', -5)).toBe('This is a credit; enter a negative amount')
+    expect(fulfillmentInputError('-2', 'labor', -5)).toBeNull()
+    expect(fulfillmentInputError('-5', 'labor', -5)).toBeNull()
+    expect(fulfillmentInputError('-6', 'labor', -5)).toBe('Cannot exceed Qty Pending (-5)')
+    expect(fulfillmentInputError('-3', 'part', -2)).toBe('Cannot exceed Qty Pending (-2)')
+    expect(fulfillmentInputError('-1.5', 'part', -3)).toBe('Parts must be ordered in whole numbers')
   })
 })
 

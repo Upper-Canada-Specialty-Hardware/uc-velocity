@@ -139,7 +139,7 @@ export function QuoteQuantityInput({ value, itemType, onValidChange, disabled }:
     <Input
       type="number"
       step={step}
-      min={step}  // smallest acceptable value equals the step
+      // No min: a credit line (#277) orders a negative quantity; zero is still rejected in validation
       className={`w-20 h-7 text-right text-sm inline-block ${error ? "border-red-500 focus-visible:ring-red-500" : ""}`}
       value={draft ?? formatQuantity(value)}  // clean display: 2 not 2.0
       onChange={(e) => {
@@ -292,7 +292,8 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
   const [savingCreatedAt, setSavingCreatedAt] = useState(false)
 
   // Computed: Is quote frozen (has been invoiced)?
-  const hasBeenInvoiced = quote?.line_items.some(item => item.qty_fulfilled > 0) ?? false
+  // Non-zero (not ">0") so an invoiced credit line (negative fulfilled, #277) freezes the quote too
+  const hasBeenInvoiced = quote?.line_items.some(item => item.qty_fulfilled !== 0) ?? false
 
   // Metadata (client PO / work description / hardware schedule) is staged in edit
   // mode and persisted on Commit — never eager-saved by the per-field Save button.
@@ -309,8 +310,9 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
   // Computed: Total count of staged changes
   const stagedChangesCount = stagedEdits.size + stagedAdds.length + stagedDeletes.size
 
-  // Computed: Does any line item have qty_pending > 0? (Flow 1 precondition)
-  const hasAnyPendingQuantity = quote?.line_items.some(item => item.qty_pending > 0) ?? false
+  // Computed: Does any line item still have something to invoice? Non-zero (not ">0")
+  // so a pending credit (negative qty_pending, #277) also lets invoicing begin.
+  const hasAnyPendingQuantity = quote?.line_items.some(item => item.qty_pending !== 0) ?? false
 
   // expectedVersion: when this refetch follows an edit WE just made that bumped the
   // version (e.g. a created-date edit), pass the new version so it isn't mistaken for an
@@ -1720,10 +1722,15 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     const totals = calculateSectionTotals(items)
     const stagedTotals = calculateStagedSectionTotals(items)
 
-    if (totals.qtyOrdered === 0) return null
+    // Measure the bar by magnitude: a credit line (#277) is progress too, and positive
+    // and credit quantities in one section must not cancel each other out
+    const orderedMag = items.reduce((sum, item) => sum + Math.abs(item.quantity), 0)
+    if (orderedMag === 0) return null
 
-    const fulfilledPercent = (totals.qtyFulfilled / totals.qtyOrdered) * 100
-    const stagedPercent = (stagedTotals.stagedQty / totals.qtyOrdered) * 100
+    const fulfilledMag = items.reduce((sum, item) => sum + Math.abs(item.qty_fulfilled), 0)
+    const stagedMag = items.reduce((sum, item) => sum + Math.abs(stagedFulfillments.get(item.id) || 0), 0)
+    const fulfilledPercent = (fulfilledMag / orderedMag) * 100
+    const stagedPercent = (stagedMag / orderedMag) * 100
 
     return (
       <div className="h-2 w-32 bg-muted rounded-full overflow-hidden flex" title={`Fulfilled: ${formatQuantity(totals.qtyFulfilled)}, Staged: ${formatQuantity(stagedTotals.stagedQty)}, Remaining: ${formatQuantity(totals.qtyPending - stagedTotals.stagedQty)}`}>
@@ -1851,9 +1858,9 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
       ? typedFulfillmentBase(stepperValues.get(item.id) || "", item.item_type, item.qty_pending)  // clamped, parts whole
       : stagedFulfillments.get(item.id) || 0
 
-    // +1, capped at pending and rounded (1 -> 1.5 when 1.5 pending)
+    // +1 magnitude, capped at pending and rounded (1 -> 1.5 when 1.5 pending; -2 -> -3 on a credit)
     const newValue = stepFulfillmentQuantity(currentValue, 1, item.qty_pending)
-    if (newValue > 0) {
+    if (newValue !== 0) {  // non-zero so a credit's negative amount stages too
       const newStaged = new Map(stagedFulfillments)
       newStaged.set(item.id, newValue)
       setStagedFulfillments(newStaged)
@@ -1875,10 +1882,10 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
       ? typedFulfillmentBase(stepperValues.get(item.id) || "", item.item_type, item.qty_pending)  // clamped, parts whole
       : stagedFulfillments.get(item.id) || 0
 
-    // -1, floored at 0 and rounded (1.5 -> 0.5, 0.5 -> 0 = unstage)
+    // -1 magnitude, toward 0 and rounded (1.5 -> 0.5, 0.5 -> 0 = unstage; -3 -> -2 on a credit)
     const newValue = stepFulfillmentQuantity(currentValue, -1, item.qty_pending)
     const newStaged = new Map(stagedFulfillments)
-    if (newValue <= 0) {
+    if (newValue === 0) {  // only an exact 0 unstages; a credit's -2 is still staged
       newStaged.delete(item.id)
     } else {
       newStaged.set(item.id, newValue)
@@ -1894,9 +1901,9 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     setStepperValues(newStepperValues)
   }
 
-  // Quick fulfill - set to max pending quantity
+  // Quick fulfill - set to max pending quantity (the full credit on a credit line)
   const handleQuickFulfill = (item: QuoteLineItem) => {
-    if (item.qty_pending <= 0) return
+    if (item.qty_pending === 0) return  // nothing left; a credit's negative pending still fulfils
     const newStaged = new Map(stagedFulfillments)
     newStaged.set(item.id, roundFulfillmentQuantity(item.qty_pending))  // exact pending: 1.5 stays 1.5
     setStagedFulfillments(newStaged)
@@ -1913,6 +1920,13 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
   // Create invoice from staged fulfillments
   const handleCreateInvoice = async () => {
     if (stagedFulfillments.size === 0) return
+
+    // An invoice total can never be below $0 (#277): a credit is applied against positive
+    // lines, never paid out. The backend refuses it too; this is the immediate, no-round-trip message.
+    if (roundFulfillmentQuantity(calculateStagedGrandTotal().stagedTotal) < 0) {
+      alert("An invoice total cannot be below $0. Add enough positive lines to cover the credit before invoicing it.")
+      return
+    }
 
     setIsCreatingInvoice(true)
     setConfirmDialogOpen(false) // Close confirmation dialog
@@ -1972,7 +1986,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
     if (!quote) return
 
     const itemsToFulfill = quote.line_items.filter(
-      item => item.item_type === itemType && item.qty_pending > 0
+      item => item.item_type === itemType && item.qty_pending !== 0  // credits (negative pending) included
     )
 
     if (itemsToFulfill.length === 0) return
@@ -2016,7 +2030,7 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
 
   // Get button state for a section (fulfill, clear, or disabled)
   const getSectionButtonState = (items: QuoteLineItem[]): 'fulfill' | 'clear' | 'disabled' => {
-    const pendingItems = items.filter(item => item.qty_pending > 0)
+    const pendingItems = items.filter(item => item.qty_pending !== 0)  // credits (negative pending) included
     if (pendingItems.length === 0) return 'disabled' // Nothing to stage
 
     const allFullyStaged = pendingItems.every(item => {
@@ -2450,16 +2464,17 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                               size="sm"
                               className="h-7 w-7 p-0"
                               onClick={() => handleStepperDecrement(item)}
-                              disabled={!staged || staged <= 0}
+                              disabled={!staged}  // enabled whenever something is staged (credit amounts are negative)
                               title="Decrease quantity"
                             >
                               <Minus className="h-3 w-3" />
                             </Button>
                             <Input
                               type="text"
-                              // Decimal keypad for labour/misc (fractions allowed), numeric for parts
+                              // Decimal keypad for labour/misc (fractions allowed), numeric for parts;
+                              // optional leading "-" so a credit amount (#277) can be typed as well as stepped
                               inputMode={allowsFractionalQuantity(item.item_type) ? "decimal" : "numeric"}
-                              pattern={allowsFractionalQuantity(item.item_type) ? "[0-9]*[.]?[0-9]*" : "[0-9]*"}
+                              pattern={allowsFractionalQuantity(item.item_type) ? "-?[0-9]*[.]?[0-9]*" : "-?[0-9]*"}
                               value={getStepperDisplayValue(item.id)}
                               onChange={(e) => handleStepperInputChange(item, e.target.value)}
                               onBlur={() => handleStepperInputBlur(item)}
@@ -2494,14 +2509,14 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                       <>
                         {/* Qty Fulfilled Column */}
                         <TableCell className="text-right">
-                          <span className={item.qty_fulfilled > 0 ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}>
+                          <span className={item.qty_fulfilled !== 0 ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}>
                             {formatQuantity(item.qty_fulfilled)}
                           </span>
                         </TableCell>
 
                         {/* Fulfilled Price Column */}
                         <TableCell className="text-right">
-                          {item.qty_fulfilled > 0 ? (
+                          {item.qty_fulfilled !== 0 ? (
                             <span className="text-green-600 dark:text-green-400 font-medium">
                               ${getFulfilledLineItemValue(item).toFixed(2)}
                             </span>
@@ -2584,14 +2599,14 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                       <>
                         {/* Qty Fulfilled Column */}
                         <TableCell className="text-right">
-                          <span className={item.qty_fulfilled > 0 ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}>
+                          <span className={item.qty_fulfilled !== 0 ? "text-green-600 dark:text-green-400 font-medium" : "text-muted-foreground"}>
                             {formatQuantity(item.qty_fulfilled)}
                           </span>
                         </TableCell>
 
                         {/* Fulfilled Price Column */}
                         <TableCell className="text-right">
-                          {item.qty_fulfilled > 0 ? (
+                          {item.qty_fulfilled !== 0 ? (
                             <span className="text-green-600 dark:text-green-400 font-medium">
                               ${getFulfilledLineItemValue(item).toFixed(2)}
                             </span>
@@ -2662,8 +2677,9 @@ export const QuoteEditor = forwardRef<QuoteEditorHandle, QuoteEditorProps>(funct
                           )}
                         </>
                       )}
-                      {/* Invoicing Mode: Fulfill This Item button and Clear staged button */}
-                      {editorMode === "invoicing" && item.qty_pending > 0 && (
+                      {/* Invoicing Mode: Fulfill This Item button and Clear staged button.
+                          Non-zero (not ">0") so a pending credit (negative, #277) shows its actions too. */}
+                      {editorMode === "invoicing" && item.qty_pending !== 0 && (
                         <>
                           {/* Fulfill This Item - quick action to stage full pending quantity */}
                           <Button

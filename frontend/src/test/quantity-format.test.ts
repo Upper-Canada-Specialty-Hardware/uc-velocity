@@ -36,6 +36,14 @@ describe('formatQuantity', () => {
     expect(formatQuantity(undefined)).toBe('0')
     expect(formatQuantity(Number.NaN)).toBe('0')
   })
+
+  it('renders a credit (negative) quantity with its sign (#277)', () => {
+    // The quote editor and both PDFs render quantities through this helper, so a
+    // credit line must print as "-5" / "-1.5", not drop the sign or show "0".
+    expect(formatQuantity(-5)).toBe('-5')
+    expect(formatQuantity(-1.5)).toBe('-1.5')
+    expect(formatQuantity(-0.25)).toBe('-0.25')
+  })
 })
 
 describe('quantityStep / allowsFractionalQuantity', () => {
@@ -50,15 +58,17 @@ describe('quantityStep / allowsFractionalQuantity', () => {
 })
 
 describe('isValidQuantity', () => {
-  it('parts must be whole and at least 1', () => {
+  it('parts must be whole and non-zero; a whole credit (negative) is allowed', () => {
     expect(isValidQuantity(1, 'part')).toBe(true)
     expect(isValidQuantity(12, 'part')).toBe(true)
     expect(isValidQuantity(1.5, 'part')).toBe(false)
     expect(isValidQuantity(0, 'part')).toBe(false)
-    expect(isValidQuantity(-1, 'part')).toBe(false)
+    expect(isValidQuantity(-1, 'part')).toBe(true)   // whole credit, #277
+    expect(isValidQuantity(-2, 'part')).toBe(true)   // whole credit, #277
+    expect(isValidQuantity(-1.5, 'part')).toBe(false)  // a part credit must still be whole
   })
 
-  it('labour and misc accept positive values with up to 2 decimals', () => {
+  it('labour and misc accept non-zero values (credits too) with up to 2 decimals', () => {
     for (const type of ['labor', 'misc'] as const) {
       expect(isValidQuantity(1, type)).toBe(true)
       expect(isValidQuantity(1.5, type)).toBe(true)
@@ -66,7 +76,8 @@ describe('isValidQuantity', () => {
       expect(isValidQuantity(0.01, type)).toBe(true)
       expect(isValidQuantity(1.234, type)).toBe(false)  // 3rd decimal
       expect(isValidQuantity(0, type)).toBe(false)
-      expect(isValidQuantity(-0.5, type)).toBe(false)
+      expect(isValidQuantity(-0.5, type)).toBe(true)    // fractional credit, #277
+      expect(isValidQuantity(-1.234, type)).toBe(false)  // credit still capped at 2 decimals
     }
   })
 
@@ -98,12 +109,16 @@ describe('quantityInputError / parseQuantityInput', () => {
     expect(parseQuantityInput('1.234', 'misc')).toBeNull()
   })
 
-  it('refuses empty, zero, negative and non-numeric text', () => {
+  it('refuses empty and zero; accepts a credit; refuses non-numeric text', () => {
     expect(quantityInputError('', 'labor')).toBe('Enter a quantity')
     expect(quantityInputError('.', 'labor')).toBe('Enter a quantity')
-    expect(quantityInputError('0', 'labor')).toBe('Quantity must be greater than 0')
-    expect(quantityInputError('0.0', 'misc')).toBe('Quantity must be greater than 0')
-    expect(quantityInputError('-1', 'labor')).toBe('Enter a valid number')
+    expect(quantityInputError('-', 'labor')).toBe('Enter a quantity')  // just the minus of a credit so far
+    expect(quantityInputError('0', 'labor')).toBe('Quantity cannot be zero')
+    expect(quantityInputError('0.0', 'misc')).toBe('Quantity cannot be zero')
+    expect(quantityInputError('-1', 'labor')).toBeNull()      // a credit, #277
+    expect(quantityInputError('-1.5', 'misc')).toBeNull()     // a fractional credit
+    expect(quantityInputError('-2', 'part')).toBeNull()       // a whole part credit
+    expect(quantityInputError('-1.5', 'part')).toBe('Parts must be ordered in whole numbers')
     expect(quantityInputError('1e2', 'labor')).toBe('Enter a valid number')
     expect(quantityInputError('abc', 'part')).toBe('Enter a valid number')
   })
