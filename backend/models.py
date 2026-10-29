@@ -699,3 +699,26 @@ class VisionSyncChange(Base):
     reason = Column(Text, nullable=True)
 
     run = relationship("VisionSyncRun", back_populates="changes")
+
+
+class VisionCase(Base):
+    """One case the cutover left for a person, and the decision on it (the decisions page)."""
+
+    __tablename__ = "vision_cases"
+    __table_args__ = (UniqueConstraint("run_id", "kind", "case_key", name="uq_vision_cases_run_kind_key"),)
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("vision_sync_runs.id"), nullable=False)
+    kind = Column(String, nullable=False, index=True)     # test project / duplicate project / same job / ... / conflict
+    case_key = Column(String, nullable=False)             # unique within a run and kind
+    project = Column(String, nullable=True)               # UCA number, for grouping
+    title = Column(Text, nullable=True)                   # one line naming the case
+    prediction = Column(String, nullable=True)            # the predicted decision (one of the kind's options)
+    prediction_reason = Column(Text, nullable=True)       # why it is predicted
+    detail = Column(JSON, nullable=True)                  # what was found: Vision's and Velocity's sides
+    change_ids = Column(JSON, nullable=True)              # vision_sync_changes ids the case covers
+    decision = Column(String, nullable=True)              # the person's choice; null while open
+    decided_by = Column(String, nullable=True)            # who chose (email, else user id)
+    decided_at = Column(DateTime, nullable=True)          # when (UTC)
+    decision_note = Column(Text, nullable=True)           # their note
+    result = Column(JSON, nullable=True)                  # what the decision wrote, if anything

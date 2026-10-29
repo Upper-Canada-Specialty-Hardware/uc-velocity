@@ -112,9 +112,10 @@ def create_po_snapshot(
         The created POSnapshot
     """
     # Increment version for substantive changes only
-    # Version stays unchanged for: initial creation, status changes, move (#209)
+    # Version stays unchanged for: initial creation, status changes, move (#209),
+    # and a Vision version recorded for reference from the decisions page
     # Version increments for: edit, delete, receive, revert (substantive changes)
-    if action_type in ["create", "status_change", "move"]:
+    if action_type in ["create", "status_change", "move", "vision_version"]:
         # Keep version unchanged - these don't change the PO's line items, so the
         # PO number's version component is untouched (a move only changes UCA + seq).
         new_version = po.current_version

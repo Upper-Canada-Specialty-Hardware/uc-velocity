@@ -50,6 +50,9 @@ const SettingsPage = lazy(() =>
 const MigrationPage = lazy(() =>
   import("@/pages/MigrationPage").then((m) => ({ default: m.MigrationPage }))
 )
+const VisionDecisionsPage = lazy(() =>
+  import("@/pages/VisionDecisionsPage").then((m) => ({ default: m.VisionDecisionsPage }))
+)
 function PageFallback() {
   return (
     <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
@@ -70,12 +73,13 @@ import {
   BarChart3,
   Settings,
   DatabaseZap,
+  ListChecks,
   Menu,
   X,
 } from "lucide-react"
 import { Toaster } from "@/components/ui/toaster"
 
-type AppView = "profiles" | "projects" | "project-details" | "inventory" | "reports" | "settings" | "migration"
+type AppView = "profiles" | "projects" | "project-details" | "inventory" | "reports" | "settings" | "migration" | "vision-decisions"
 
 type ParsedRoute =
   | { view: Exclude<AppView, "project-details"> }
@@ -91,6 +95,7 @@ function parseRoute(pathname: string): ParsedRoute {
   if (pathname === "/reports") return { view: "reports" }
   if (pathname === "/settings") return { view: "settings" }
   if (pathname === "/admin/migration") return { view: "migration" }
+  if (pathname === "/admin/vision-decisions") return { view: "vision-decisions" }
   // /projects/:id, /projects/:id/quotes|pos|invoices/:docId
   const projMatch = pathname.match(/^\/projects\/(\d+)(?:\/(quotes|pos|invoices)\/(\d+))?$/)
   if (projMatch) {
@@ -125,7 +130,7 @@ function App() {
   // so this controls UI exposure, not the API.)
   const isAdmin = useIsAdmin()
   useEffect(() => {
-    if (currentView === "migration" && !isAdmin) {
+    if ((currentView === "migration" || currentView === "vision-decisions") && !isAdmin) {
       navigate("/projects", { replace: true })
     }
   }, [currentView, isAdmin, navigate])
@@ -368,6 +373,10 @@ function App() {
         // (the useEffect above will then redirect to projects on the next tick).
         if (!isAdmin) return null
         return <MigrationPage />
+
+      case "vision-decisions":
+        if (!isAdmin) return null // same defensive gate as migration
+        return <VisionDecisionsPage />
 
       case "project-details":
         if (selectedProjectId === null) {
@@ -714,6 +723,16 @@ function App() {
         >
           <DatabaseZap className="h-4 w-4" />
           Migration
+        </Button>
+      )}
+      {isAdmin && (
+        <Button
+          variant={currentView === "vision-decisions" ? "secondary" : "ghost"}
+          className="w-full justify-start gap-2"
+          onClick={() => guardedNavigate("/admin/vision-decisions")}
+        >
+          <ListChecks className="h-4 w-4" />
+          Vision decisions
         </Button>
       )}
     </nav>
