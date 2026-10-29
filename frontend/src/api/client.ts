@@ -18,6 +18,7 @@ import type {
   CompanySettings, CompanySettingsUpdate, InvoiceSummaryItem,
   BacklogQuoteItem, InventoryHealthReport, PricebookImportResult, MigrationResult,
   SystemRate, SystemRateCreate, SystemRateUpdate,
+  VisionDecisionStep, VisionDecisionPage, VisionDecisionCase, VisionAcceptResult,
 } from '@/types';
 import { tel } from '@/lib/tel';
 
@@ -405,6 +406,27 @@ export const api = {
   reports: {
     getBacklogQuotes: () => request<BacklogQuoteItem[]>('/reports/backlog-quotes'),
     getInventoryHealth: () => request<InventoryHealthReport>('/reports/inventory-health'),
+  },
+
+  // ===== Vision cutover decisions (#297) =====
+  visionDecisions: {
+    /** Every step in order, with open and settled counts. */
+    getSteps: () => request<VisionDecisionStep[]>('/vision-decisions/steps'),
+    /** One page of a step's cases (open by default). */
+    getCases: (kind: string, status: 'open' | 'settled' | 'all' = 'open', offset = 0, limit = 20) =>
+      request<VisionDecisionPage>(
+        `/vision-decisions/cases?${new URLSearchParams({ kind, status, offset: String(offset), limit: String(limit) })}`
+      ),
+    /** Settle one case; rejects with the reason when it cannot be carried out. */
+    decide: (caseId: number, decision: string, note?: string) =>
+      request<VisionDecisionCase>(`/vision-decisions/cases/${caseId}/decide`, {
+        method: 'POST', body: JSON.stringify({ decision, note: note || null }),
+      }),
+    /** Accept the predicted answer on these open cases of a step. */
+    acceptPredictions: (kind: string, caseIds: number[]) =>
+      request<VisionAcceptResult>(`/vision-decisions/steps/${encodeURIComponent(kind)}/accept`, {
+        method: 'POST', body: JSON.stringify({ case_ids: caseIds }),
+      }),
   },
 
   // ===== Legacy Migration =====

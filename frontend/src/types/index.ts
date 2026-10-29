@@ -870,3 +870,69 @@ export interface StagedAdd {
   part?: Part;
   miscellaneous?: Miscellaneous;
 }
+
+// ===== Vision cutover decisions page (#297) =====
+
+/** One step of the decisions page: a kind of case, with its answers and counts. */
+export interface VisionDecisionStep {
+  kind: string;
+  label: string;
+  about: string;
+  options: string[];
+  open: number;
+  settled: number;
+  open_with_prediction: number;
+}
+
+/** One logged field of a case: Velocity's value beside Vision's. */
+export interface VisionDecisionRow {
+  change_id: number;
+  level: string;
+  field: string | null;
+  record_table: string | null;
+  record_id: number | null;
+  velocity: string | null;
+  vision: string | null;
+  cause: string | null;
+  context: string | null;
+  now: string | null;
+  changed_since: boolean | null;
+}
+
+/** Where a case's record opens in the app. */
+export interface VisionDecisionLink {
+  project_id: number;
+  type: "quote" | "po" | "project";
+  id: number;
+}
+
+/** One case a person settles. */
+export interface VisionDecisionCase {
+  id: number;
+  kind: string;
+  project: string | null;
+  title: string | null;
+  prediction: string | null;
+  prediction_reason: string | null;
+  options: string[];
+  rows: VisionDecisionRow[];
+  found: Record<string, string | null> | Record<string, string | null>[] | null;
+  links: VisionDecisionLink[];
+  decision: string | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  result: Record<string, unknown> | null;
+}
+
+/** A page of one step's cases. */
+export interface VisionDecisionPage {
+  total: number;
+  cases: VisionDecisionCase[];
+}
+
+/** What accepting the predicted answers did. */
+export interface VisionAcceptResult {
+  settled: number[];
+  refused: { id: number; title: string | null; reason: string }[];
+}

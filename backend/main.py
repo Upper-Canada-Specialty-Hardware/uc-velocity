@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base, SessionLocal
-from routes import parts, labor, profiles, projects, quotes, purchase_orders, miscellaneous, invoices, company_settings, reports, cost_codes, vendor_pricebook, migration, system_rates, testing, clerk_email, vision_cutover
+from routes import parts, labor, profiles, projects, quotes, purchase_orders, miscellaneous, invoices, company_settings, reports, cost_codes, vendor_pricebook, migration, system_rates, testing, clerk_email, vision_cutover, vision_decisions
 from seed import seed_system_items
 from auth import ActorMiddleware
 from telemetry_middleware import TelemetryMiddleware
@@ -129,6 +129,7 @@ app.include_router(system_rates.router)
 app.include_router(testing.router)
 app.include_router(clerk_email.router)
 app.include_router(vision_cutover.router)  # admin: Vision cutover plan, off unless VISION_CUTOVER_KEY is set
+app.include_router(vision_decisions.router)  # admin: settle the cases the Vision cutover left for a person
 
 # Announce process start to telemetry (inert unless TELEMETRY_URL/KEY are set).
 telemetry.lifecycle("startup")
