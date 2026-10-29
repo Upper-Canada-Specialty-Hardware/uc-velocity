@@ -936,3 +936,78 @@ export interface VisionAcceptResult {
   settled: number[];
   refused: { id: number; title: string | null; reason: string }[];
 }
+
+// ===== Archived projects (#304) =====
+
+/** One archived project in the archive index. */
+export interface ArchivedProjectEntry {
+  uca: string;
+  name: string | null;
+  customer: string | null;
+  created_on: string | null;
+  last_activity: string | null;
+  work_orders: number;
+  pos: number;
+  velocity_quotes: number;
+  velocity_pos: number;
+  in_velocity: boolean;
+  key: string;
+}
+
+/** A page of archive search results. */
+export interface ArchivedProjectSearch {
+  total: number;
+  archived: number;
+  projects: ArchivedProjectEntry[];
+}
+
+/** One Vision work order or PO line as archived. */
+export interface ArchivedLine {
+  vid?: number;
+  item_type?: string;
+  description?: string | null;
+  part_number?: string | null;
+  ref?: string | null;
+  quantity?: number | null;
+  unit_price?: number | null;
+  base_cost?: number | null;
+  qty_fulfilled?: number | null;
+  qty_pending?: number | null;
+  qty_received?: number | null;
+}
+
+/** One Vision work order (quote) as archived. */
+export interface ArchivedWorkOrder {
+  wo?: number | null;
+  closed?: boolean | null;
+  created_at?: string | null;
+  client_po_number?: string | null;
+  work_description?: string | null;
+  lines: ArchivedLine[];
+}
+
+/** One Vision PO as archived. */
+export interface ArchivedPO {
+  number?: string | null;
+  vendor?: string | null;
+  status?: string | null;
+  created_at?: string | null;
+  work_description?: string | null;
+  lines: ArchivedLine[];
+}
+
+/** One archived project's file: Vision's version and Velocity's rows. */
+export interface ArchivedProject {
+  uca: string;
+  name: string | null;
+  customer: string | null;
+  created_on: string | null;
+  last_activity: string | null;
+  velocity_project_id: number | null;
+  vision: {
+    project: Record<string, unknown> | null;
+    work_orders: ArchivedWorkOrder[];
+    pos: ArchivedPO[];
+  };
+  velocity: Record<string, Record<string, unknown>[]> | null;
+}
