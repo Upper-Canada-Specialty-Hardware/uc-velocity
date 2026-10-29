@@ -91,6 +91,36 @@ def require_whole_part_quantity(item_type: Optional[str], qty: Optional[float]) 
         raise HTTPException(status_code=400, detail="Parts must be ordered in whole numbers")
 
 
+def require_quantity_covers_fulfilled(new_quantity: float, qty_fulfilled: float, item_desc: Optional[str] = None) -> None:
+    """A new ordered quantity must still cover what has already been invoiced.
+
+    A positive line's quantity cannot drop below the amount already fulfilled; a
+    credit line's quantity (negative, issue #277) cannot rise above its already
+    invoiced (negative) amount, i.e. it must stay at least as negative. Both are
+    the one rule "pending must not cross zero": sign(new_quantity) must match
+    sign(qty_fulfilled) and |new_quantity| >= |qty_fulfilled|. A line with nothing
+    fulfilled (qty_fulfilled == 0) accepts any non-zero quantity, credit included.
+
+    Args:
+        new_quantity: The requested ordered quantity (may be a credit).
+        qty_fulfilled: What the line has already fulfilled (invoiced).
+        item_desc: Optional line description, appended to the error for context.
+
+    Raises:
+        HTTPException: 400 when the new quantity would leave an impossible pending.
+    """
+    if qty_fulfilled == 0:
+        return  # nothing invoiced yet -> any non-zero quantity is fine
+    # Reducing a positive below fulfilled, or a credit above its fulfilled, both cross zero
+    crosses_zero = (qty_fulfilled > 0 and new_quantity < qty_fulfilled) or \
+                   (qty_fulfilled < 0 and new_quantity > qty_fulfilled)
+    if crosses_zero:
+        detail = f"Cannot reduce quantity below fulfilled amount ({format_quantity(qty_fulfilled)})"
+        if item_desc:
+            detail += f" for {item_desc}"
+        raise HTTPException(status_code=400, detail=detail)
+
+
 def create_snapshot(
     db: Session,
     quote: Quote,
@@ -267,8 +297,10 @@ def check_quote_not_frozen(quote_id: int, db: Session) -> None:
     """
     Check if a quote has been invoiced (frozen) and raise 400 if so.
 
-    A quote is considered frozen once any fulfillment has occurred (qty_fulfilled > 0
-    on any line item). Frozen quotes can only be invoiced further, not edited.
+    A quote is considered frozen once any fulfillment has occurred (qty_fulfilled
+    is non-zero on any line item). "Non-zero" rather than "> 0" so that invoicing a
+    credit line (negative fulfilment, issue #277) freezes the quote too. Frozen
+    quotes can only be invoiced further, not edited.
 
     Args:
         quote_id: The quote ID to check
@@ -277,12 +309,12 @@ def check_quote_not_frozen(quote_id: int, db: Session) -> None:
     Raises:
         HTTPException: 400 error if quote is frozen
     """
-    # Check if any line item has been fulfilled
+    # Any line with a non-zero fulfilled amount (positive shipment OR invoiced credit) freezes it
     has_fulfillment = (
         db.query(QuoteLineItem)
         .filter(
             QuoteLineItem.quote_id == quote_id,
-            QuoteLineItem.qty_fulfilled > 0
+            QuoteLineItem.qty_fulfilled != 0
         )
         .first() is not None
     )
@@ -376,8 +408,9 @@ def compute_status_from_lines(line_items, client_po_number: Optional[str], visio
         client PO) or "Draft".
     """
     has_line_items = len(line_items) > 0                                   # no lines -> never Closed
-    has_fulfillment = any(li.qty_fulfilled > 0 for li in line_items)      # anything shipped/invoiced?
-    all_fulfilled = has_line_items and all(li.qty_pending == 0 for li in line_items)  # nothing left?
+    # Non-zero (not ">0") so an invoiced credit (negative fulfilled, #277) counts as fulfilment
+    has_fulfillment = any(li.qty_fulfilled != 0 for li in line_items)      # anything shipped/invoiced?
+    all_fulfilled = has_line_items and all(li.qty_pending == 0 for li in line_items)  # nothing left (credit pending is non-zero)?
     has_client_po = bool(client_po_number and client_po_number.strip())   # PO makes a Work Order
     nothing_pending = all(li.qty_pending == 0 for li in line_items)       # True for no lines too
 
@@ -1147,12 +1180,8 @@ def update_quote_line(
     if line_data.quantity is not None:
         # Parts must stay whole; the existing line's type decides
         require_whole_part_quantity(db_line.item_type, line_data.quantity)
-        # Validate: cannot reduce quantity below what's already fulfilled
-        if line_data.quantity < db_line.qty_fulfilled:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot reduce quantity below fulfilled amount ({format_quantity(db_line.qty_fulfilled)})"
-            )
+        # Cannot reduce an ordered quantity past what's already invoiced (credit-aware, #277)
+        require_quantity_covers_fulfilled(line_data.quantity, db_line.qty_fulfilled)
         if line_data.quantity != old_quantity:
             # Audit text: whole values render as "2", fractions as "1.5"
             changes.append(f"quantity: {format_quantity(old_quantity)} → {format_quantity(line_data.quantity)}")
@@ -1419,11 +1448,8 @@ def commit_edits(
             if change.quantity is not None and change.quantity != line_item.quantity:
                 # Parts must stay whole; type comes from the stored line, not the request
                 require_whole_part_quantity(line_item.item_type, change.quantity)
-                if change.quantity < line_item.qty_fulfilled:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Cannot reduce quantity below fulfilled amount ({format_quantity(line_item.qty_fulfilled)}) for {item_desc}"
-                    )
+                # Cannot reduce an ordered quantity past what's already invoiced (credit-aware, #277)
+                require_quantity_covers_fulfilled(change.quantity, line_item.qty_fulfilled, item_desc)
                 # Audit text: whole values render as "2", fractions as "1.5"
                 item_changes.append(f"qty: {format_quantity(line_item.quantity)} → {format_quantity(change.quantity)}")
                 line_item.quantity = change.quantity
@@ -1610,21 +1636,33 @@ def create_invoice(
                 status_code=400,
                 detail=f"Line item {fulfillment.line_item_id} not found in this quote"
             )
-        if fulfillment.quantity <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Must be a positive number"
-            )
-        # A part may only be invoiced in whole units; labour/misc may be fractional
+        # A part may only be invoiced in whole units; labour/misc may be fractional (credits included)
         require_whole_part_quantity(line_item.item_type, fulfillment.quantity)
         # Compare rounded values so float noise cannot block fulfilling the exact remainder
         fulfill_qty = round_quantity(fulfillment.quantity)
-        if fulfill_qty > round_quantity(line_item.qty_pending or 0):
+        pending = round_quantity(line_item.qty_pending or 0)
+        # A credit line (#277) invoices a NEGATIVE amount toward zero; a positive line a
+        # positive amount. The amount must be non-zero, share the pending's sign, and not
+        # overshoot it: for positive pending 0 < amt <= pending, for a credit pending <= amt < 0.
+        if pending == 0 or fulfill_qty == 0 or \
+           (pending > 0 and not (0 < fulfill_qty <= pending)) or \
+           (pending < 0 and not (pending <= fulfill_qty < 0)):
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot fulfill {format_quantity(fulfill_qty)} units of line item {fulfillment.line_item_id}. Only {format_quantity(line_item.qty_pending)} pending."
             )
         line_items_to_fulfill.append((line_item, fulfill_qty))
+
+    # An invoice may mix positive lines and credits, but its own total can never be below
+    # $0 (#277): a refund is applied against a positive balance, never paid out. unit_price x
+    # amount is the same net-sales maths the invoice summary uses; HST is proportional, so a
+    # non-negative net sales keeps the grand total non-negative too.
+    invoice_net_sales = round((sum((li.unit_price or 0) * q for li, q in line_items_to_fulfill)), 2)
+    if invoice_net_sales < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="An invoice total cannot be below $0. Add enough positive lines to cover the credit before invoicing it."
+        )
 
     # Per-quote invoice sequence (1, 2, 3...) for the structured invoice number
     next_invoice_seq = (

@@ -41,4 +41,21 @@ describe('QuoteQuantityInput', () => {
     render(<QuoteQuantityInput value={0.1 + 0.2} itemType="labor" onValidChange={() => {}} />)
     expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('0.3')
   })
+
+  it('stages a negative credit quantity on a labour line (#277)', () => {
+    const onValidChange = vi.fn()
+    render(<QuoteQuantityInput value={1} itemType="labor" onValidChange={onValidChange} />)
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '-2' } })
+    expect(onValidChange).toHaveBeenLastCalledWith(-2)  // a credit of 2
+  })
+
+  it('refuses a fractional part credit but accepts a whole one (#277)', () => {
+    const onValidChange = vi.fn()
+    render(<QuoteQuantityInput value={1} itemType="part" onValidChange={onValidChange} />)
+    const input = screen.getByRole('spinbutton')
+    fireEvent.change(input, { target: { value: '-1.5' } })  // fractional part credit -> refused
+    expect(onValidChange).not.toHaveBeenCalled()
+    fireEvent.change(input, { target: { value: '-2' } })    // whole part credit -> staged
+    expect(onValidChange).toHaveBeenLastCalledWith(-2)
+  })
 })

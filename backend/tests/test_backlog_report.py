@@ -24,11 +24,16 @@ def test_backlog_report_excludes_draft_and_closed():
 
 
 def test_backlog_report_items_have_pending():
-    """Every returned line item must have qty_pending > 0."""
+    """Every returned line item must still have something pending.
+
+    Non-zero rather than "> 0": a credit line (issue #277) is uninvoiced until it
+    reaches zero, so a pending credit (negative qty_pending) legitimately backlogs.
+    Only a fully-settled line (qty_pending == 0) is excluded.
+    """
     r = client.get("/reports/backlog-quotes")
     assert r.status_code == 200
     for quote in r.json():
         for li in quote["line_items"]:
-            assert li["qty_pending"] > 0, (
+            assert li["qty_pending"] != 0, (
                 f"Line item {li['line_item_id']} in {quote['quote_number']} has qty_pending=0"
             )

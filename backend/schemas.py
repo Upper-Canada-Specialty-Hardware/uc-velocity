@@ -10,17 +10,24 @@ import math
 QUANTITY_DECIMALS = 2
 
 
-def validate_quantity(v, *, allow_zero: bool = False) -> Optional[float]:
+def validate_quantity(v, *, allow_zero: bool = False, allow_negative: bool = False) -> Optional[float]:
     """Validate a quote/invoice quantity and normalise it to 2 decimal places.
 
     Labour and misc lines may carry fractional quantities (e.g. 1.5 hours);
     whether a *part* line is whole is checked in the routes, which know the
     line's item type. PO quantities do not use this helper and stay whole.
 
+    A quote line (and the amount that invoices it) may be a *credit*: a negative
+    quantity invoiced toward zero (issue #277). Zero is still refused there,
+    because a line of nothing is meaningless. PO quantities stay positive.
+
     Args:
         v: Raw incoming value (int, float, numeric string, or None).
         allow_zero: True for running totals (pending/fulfilled) that may be 0;
-            False for ordered/fulfilment amounts that must be above 0.
+            False for ordered/fulfilment amounts that must be non-zero.
+        allow_negative: True for quote-line and fulfilment amounts, which may be
+            a credit (below zero); still refuses exactly zero. Ignored when
+            ``allow_zero`` is set.
 
     Returns:
         None when ``v`` is None, otherwise the value rounded to 2 decimals.
@@ -46,8 +53,11 @@ def validate_quantity(v, *, allow_zero: bool = False) -> Optional[float]:
     if allow_zero:
         if rounded < 0:
             raise ValueError('Quantity cannot be negative')  # running totals floor at 0
+    elif allow_negative:
+        if rounded == 0:
+            raise ValueError('Quantity cannot be zero')  # a credit may be below 0, never exactly 0
     elif rounded <= 0:
-        raise ValueError('Quantity must be greater than 0')  # ordered/invoiced amounts
+        raise ValueError('Quantity must be greater than 0')  # positive-only amounts (e.g. PO path)
     return rounded  # always an exact 2-decimal float, so later maths stays clean
 
 
@@ -513,7 +523,7 @@ class QuoteLineItemBase(BaseModel):
     misc_id: Optional[int] = None
     description: Optional[str] = None
     description_override: Optional[str] = None  # Per-quote display description override (issue #178)
-    quantity: float = 1  # Positive, up to 2 decimals; parts whole (checked in routes)
+    quantity: float = 1  # Non-zero, up to 2 decimals; negative = credit; parts whole (checked in routes)
     unit_price: Optional[float] = None
     is_pms: bool = False  # True for PMS items (Project Management Services)
     pms_percent: Optional[float] = None  # Percentage value for PMS % items
@@ -523,8 +533,8 @@ class QuoteLineItemBase(BaseModel):
 
     @validator('quantity', pre=True)
     def quantity_must_be_valid(cls, v) -> Optional[float]:
-        """Require a positive quantity with at most 2 decimals."""
-        return validate_quantity(v)
+        """Require a non-zero quantity (negative = credit) with at most 2 decimals."""
+        return validate_quantity(v, allow_negative=True)
 
 
 class QuoteLineItemCreate(QuoteLineItemBase):
@@ -532,14 +542,14 @@ class QuoteLineItemCreate(QuoteLineItemBase):
 
 
 class QuoteLineItemUpdate(BaseModel):
-    quantity: Optional[float] = None  # Positive, up to 2 decimals; parts whole (checked in routes)
+    quantity: Optional[float] = None  # Non-zero, up to 2 decimals; negative = credit; parts whole (checked in routes)
     unit_price: Optional[float] = None
     description_override: Optional[str] = None  # Per-quote display description override (issue #178)
 
     @validator('quantity', pre=True)
     def quantity_must_be_valid(cls, v) -> Optional[float]:
-        """Require a positive quantity with at most 2 decimals (None = unchanged)."""
-        return validate_quantity(v)
+        """Require a non-zero quantity (negative = credit) with at most 2 decimals (None = unchanged)."""
+        return validate_quantity(v, allow_negative=True)
 
 
 class QuoteLineItem(QuoteLineItemBase):
@@ -972,12 +982,12 @@ class InvoiceBase(BaseModel):
 
 class LineItemFulfillment(BaseModel):
     line_item_id: int
-    quantity: float  # Amount to invoice now; positive, up to 2 decimals, parts whole (checked in routes)
+    quantity: float  # Amount to invoice now; non-zero (negative = crediting a credit line), up to 2 decimals, parts whole (checked in routes)
 
     @validator('quantity', pre=True)
     def quantity_must_be_valid(cls, v) -> Optional[float]:
-        """Require a positive fulfilment amount with at most 2 decimals."""
-        return validate_quantity(v)
+        """Require a non-zero fulfilment amount (negative credits a credit line) with at most 2 decimals."""
+        return validate_quantity(v, allow_negative=True)
 
 
 class InvoiceCreate(BaseModel):
@@ -1148,7 +1158,7 @@ class StagedLineItemChange(BaseModel):
     misc_id: Optional[int] = None
     description: Optional[str] = None
     description_override: Optional[str] = None  # Per-quote display description override (issue #178)
-    quantity: Optional[float] = None  # Positive, up to 2 decimals; parts whole (checked in commit_edits)
+    quantity: Optional[float] = None  # Non-zero, up to 2 decimals; negative = credit; parts whole (checked in commit_edits)
     unit_price: Optional[float] = None
     is_pms: bool = False
     pms_percent: Optional[float] = None
@@ -1157,8 +1167,8 @@ class StagedLineItemChange(BaseModel):
 
     @validator('quantity', pre=True)
     def quantity_must_be_valid(cls, v) -> Optional[float]:
-        """Require a positive quantity with at most 2 decimals (None = unchanged)."""
-        return validate_quantity(v)
+        """Require a non-zero quantity (negative = credit) with at most 2 decimals (None = unchanged)."""
+        return validate_quantity(v, allow_negative=True)
 
 
 class CommitEditsRequest(BaseModel):
