@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 # Log actions the run wrote to the database, and the ones it only recorded
 WRITTEN = ("added", "updated", "stamped")
-LEFT = ("skipped", "failed", "kept: conflict", "info")
+LEFT = ("skipped", "failed", "kept: conflict", "held", "info")
 SNAPSHOT_TABLES = ("quote_snapshots", "po_snapshots")    # grow with every change; not logged one by one
 
 # Compare field -> column, where the log's field is not the column's name

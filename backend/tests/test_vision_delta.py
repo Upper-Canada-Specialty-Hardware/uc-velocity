@@ -291,3 +291,24 @@ def test_stamp_plan_fills_only_what_is_missing():
         (1, "status"), (1, "vision_wo_number"), (1, "legacy_id"), (1, "vision_closed"),
         (9, "vision_project_number"), (9, "legacy_id")}
     assert ap.stamp_plan(d, {1})[0][0][1][0].get("status") is None   # its lines were rewritten: status set there
+
+
+# ---- holds: certain rows that wait for a person -------------------------------
+
+def test_holds_test_projects_their_records_and_credit_only_work_orders():
+    v = {"quotes": [{"wo": 1, "uca": "A9", "vision_uca": "A9", "lines": [{"quantity": -2}, {"quantity": 0}]},   # credit memo
+                    {"wo": 2, "uca": "A1", "vision_uca": "A1", "lines": [{"quantity": -1}, {"quantity": 1}]},   # change order
+                    {"wo": 3, "uca": "A5", "vision_uca": "A5", "lines": [{"quantity": 1}]}],
+         "pos": []}
+    d = cp.Delta()
+    d.rows = [{"level": "projects", "kind": cp.MISSING, "_ref": {"vision": {"uca": "A5", "name": "DO NOT USE"}}},
+              {"level": "projects", "kind": cp.MISSING, "_ref": {"vision": {"uca": "A6", "name": "Real job"}}}]
+    d.quote_pairs = [({"wo": 1}, {"id": 11}), ({"wo": 2}, {"id": 12})]
+    h = ap.find_holds(v, d)
+    assert h["projects"] == {"A5": "project name reads as test data", "A6": "project holds no quotes or POs in vision"}
+    assert h["credit_only"] == {1}
+    assert "test data" in ap.held(d.rows[0], h)
+    assert "its project is held" in ap.held({"level": "quotes", "kind": cp.MISSING, "_ref": {"vision": v["quotes"][2]}}, h)
+    assert ap.held({"level": "quote lines", "kind": cp.DIFFERS, "_ref": {"parent": 11}}, h) == "line of a credit-only work order"
+    assert ap.held({"level": "quote lines", "kind": cp.DIFFERS, "_ref": {"parent": 12}}, h) is None   # change-order credits apply
+    assert ap.action_of({"kind": cp.DIFFERS, "outcome": ap.SKIPPED, "reason": f"{ap.HELD}: x"}) == "held"

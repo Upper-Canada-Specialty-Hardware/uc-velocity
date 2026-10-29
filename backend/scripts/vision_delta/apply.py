@@ -36,6 +36,11 @@ What it keeps for a person (Velocity's value stays, the row is listed):
     prices. ``--decisions`` takes ``decisions_needed.csv`` back with
     ``apply``/``skip`` filled in, for a later run.
 
+What it holds for a person although it is certain (see :func:`find_holds`):
+    a Vision project that reads as test data or holds nothing, with its
+    records; a credit-only work order (a credit memo, not a change order).
+    A decisions-file ``apply`` releases a held row.
+
 Every change, and every difference left for a person, is written to
 ``vision_sync_changes`` under one ``vision_sync_runs`` row, in the same
 transaction as the changes (a dry run's log is rolled back with it and kept in
@@ -50,6 +55,7 @@ import getpass
 import glob
 import hashlib
 import os
+import re
 import sys
 import time
 from collections import Counter, defaultdict
@@ -61,6 +67,9 @@ from urllib.parse import urlparse
 # Outcomes of a row
 APPLIED, SKIPPED, FAILED, INFO = "applied", "skipped", "failed", "info"
 NEEDS = "needs a decision"                                 # reason suffix: a conflict, Velocity kept
+HELD = "held for a decision"                               # reason prefix: certain to apply, but a person says if
+# A project name that reads as test data or a placeholder (checked on Vision projects Velocity lacks)
+TEST_NAME = re.compile(r"\btest\b|do not use|dummy|\bxxx", re.IGNORECASE)
 
 # Vision table each kind of record came from (stamped as legacy_source)
 SOURCE = {
@@ -178,6 +187,60 @@ def rule(row: dict) -> tuple[str, str]:
     if why == BOTH:
         return SKIPPED, f"changed on both sides: velocity kept, {NEEDS}"
     return SKIPPED, f"unexplained: velocity kept, {NEEDS}"
+
+
+# --------------------------------------------------------------------------- #
+# Holds: rows the rule would apply that wait for a person instead
+# --------------------------------------------------------------------------- #
+
+def find_holds(v: dict, delta) -> dict:
+    """What the cutover holds back for the decisions page instead of applying.
+
+    * a Vision project Velocity lacks whose name reads as test data, or that
+      holds no quotes and no POs in Vision -- with every quote and PO under it;
+    * a credit-only work order (credit lines, no positive line): a credit memo,
+      not the change-order use (credits beside the new charges) Velocity keeps.
+      Its line fixes wait; a missing one is not added.
+
+    Args:
+        v: The Vision data the compare read (quotes and POs relabelled).
+        delta: The compare's results.
+
+    Returns:
+        ``{"projects": {Vision number: why}, "credit_only": {WO}, "wo_of": {Velocity quote id: WO}}``.
+    """
+    from .compare import MISSING
+    used = {r.get("vision_uca", r["uca"]) for r in v["quotes"] + v["pos"]}   # Vision projects holding records
+    projects = {}
+    for row in delta.rows:
+        if row["level"] == "projects" and row["kind"] == MISSING:
+            p = row["_ref"]["vision"]
+            if TEST_NAME.search(p["name"] or ""):
+                projects[p["uca"]] = "project name reads as test data"
+            elif p["uca"] not in used:
+                projects[p["uca"]] = "project holds no quotes or POs in vision"
+    credit_only = {q["wo"] for q in v["quotes"]
+                   if any(l["quantity"] < 0 for l in q["lines"]) and not any(l["quantity"] > 0 for l in q["lines"])}
+    return {"projects": projects, "credit_only": credit_only,
+            "wo_of": {t["id"]: vq["wo"] for vq, t in delta.quote_pairs}}
+
+
+def held(row: dict, holds: Optional[dict]) -> Optional[str]:
+    """Why a row the rule would apply is held for a person, or None."""
+    from .compare import MISSING
+    if not holds:
+        return None
+    lv, kind, ref = row["level"], row["kind"], row.get("_ref") or {}
+    if kind == MISSING and lv in ("projects", "quotes", "pos"):
+        rec = ref.get("vision") or {}
+        why = holds["projects"].get(rec.get("vision_uca", rec.get("uca")))
+        if why:
+            return why if lv == "projects" else f"its project is held ({why})"
+    if lv == "quotes" and kind == MISSING and ref.get("vision", {}).get("wo") in holds["credit_only"]:
+        return "credit-only work order"
+    if lv == "quote lines" and holds["wo_of"].get(ref.get("parent")) in holds["credit_only"]:
+        return "line of a credit-only work order"
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -779,7 +842,7 @@ def stamp_plan(delta, updated_quotes: frozenset | set = frozenset()) -> tuple[li
 INSERT_ORDER = ["customers and vendors", "parts", "labour", "misc", "projects", "quotes", "pos"]
 
 
-def apply(db, delta, decisions: dict) -> tuple[list[dict], "Writer"]:
+def apply(db, delta, decisions: dict, holds: Optional[dict] = None) -> tuple[list[dict], "Writer"]:
     """Decide and write every row; returns the report rows and the writer.
 
     Each record is written inside its own savepoint, so a failure rolls back
@@ -790,6 +853,8 @@ def apply(db, delta, decisions: dict) -> tuple[list[dict], "Writer"]:
         db: An open session.
         delta: The compare's results.
         decisions: :func:`load_decisions` output.
+        holds: :func:`find_holds` output; rows it names wait for a person
+            (a decisions-file "apply" releases them).
 
     Returns:
         ``(report, writer)``: every compare row (plus rows the writer added:
@@ -827,6 +892,9 @@ def apply(db, delta, decisions: dict) -> tuple[list[dict], "Writer"]:
     to_apply = []
     for row in delta.rows:
         outcome, reason = rule(row)
+        why = held(row, holds) if outcome == APPLIED else None
+        if why:
+            outcome, reason = SKIPPED, f"{HELD}: {why}"    # certain, but a person says whether
         choice = decided(decisions, row)
         if choice == "apply" and outcome == SKIPPED and not reason.startswith("only in velocity"):
             outcome, reason = APPLIED, "decided: apply"    # a person overrides the default skip
@@ -912,6 +980,8 @@ def action_of(r: dict) -> Optional[str]:
         return "failed"
     if r["outcome"] == INFO:
         return "info"
+    if (r.get("reason") or "").startswith(HELD):
+        return "held"
     return "kept: conflict" if NEEDS in (r.get("reason") or "") else "skipped"
 
 
@@ -1024,6 +1094,8 @@ def write_report(report: list[dict], delta, v: dict, t: dict, meta: dict, out_di
            and r["field"] != "status"])
 
     write_findings(wb, delta)
+    sheet("held for a decision", base + ["field", "vision_value", "velocity_value", "reason", "decision"],
+          [{**r, "decision": None} for r in report if act[id(r)] == "held"])
     sheet("differences kept", base + ["field", "vision_value", "velocity_value", "cause", "reason", "decision"],
           [{**r, "decision": None} for r in report if act[id(r)] == "kept: conflict"])
     credit = lambda r: isinstance(r.get("written"), (int, float)) and r["written"] <= 0
@@ -1052,7 +1124,7 @@ def write_report(report: list[dict], delta, v: dict, t: dict, meta: dict, out_di
         wr = csv.DictWriter(f, DECISION_COLUMNS, extrasaction="ignore")
         wr.writeheader()
         for r in report:
-            if NEEDS in (r["reason"] or ""):
+            if NEEDS in (r["reason"] or "") or (r["reason"] or "").startswith(HELD):
                 wr.writerow({**r, "decision": ""})
     js = os.path.join(out_dir, "report.json")
     with open(js, "w", encoding="utf-8") as f:
@@ -1121,7 +1193,7 @@ def main(argv: list[str] | None = None) -> int:
                                 june_cutoff=str(cutoff), counts_before=table_counts(db))
             db.add(run)
             db.flush()                                     # its id, for the change rows
-            report, _ = apply(db, delta, decisions)
+            report, _ = apply(db, delta, decisions, find_holds(v, delta))
             entries = log_rows(report)
             for i in range(0, len(entries), 5000):         # the log, in the same transaction as the changes
                 db.execute(insert(VisionSyncChange), [{**e, "run_id": run.id} for e in entries[i:i + 5000]])
