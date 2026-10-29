@@ -99,7 +99,8 @@ function parseRoute(pathname: string): ParsedRoute {
   if (pathname === "/reports") return { view: "reports" }
   if (pathname === "/settings") return { view: "settings" }
   if (pathname === "/admin/migration") return { view: "migration" }
-  if (pathname === "/admin/vision-decisions") return { view: "vision-decisions" }
+  // Open to every signed-in user; the old /admin/ path still lands here for saved links
+  if (pathname === "/vision-decisions" || pathname === "/admin/vision-decisions") return { view: "vision-decisions" }
   if (pathname === "/archive") return { view: "archive" }
   // /projects/:id, /projects/:id/quotes|pos|invoices/:docId
   const projMatch = pathname.match(/^\/projects\/(\d+)(?:\/(quotes|pos|invoices)\/(\d+))?$/)
@@ -135,7 +136,7 @@ function App() {
   // so this controls UI exposure, not the API.)
   const isAdmin = useIsAdmin()
   useEffect(() => {
-    if ((currentView === "migration" || currentView === "vision-decisions") && !isAdmin) {
+    if (currentView === "migration" && !isAdmin) {  // vision decisions is open to everyone signed in
       navigate("/projects", { replace: true })
     }
   }, [currentView, isAdmin, navigate])
@@ -383,8 +384,7 @@ function App() {
         return <ArchivedProjectsPage />
 
       case "vision-decisions":
-        if (!isAdmin) return null // same defensive gate as migration
-        return <VisionDecisionsPage />
+        return <VisionDecisionsPage />  // any signed-in user; each answer records who gave it
 
       case "project-details":
         if (selectedProjectId === null) {
@@ -741,16 +741,15 @@ function App() {
           Migration
         </Button>
       )}
-      {isAdmin && (
-        <Button
-          variant={currentView === "vision-decisions" ? "secondary" : "ghost"}
-          className="w-full justify-start gap-2"
-          onClick={() => guardedNavigate("/admin/vision-decisions")}
-        >
-          <ListChecks className="h-4 w-4" />
-          Vision decisions
-        </Button>
-      )}
+      {/* Shown to every signed-in user: settling cutover cases is not admin work */}
+      <Button
+        variant={currentView === "vision-decisions" ? "secondary" : "ghost"}
+        className="w-full justify-start gap-2"
+        onClick={() => guardedNavigate("/vision-decisions")}
+      >
+        <ListChecks className="h-4 w-4" />
+        Vision decisions
+      </Button>
     </nav>
   )
 
