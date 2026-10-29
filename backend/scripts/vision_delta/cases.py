@@ -15,12 +15,18 @@ Loading is insert-only: ``(run_id, kind, case_key)`` is unique and an existing
 case is left as it is, so loading twice changes nothing and never touches a
 decision already made.
 
-Usage (from ``backend/``)::
+Usage (from ``backend/``), reading the database directly, or through the
+key-gated admin API so no production database URL is needed on the client::
 
     python -m scripts.vision_delta.cases --target <postgres url> --run 36 \\
         --report C:\\dev\\cutover_1029\\plan\\report.xlsx [--commit]
+    python -m scripts.vision_delta.cases --api https://<backend host> --run 36 \\
+        --report C:\\dev\\cutover_1029\\plan\\report.xlsx [--commit]
 
-Without ``--commit`` it only prints what it would add.
+With ``--api`` the server builds the change-row cases from its own database and
+the report's findings are read here and sent; the cutover key comes from
+``VISION_CUTOVER_KEY`` or a masked prompt. Without ``--commit`` it only prints
+what it would add.
 """
 from __future__ import annotations
 
@@ -263,37 +269,74 @@ def load(db, run_id: int, cases: list[dict], commit: bool) -> int:
     return len(new)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Build the run's cases and load them (dry run unless ``--commit``)."""
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--target", required=True, help="Postgres URL of the database the run wrote to")
-    p.add_argument("--run", type=int, required=True, help="the cutover run id")
-    p.add_argument("--report", help="the plan's report.xlsx (same job, duplicate projects, copies)")
-    p.add_argument("--commit", action="store_true", help="write the cases; without it nothing is written")
-    a = p.parse_args(argv)
+def _print_counts(counts: dict, new: int, commit: bool) -> None:
+    """Print how many cases of each kind there are and how many are new."""
+    for kind, _, _, _ in KINDS:                            # the page's own order, so the totals line up
+        print(f"{kind:20} {counts.get(kind, 0):6}")
+    print(f"{new} new case(s) {'written' if commit else 'would be written (dry run; add --commit)'}")
 
+
+def _load_via_target(a) -> int:
+    """Build and load the run's cases against a database directly (a local copy of the target)."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
     from models import VisionSyncChange, VisionSyncRun
     with Session(create_engine(a.target)) as db:
-        if db.get(VisionSyncRun, a.run) is None:
+        if db.get(VisionSyncRun, a.run) is None:           # a run id this database never recorded
             print(f"run {a.run} not found; nothing was written")
             return 2
         cols = ("id", "level", "action", "record_table", "record_id", "vision_key", "project", "context",
                 "field", "before", "after", "reason")
         q = db.query(*(getattr(VisionSyncChange, c) for c in cols)).filter(
             VisionSyncChange.run_id == a.run, VisionSyncChange.action.in_(CHANGE_ACTIONS))
-        cases = change_cases(dict(zip(cols, r)) for r in q)
+        cases = change_cases(dict(zip(cols, r)) for r in q)   # cases from the run's own log rows
         if a.report:
-            cases += finding_cases(a.report)
+            cases += finding_cases(a.report)               # plus the report's findings sheets
         counts = defaultdict(int)
         for c in cases:
             counts[c["kind"]] += 1
-        for kind, _, _, _ in KINDS:
-            print(f"{kind:20} {counts[kind]:6}")
         n = load(db, a.run, cases, a.commit)
-        print(f"{n} new case(s) {'written' if a.commit else 'would be written (dry run; add --commit)'}")
+        _print_counts(counts, n, a.commit)
     return 0
+
+
+def _load_via_api(a) -> int:
+    """Load the run's cases through the admin API: the server builds the change-row cases itself.
+
+    Only the report's findings cross the wire; the server reads the run's
+    ``vision_sync_changes`` from its own database, so no target URL is needed.
+    """
+    import getpass
+    import os
+    import httpx
+    findings = finding_cases(a.report) if a.report else []   # built locally from the plan's report.xlsx
+    key = os.getenv("VISION_CUTOVER_KEY") or getpass.getpass("cutover key: ")
+    body = {"run_id": a.run, "findings": findings, "commit": a.commit}
+    with httpx.Client(base_url=a.api.rstrip("/"), headers={"X-Cutover-Key": key}, timeout=300) as client:
+        r = client.post("/admin/vision-cutover/cases/load", json=body)
+    if r.status_code != 200:                               # 404 no run, 409 wrong schema, 403 wrong key
+        print(f"server {r.status_code}: {r.text[:500]}")
+        return 2
+    out = r.json()
+    _print_counts(out.get("counts", {}), out.get("new", 0), bool(out.get("committed")))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Build the run's cases and load them (dry run unless ``--commit``).
+
+    Either read the run's database directly (``--target``), or go through the
+    admin API (``--api``), which needs no production database URL on the client.
+    """
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--target", help="Postgres URL of the database the run wrote to (reads it directly)")
+    src.add_argument("--api", help="the backend's base URL (key-gated admin API; no target URL needed)")
+    p.add_argument("--run", type=int, required=True, help="the cutover run id")
+    p.add_argument("--report", help="the plan's report.xlsx (same job, duplicate projects, copies)")
+    p.add_argument("--commit", action="store_true", help="write the cases; without it nothing is written")
+    a = p.parse_args(argv)
+    return _load_via_api(a) if a.api else _load_via_target(a)
 
 
 if __name__ == "__main__":

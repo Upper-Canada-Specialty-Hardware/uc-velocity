@@ -227,3 +227,42 @@ def test_steps_and_cases_list_open_work(world):
     assert [s for s in steps] == [k for k, _, _, _ in cs.KINDS] and steps["velocity copy"]["open"] >= 1
     page = cl.get("/vision-decisions/cases", params={"kind": "velocity copy"}).json()
     assert page["total"] >= 1 and page["cases"][0]["options"] == cs.OPTIONS["velocity copy"]
+
+
+# ---- the admin load route (#297): build cases on the server, insert what is new ----
+
+def _finding(kind, key, prediction):
+    """A findings case dict as cases.finding_cases emits, for the load route's body."""
+    return {"kind": kind, "case_key": key, "project": "A1", "title": f"{kind} {key}",
+            "prediction": prediction, "prediction_reason": "likely", "detail": {"found": {}}, "change_ids": []}
+
+
+def test_cases_load_route_dry_run_then_commit_and_is_idempotent(world, monkeypatch):
+    from models import VisionCase
+    monkeypatch.setenv("VISION_CUTOVER_KEY", "test-key")         # the admin API is on only with a key set
+    run_id = world["run"].id
+    findings = [_finding("same job", f"wo:{run_id}:1", "same job"),
+                _finding("duplicate project", f"group:{run_id}", "duplicate")]
+    body = {"run_id": run_id, "findings": findings, "commit": False}
+    c, h = _client(), {"X-Cutover-Key": "test-key"}
+    assert c.post("/admin/vision-cutover/cases/load", json=body,
+                  headers={"X-Cutover-Key": "no"}).status_code == 403          # wrong key
+    dry = c.post("/admin/vision-cutover/cases/load", json=body, headers=h)
+    assert dry.status_code == 200, dry.text
+    assert dry.json()["new"] == 2 and dry.json()["counts"]["same job"] == 1 and dry.json()["committed"] is False
+    world["db"].rollback()
+    assert world["db"].query(VisionCase).filter(VisionCase.run_id == run_id).count() == 0   # dry run wrote nothing
+    wrote = c.post("/admin/vision-cutover/cases/load", json={**body, "commit": True}, headers=h)
+    assert wrote.status_code == 200 and wrote.json()["new"] == 2 and wrote.json()["committed"] is True
+    world["db"].rollback()
+    assert world["db"].query(VisionCase).filter(VisionCase.run_id == run_id).count() == 2
+    again = c.post("/admin/vision-cutover/cases/load", json={**body, "commit": True}, headers=h)
+    assert again.json()["new"] == 0                                            # insert-only: nothing new the second time
+
+
+def test_cases_load_route_404_for_an_unknown_run(world, monkeypatch):
+    monkeypatch.setenv("VISION_CUTOVER_KEY", "test-key")
+    r = _client().post("/admin/vision-cutover/cases/load",
+                       json={"run_id": 2_000_000_000, "findings": [], "commit": False},
+                       headers={"X-Cutover-Key": "test-key"})
+    assert r.status_code == 404

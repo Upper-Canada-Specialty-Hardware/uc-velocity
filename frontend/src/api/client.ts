@@ -19,6 +19,7 @@ import type {
   BacklogQuoteItem, InventoryHealthReport, PricebookImportResult, MigrationResult,
   SystemRate, SystemRateCreate, SystemRateUpdate,
   VisionDecisionStep, VisionDecisionPage, VisionDecisionCase, VisionAcceptResult,
+  ArchivedProjectSearch, ArchivedProject,
 } from '@/types';
 import { tel } from '@/lib/tel';
 
@@ -406,6 +407,17 @@ export const api = {
   reports: {
     getBacklogQuotes: () => request<BacklogQuoteItem[]>('/reports/backlog-quotes'),
     getInventoryHealth: () => request<InventoryHealthReport>('/reports/inventory-health'),
+  },
+
+  // ===== Archived projects (#304): read-only, from the bucket =====
+  archive: {
+    /** Search the archive by UCA number, name or customer. */
+    search: (q: string, offset = 0, limit = 50) =>
+      request<ArchivedProjectSearch>(
+        `/archive/projects?${new URLSearchParams({ q, offset: String(offset), limit: String(limit) })}`
+      ),
+    /** One archived project's file. */
+    get: (uca: string) => request<ArchivedProject>(`/archive/projects/${encodeURIComponent(uca)}`),
   },
 
   // ===== Vision cutover decisions (#297) =====

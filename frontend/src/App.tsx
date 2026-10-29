@@ -50,6 +50,9 @@ const SettingsPage = lazy(() =>
 const MigrationPage = lazy(() =>
   import("@/pages/MigrationPage").then((m) => ({ default: m.MigrationPage }))
 )
+const ArchivedProjectsPage = lazy(() =>
+  import("@/pages/ArchivedProjectsPage").then((m) => ({ default: m.ArchivedProjectsPage }))
+)
 const VisionDecisionsPage = lazy(() =>
   import("@/pages/VisionDecisionsPage").then((m) => ({ default: m.VisionDecisionsPage }))
 )
@@ -74,12 +77,13 @@ import {
   Settings,
   DatabaseZap,
   ListChecks,
+  Archive,
   Menu,
   X,
 } from "lucide-react"
 import { Toaster } from "@/components/ui/toaster"
 
-type AppView = "profiles" | "projects" | "project-details" | "inventory" | "reports" | "settings" | "migration" | "vision-decisions"
+type AppView = "profiles" | "projects" | "project-details" | "inventory" | "reports" | "settings" | "migration" | "vision-decisions" | "archive"
 
 type ParsedRoute =
   | { view: Exclude<AppView, "project-details"> }
@@ -96,6 +100,7 @@ function parseRoute(pathname: string): ParsedRoute {
   if (pathname === "/settings") return { view: "settings" }
   if (pathname === "/admin/migration") return { view: "migration" }
   if (pathname === "/admin/vision-decisions") return { view: "vision-decisions" }
+  if (pathname === "/archive") return { view: "archive" }
   // /projects/:id, /projects/:id/quotes|pos|invoices/:docId
   const projMatch = pathname.match(/^\/projects\/(\d+)(?:\/(quotes|pos|invoices)\/(\d+))?$/)
   if (projMatch) {
@@ -373,6 +378,9 @@ function App() {
         // (the useEffect above will then redirect to projects on the next tick).
         if (!isAdmin) return null
         return <MigrationPage />
+
+      case "archive":
+        return <ArchivedProjectsPage />
 
       case "vision-decisions":
         if (!isAdmin) return null // same defensive gate as migration
@@ -682,6 +690,14 @@ function App() {
       >
         <FolderOpen className="h-4 w-4" />
         Projects
+      </Button>
+      <Button
+        variant={currentView === "archive" ? "secondary" : "ghost"}
+        className="w-full justify-start gap-2"
+        onClick={() => guardedNavigate("/archive")}
+      >
+        <Archive className="h-4 w-4" />
+        Archived projects
       </Button>
       <Button
         variant={currentView === "profiles" ? "secondary" : "ghost"}
