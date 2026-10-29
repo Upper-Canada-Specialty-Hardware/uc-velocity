@@ -16,8 +16,8 @@ quantities ready to invoice. Purchase orders work the same way: Vision's
 (``compute_po_status``).
 
 Quantities are read as Vision stores them: fractions kept (to 2 decimals), and
-zero (quoted, not ordered) or negative (credit) lines kept as they are, with
-nothing pending on them.
+zero (quoted, not ordered) or negative (credit) lines kept as they are. A zero
+line has nothing pending; a credit Vision has not applied yet stays pending.
 
 Every imported row also carries its Vision origin (``legacy_source`` = the
 source table, ``legacy_id`` = the source row's primary key) and migrated quotes
@@ -347,19 +347,23 @@ def line_close_state(row: dict, quantity: float, closed: bool) -> tuple[float, f
     Returns:
         ``(qty_fulfilled, qty_pending, ship_data_present)``. A zero line (quoted,
         not ordered) has nothing fulfilled or pending. A negative line (a credit)
-        has nothing pending, so it never shows as left to invoice; it counts as
-        fulfilled when Vision shipped it or the job is finished. A finished work
-        order makes every positive line fulfilled. A line with no ship data is
-        left fully pending (never claim work was done that Vision did not record).
+        is processed whole or not at all: fulfilled at its own quantity when
+        Vision shipped it or the job is finished, else still pending at its own
+        quantity, so the credit is applied on a later invoice next to the charges
+        it offsets. A finished work order makes every positive line fulfilled. A
+        line with no ship data is left fully pending (never claim work was done
+        that Vision did not record).
     """
     if quantity == 0:                                      # quoted, not ordered: nothing to invoice
         return 0.0, 0.0, True
-    if quantity < 0:                                       # credit line: never pending
+    if quantity < 0:                                       # credit line: whole or not at all
         shipped = opt_qty(row.get("intTotalShippedQuantity"))   # running total wins, a recorded 0 included
         if shipped is None:                                # only when no total was recorded
             shipped = opt_qty(row.get("intShipQuantity"))  # (open credits carry intShipQuantity = qty, total 0)
         done = closed or bool(shipped)                     # processed in Vision?
-        return (quantity if done else 0.0), 0.0, True
+        if done:
+            return quantity, 0.0, True                     # applied: fulfilled at the credit, nothing left
+        return 0.0, quantity, True                         # not applied yet: the whole credit is still to invoice
     if closed:                                             # finished header -> whole line done
         return quantity, 0.0, True
     derived = derive_line_fulfillment(row, quantity)
