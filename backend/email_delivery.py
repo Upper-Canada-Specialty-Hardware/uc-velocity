@@ -1,8 +1,12 @@
-"""Deliver authenticated Clerk messages through SMTP2GO exactly once normally.
+"""Deliver authenticated Clerk messages exactly once in the normal case.
 
-The transaction-scoped advisory lock serializes one Clerk email id across all
-Gunicorn workers. A durable receipt is committed only after SMTP2GO accepts the
-message, allowing Clerk to retry failures without duplicating completed sends.
+Recipients on an internal domain (ucsh.com by default) go through the org's
+internal mailer, which sends over Microsoft 365 High Volume Email; every other
+recipient, and every recipient while the mailer is not configured, goes through
+SMTP2GO. The transaction-scoped advisory lock serializes one Clerk email id
+across all Gunicorn workers. A durable receipt is committed only after the
+chosen provider accepts the message, allowing Clerk to retry failures without
+duplicating completed sends.
 """
 from __future__ import annotations
 
@@ -26,6 +30,14 @@ from clerk_email import ClerkEmailMessage
 SMTP2GO_ENDPOINT = "https://api.smtp2go.com/v3/email/send"
 # Bound DNS, connection, write, and response waits for webhook retries.
 SMTP2GO_TIMEOUT_SECONDS = 8.0
+# The internal mailer's send route, appended to the configured MAILER_URL.
+MAILER_SEND_PATH = "/v1/send"
+# The mailer waits for HVE before answering; a timeout lets Clerk retry.
+MAILER_TIMEOUT_SECONDS = 10.0
+# Display name shown on the mailer's shared notifications sender.
+MAILER_FROM_NAME = "UC Velocity"
+# HVE only delivers inside the tenant, so only these domains use the mailer.
+DEFAULT_MAILER_DOMAINS = ("ucsh.com",)
 # Bound each database statement while the delivery transaction is open.
 DATABASE_STATEMENT_TIMEOUT = "5000ms"
 # Reserve a small pool so slow email delivery cannot occupy the ERP request pool.
@@ -82,6 +94,7 @@ class HttpClient(Protocol):
         *,
         json: dict[str, object],
         timeout: float,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Submit one JSON request and return its response."""
 
@@ -110,6 +123,70 @@ def load_email_delivery_config() -> EmailDeliveryConfig:
     if not api_key or not sender:
         raise EmailDeliveryConfigurationError("email delivery is not configured")
     return EmailDeliveryConfig(api_key=api_key, sender=sender)
+
+
+@dataclass(frozen=True, repr=False)
+class MailerConfig:
+    """Hold the internal mailer's address, Velocity's key and its domains."""
+
+    url: str
+    key: str
+    domains: tuple[str, ...] = DEFAULT_MAILER_DOMAINS
+
+
+def load_mailer_config() -> MailerConfig | None:
+    """Load the optional internal mailer settings.
+
+    Returns:
+        The mailer settings, or ``None`` when ``MAILER_URL`` and
+        ``MAILER_KEY`` are not both set, so every recipient stays on SMTP2GO.
+    """
+    # Read at delivery time, like SMTP2GO, so a variable change needs no code.
+    url = (os.getenv("MAILER_URL") or "").strip().rstrip("/")
+    key = (os.getenv("MAILER_KEY") or "").strip()
+    if not url and not key:
+        # Not set up yet: today's SMTP2GO-only behaviour.
+        return None
+    if not url or not key:
+        # Half set up: keep sign-in working on SMTP2GO and say so in the logs.
+        logger.warning(
+            "mailer outcome=not_configured missing=%s",
+            "MAILER_URL" if not url else "MAILER_KEY",
+        )
+        return None
+    # Optional override, comma separated; defaults to ucsh.com.
+    raw_domains = (os.getenv("MAILER_DOMAINS") or "").split(",")
+    domains = tuple(d.strip().lower() for d in raw_domains if d.strip())
+    return MailerConfig(url=url, key=key, domains=domains or DEFAULT_MAILER_DOMAINS)
+
+
+def is_internal_recipient(address: str, domains: tuple[str, ...]) -> bool:
+    """Say whether an address is on one of the mailer's internal domains.
+
+    Args:
+        address: The recipient address from Clerk's signed event.
+        domains: Lowercase internal domains, e.g. ``("ucsh.com",)``.
+
+    Returns:
+        ``True`` only for an exact domain match; subdomains do not count.
+    """
+    # The text after the last @ is the domain; case never matters in it.
+    _, at, domain = address.strip().rpartition("@")
+    return bool(at) and domain.lower() in domains
+
+
+def mailer_idempotency_key(email_id: str) -> str:
+    """Derive the mailer's Idempotency-Key from Clerk's email id.
+
+    Args:
+        email_id: Clerk's opaque email resource id.
+
+    Returns:
+        A stable key of visible ASCII, the same on every Clerk retry.
+    """
+    # Hashing keeps the key within the mailer's character and length rules.
+    digest = hashlib.sha256(email_id.encode("utf-8")).hexdigest()
+    return f"uc-velocity-clerk-{digest}"
 
 
 def clerk_email_lock_key(email_id: str) -> int:
@@ -325,6 +402,110 @@ def send_via_smtp2go(
     )
 
 
+def _log_mailer_outcome(
+    outcome: str,
+    *,
+    http_status: int | None,
+    error_code: str | None = None,
+) -> None:
+    """Log a fixed mailer outcome with only its status and safe error code.
+
+    Args:
+        outcome: One fixed delivery outcome category.
+        http_status: Mailer HTTP status, or ``None`` for network failures.
+        error_code: Sanitized mailer error code when available.
+    """
+    # Only accepted is routine; logged means the mailer sent nothing.
+    log_method = logger.info if outcome == "accepted" else logger.warning
+    # Fixed placeholders keep recipients, subjects, codes and keys out of logs.
+    log_method(
+        "mailer outcome=%s http_status=%s error_code=%s",
+        outcome,
+        http_status if http_status is not None else "-",
+        error_code or "-",
+    )
+
+
+def send_via_mailer(
+    message: ClerkEmailMessage,
+    config: MailerConfig,
+    *,
+    client: HttpClient | None = None,
+) -> None:
+    """Send the prepared subject and bodies through the internal mailer.
+
+    Args:
+        message: Authenticated and validated Clerk email content.
+        config: The mailer's URL and Velocity's key, from Railway.
+        client: Optional HTTP client supplied by tests.
+
+    Raises:
+        EmailSendError: If the mailer is unreachable, refuses the message, or
+            returns anything other than one accepted recipient.
+    """
+    payload: dict[str, object] = {
+        # The key's one sender (the shared notifications address) is used.
+        "to": [message.to_email],
+        "subject": message.subject,
+        "fromName": MAILER_FROM_NAME,
+    }
+    if message.html_body is not None:
+        # Same prepared HTML as the SMTP2GO path.
+        payload["html"] = message.html_body
+    if message.text_body is not None:
+        # Same prepared plain text as the SMTP2GO path.
+        payload["text"] = message.text_body
+    headers = {
+        "authorization": f"Bearer {config.key}",
+        # Clerk retries reuse the key, so the mailer never sends a code twice.
+        "idempotency-key": mailer_idempotency_key(message.email_id),
+    }
+
+    owned_client = client is None
+    provider_client: HttpClient = client or httpx.Client()
+    try:
+        try:
+            response = provider_client.post(
+                config.url + MAILER_SEND_PATH,
+                json=payload,
+                timeout=MAILER_TIMEOUT_SECONDS,
+                headers=headers,
+            )
+        except httpx.HTTPError as exc:
+            # Never expose exceptions that could include the key or content.
+            _log_mailer_outcome("network_error", http_status=None)
+            raise EmailSendError("could not reach the internal mailer") from exc
+    finally:
+        if owned_client:
+            # The locally created client owns its connection resources.
+            assert isinstance(provider_client, httpx.Client)
+            provider_client.close()
+    try:
+        result = response.json()
+    except (TypeError, ValueError):
+        # Never log raw response text when JSON decoding fails.
+        result = None
+    body = result if isinstance(result, dict) else {}
+    # Every mailer error body carries a short code such as rate_limited.
+    error_code = _safe_provider_token(body.get("error"))
+    if not 200 <= response.status_code < 300:
+        _log_mailer_outcome(
+            "http_rejected", http_status=response.status_code, error_code=error_code
+        )
+        raise EmailSendError("internal mailer rejected the request")
+    status = body.get("status")
+    recipients = body.get("recipients")
+    # Reject bools, which are Python ints, as a recipient count.
+    if status not in ("sent", "logged") or type(recipients) is not int or recipients != 1:
+        _log_mailer_outcome("invalid_response", http_status=response.status_code)
+        raise EmailSendError("internal mailer returned an invalid response")
+    # "logged" is the mailer's no-send mode; flag it so a test setup is visible.
+    _log_mailer_outcome(
+        "accepted" if status == "sent" else "logged",
+        http_status=response.status_code,
+    )
+
+
 def _get_email_session_factory() -> sessionmaker[Session]:
     """Create the dedicated bounded email database pool on first delivery.
 
@@ -401,6 +582,7 @@ def deliver_clerk_email(
     message: ClerkEmailMessage,
     *,
     config: EmailDeliveryConfig | None = None,
+    mailer_config: MailerConfig | None = None,
     client: HttpClient | None = None,
 ) -> bool:
     """Coordinate provider acceptance and a durable receipt transactionally.
@@ -408,7 +590,9 @@ def deliver_clerk_email(
     Args:
         db: A fresh synchronous SQLAlchemy session from the email-only pool.
         message: Authenticated Clerk email selected for external delivery.
-        config: Optional provider configuration supplied by tests.
+        config: Optional SMTP2GO configuration supplied by tests.
+        mailer_config: Optional internal mailer configuration supplied by
+            tests; otherwise read from the environment.
         client: Optional provider HTTP client supplied by tests.
 
     Returns:
@@ -418,7 +602,7 @@ def deliver_clerk_email(
     Raises:
         EmailDeliveryBusy: If another worker holds this email's advisory lock.
         EmailDeliveryConfigurationError: If provider settings are missing.
-        EmailSendError: If SMTP2GO does not accept the message.
+        EmailSendError: If the chosen provider does not accept the message.
         EmailDeliveryPersistenceError: If database work or commit fails.
     """
     try:
@@ -447,8 +631,16 @@ def deliver_clerk_email(
                 # A committed receipt makes Clerk's retry an acknowledged no-op.
                 return False
             # Load live settings only after proving that a send is still needed.
-            delivery_config = config or load_email_delivery_config()
-            send_via_smtp2go(message, delivery_config, client=client)
+            mailer = mailer_config or load_mailer_config()
+            if mailer is not None and is_internal_recipient(
+                message.to_email, mailer.domains
+            ):
+                # Internal address: HVE delivers it as internal mail.
+                send_via_mailer(message, mailer, client=client)
+            else:
+                # Outside address, or no mailer yet: unchanged SMTP2GO path.
+                delivery_config = config or load_email_delivery_config()
+                send_via_smtp2go(message, delivery_config, client=client)
             # Record no recipient, subject, body, or one-time code.
             db.execute(
                 text(

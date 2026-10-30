@@ -24,12 +24,18 @@ from email_delivery import (
     EmailDeliveryConfigurationError,
     EmailDeliveryPersistenceError,
     EmailSendError,
+    MAILER_TIMEOUT_SECONDS,
+    MailerConfig,
     SMTP2GO_ENDPOINT,
     SMTP2GO_TIMEOUT_SECONDS,
     clerk_email_lock_key,
     deliver_clerk_email,
+    is_internal_recipient,
     load_email_delivery_config,
+    load_mailer_config,
     logger as email_delivery_logger,
+    mailer_idempotency_key,
+    send_via_mailer,
     send_via_smtp2go,
 )
 
@@ -129,9 +135,14 @@ class _RecordingClient:
         *,
         json: dict[str, object],
         timeout: float,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Record one call and return its queued provider outcome."""
-        self.calls.append({"url": url, "json": json, "timeout": timeout})
+        call: dict[str, Any] = {"url": url, "json": json, "timeout": timeout}
+        if headers is not None:
+            # Only mailer calls send headers; SMTP2GO call records stay unchanged.
+            call["headers"] = headers
+        self.calls.append(call)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, httpx.HTTPError):
             raise outcome
@@ -640,3 +651,234 @@ def test_postgres_advisory_lock_serializes_same_email(
     assert first_results == [True]
     assert blocking_client.calls == 1
     assert _receipt_count(postgres_session_factory, email_id) == 1
+
+
+# --- Internal mailer (Microsoft 365 HVE) for ucsh.com recipients ---
+
+
+def _mailer_config() -> MailerConfig:
+    """Return inert internal mailer settings used only by mocked requests."""
+    return MailerConfig(url="https://mailer.test", key="ucshm_velocity_test")
+
+
+def _internal_message(to_email: str = "staff@ucsh.com") -> ClerkEmailMessage:
+    """Return one message addressed to an internal recipient."""
+    return ClerkEmailMessage(
+        email_id="ema_internal_1",
+        to_email=to_email,
+        subject="Your code",
+        html_body="<p>Code <strong>123456</strong></p>\n",
+        text_body="Code 123456\n",
+    )
+
+
+def _mailer_sent() -> httpx.Response:
+    """Return the mailer's success shape for one recipient."""
+    return httpx.Response(
+        200,
+        json={"status": "sent", "recipients": 1, "messages": [{"recipients": 1}]},
+    )
+
+
+def test_mailer_request_carries_key_idempotency_and_bodies() -> None:
+    """Send the same subject and bodies to the mailer's send route."""
+    client = _RecordingClient([_mailer_sent()])
+
+    send_via_mailer(_internal_message(), _mailer_config(), client=client)
+
+    assert client.calls == [
+        {
+            "url": "https://mailer.test/v1/send",
+            "json": {
+                "to": ["staff@ucsh.com"],
+                "subject": "Your code",
+                "fromName": "UC Velocity",
+                "html": "<p>Code <strong>123456</strong></p>\n",
+                "text": "Code 123456\n",
+            },
+            "timeout": MAILER_TIMEOUT_SECONDS,
+            "headers": {
+                "authorization": "Bearer ucshm_velocity_test",
+                "idempotency-key": mailer_idempotency_key("ema_internal_1"),
+            },
+        }
+    ]
+
+
+def test_mailer_idempotency_key_is_stable_and_visible_ascii() -> None:
+    """Give every Clerk retry of one email the same mailer key."""
+    key = mailer_idempotency_key("ema_internal_1")
+
+    assert key == mailer_idempotency_key("ema_internal_1")
+    assert key != mailer_idempotency_key("ema_internal_2")
+    assert 1 <= len(key) <= 255
+    assert all(33 <= ord(ch) <= 126 for ch in key)
+
+
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("staff@ucsh.com", True),
+        ("Staff@UCSH.COM", True),
+        ("staff@example.com", False),
+        ("staff@mail.ucsh.com", False),
+        ("staff@ucsh.com.evil.test", False),
+        ("ucsh.com", False),
+    ],
+)
+def test_internal_recipient_needs_an_exact_domain(address: str, expected: bool) -> None:
+    """Match the domain exactly, ignoring case, never a suffix or subdomain."""
+    assert is_internal_recipient(address, ("ucsh.com",)) is expected
+
+
+def test_internal_recipient_goes_to_mailer_and_commits_receipt() -> None:
+    """Route a ucsh.com code to the mailer, never to SMTP2GO."""
+    store = _Store()
+    client = _RecordingClient([_mailer_sent()])
+
+    sent = deliver_clerk_email(
+        _Session(store),
+        _internal_message(),
+        config=_config(),
+        mailer_config=_mailer_config(),
+        client=client,
+    )
+
+    assert sent is True
+    assert store.receipts == {"ema_internal_1"}
+    assert [call["url"] for call in client.calls] == ["https://mailer.test/v1/send"]
+
+
+def test_outside_recipient_stays_on_smtp2go_with_mailer_configured() -> None:
+    """Keep every non-internal address on SMTP2GO, which HVE cannot reach."""
+    client = _RecordingClient([_accepted_response()])
+
+    deliver_clerk_email(
+        _Session(_Store()),
+        _message(),
+        config=_config(),
+        mailer_config=_mailer_config(),
+        client=client,
+    )
+
+    assert [call["url"] for call in client.calls] == [SMTP2GO_ENDPOINT]
+
+
+def test_internal_recipient_stays_on_smtp2go_without_mailer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Behave exactly as before until the mailer variables are set."""
+    monkeypatch.delenv("MAILER_URL", raising=False)
+    monkeypatch.delenv("MAILER_KEY", raising=False)
+    client = _RecordingClient([_accepted_response()])
+
+    deliver_clerk_email(
+        _Session(_Store()), _internal_message(), config=_config(), client=client
+    )
+
+    assert [call["url"] for call in client.calls] == [SMTP2GO_ENDPOINT]
+
+
+def test_mailer_rejection_leaves_no_receipt_and_logs_only_the_code(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Fail retryably on a refusal and keep content and key out of the logs."""
+    store = _Store()
+    refused = httpx.Response(
+        503,
+        json={"error": "hve_unavailable", "message": "Code 123456 to staff@ucsh.com"},
+    )
+    client = _RecordingClient([refused])
+
+    with _capture_provider_logs(caplog), pytest.raises(EmailSendError):
+        deliver_clerk_email(
+            _Session(store),
+            _internal_message(),
+            mailer_config=_mailer_config(),
+            client=client,
+        )
+
+    assert store.receipts == set()
+    assert (
+        "mailer outcome=http_rejected http_status=503 error_code=hve_unavailable"
+        in caplog.text
+    )
+    for secret in ("123456", "staff@ucsh.com", "ucshm_velocity_test"):
+        assert secret not in caplog.text
+
+
+def test_mailer_network_error_is_retryable_send_error() -> None:
+    """Treat an unreachable mailer as a failed send so Clerk retries."""
+    client = _RecordingClient([httpx.ConnectError("refused")])
+
+    with pytest.raises(EmailSendError):
+        send_via_mailer(_internal_message(), _mailer_config(), client=client)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"status": "sent", "recipients": 2},
+        {"status": "sent", "recipients": True},
+        {"status": "queued", "recipients": 1},
+        {"recipients": 1},
+        ["sent"],
+    ],
+)
+def test_mailer_unexpected_success_shape_is_refused(body: object) -> None:
+    """Accept only one sent (or logged) recipient as proof of delivery."""
+    client = _RecordingClient([httpx.Response(200, json=body)])
+
+    with pytest.raises(EmailSendError):
+        send_via_mailer(_internal_message(), _mailer_config(), client=client)
+
+
+def test_mailer_log_mode_is_accepted_but_flagged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Accept the mailer's no-send mode but log it as a warning."""
+    client = _RecordingClient(
+        [httpx.Response(200, json={"status": "logged", "recipients": 1})]
+    )
+
+    with _capture_provider_logs(caplog):
+        send_via_mailer(_internal_message(), _mailer_config(), client=client)
+
+    assert "mailer outcome=logged" in caplog.text
+
+
+def test_mailer_config_absent_or_half_set_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Fall back to SMTP2GO unless both mailer variables are set."""
+    monkeypatch.delenv("MAILER_URL", raising=False)
+    monkeypatch.delenv("MAILER_KEY", raising=False)
+    assert load_mailer_config() is None
+
+    monkeypatch.setenv("MAILER_URL", "https://mailer.test")
+    with _capture_provider_logs(caplog):
+        assert load_mailer_config() is None
+    assert "mailer outcome=not_configured missing=MAILER_KEY" in caplog.text
+
+
+def test_mailer_config_reads_url_key_and_domains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trim the URL's trailing slash and default the domains to ucsh.com."""
+    monkeypatch.setenv("MAILER_URL", "https://mailer.test/")
+    monkeypatch.setenv("MAILER_KEY", " ucshm_velocity_test ")
+    monkeypatch.delenv("MAILER_DOMAINS", raising=False)
+
+    config = load_mailer_config()
+
+    assert config is not None
+    assert config.url == "https://mailer.test"
+    assert config.key == "ucshm_velocity_test"
+    assert config.domains == ("ucsh.com",)
+    assert "ucshm_velocity_test" not in repr(config)
+
+    monkeypatch.setenv("MAILER_DOMAINS", " UCSH.com, ucaccess.com ,")
+    config = load_mailer_config()
+    assert config is not None
+    assert config.domains == ("ucsh.com", "ucaccess.com")
