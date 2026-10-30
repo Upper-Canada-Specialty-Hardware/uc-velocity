@@ -102,6 +102,19 @@ export function ProjectsPage({
     return sorted
   }, [rawProjects, showArchived, sortBy, sortDir])
 
+  // Totals for what is listed now: follow the search and the archived toggle
+  const totals = useMemo(
+    () => displayProjects.reduce(
+      (t, p) => ({
+        quotes: t.quotes + (p.quote_count ?? 0),
+        pos: t.pos + (p.po_count ?? 0),
+        invoices: t.invoices + (p.invoice_count ?? 0),
+      }),
+      { quotes: 0, pos: 0, invoices: 0 },
+    ),
+    [displayProjects]
+  )
+
   const toggleSort = (col: SortColumn) => {
     if (sortBy === col) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"))
@@ -289,6 +302,15 @@ export function ProjectsPage({
         >
           {showArchived ? "Hide archived" : `Show archived (${archivedCount})`}
         </Button>
+        {!loading && (
+          <p className="text-sm text-muted-foreground ml-auto" aria-live="polite">
+            {/* What is listed: changes with the search and the archived toggle */}
+            {displayProjects.length.toLocaleString()} {displayProjects.length === 1 ? "project" : "projects"}
+            {" · "}{totals.quotes.toLocaleString()} {totals.quotes === 1 ? "quote" : "quotes"}
+            {" · "}{totals.pos.toLocaleString()} {totals.pos === 1 ? "PO" : "POs"}
+            {" · "}{totals.invoices.toLocaleString()} {totals.invoices === 1 ? "invoice" : "invoices"}
+          </p>
+        )}
       </div>
 
       {loading ? (

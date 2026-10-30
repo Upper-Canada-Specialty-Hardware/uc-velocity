@@ -141,6 +141,10 @@ export function VirtualizedTable<T>({
     count: items.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => rowHeight,
+    // Cache measured heights by item, not position: when a search re-orders the list, a row keeps
+    // its DOM node (same React key) but moves; an index-keyed cache would give it its old neighbour's
+    // height and the next row would draw over it (matched quotes/POs under a project)
+    getItemKey: (index) => getKey(items[index], index),
     overscan,
   })
 

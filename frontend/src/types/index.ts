@@ -334,6 +334,7 @@ export interface ProjectListView {
   created_on: string;
   quote_count: number;
   po_count: number;
+  invoice_count: number;  // invoices on the project's quotes
   latest_quote_number: string | null;
   latest_po_number: string | null;
 }

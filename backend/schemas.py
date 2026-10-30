@@ -926,6 +926,7 @@ class ProjectListView(BaseModel):
     created_on: datetime
     quote_count: int = 0
     po_count: int = 0
+    invoice_count: int = 0  # invoices on the project's quotes (Projects page totals)
     latest_quote_number: Optional[str] = None
     latest_po_number: Optional[str] = None
 

@@ -10,7 +10,7 @@ from datetime import datetime
 import log_store
 from auth import current_actor
 from database import get_db
-from models import ArchivedProjectRow, Project, Profile, ProfileType, PurchaseOrder, Quote
+from models import ArchivedProjectRow, Invoice, Project, Profile, ProfileType, PurchaseOrder, Quote
 from scripts.vision_delta.archive import (NotSafe, PREFIX, by_hand_file, by_hand_remove, index_entry, open_blockers,
                                           sha)
 from schemas import (
@@ -134,6 +134,7 @@ def _build_list_view_rows(db: Session, project_ids: Optional[Set[int]] = None) -
 
     Uses window functions to compute quote_count, po_count, and latest sequence/version
     per project in a single query — avoids hydrating line items or full child documents.
+    invoice_count (invoices on the project's quotes) feeds the Projects page totals.
     Optionally filters to a specific set of project IDs (used by /search).
     """
     quote_agg = (
@@ -162,6 +163,13 @@ def _build_list_view_rows(db: Session, project_ids: Optional[Set[int]] = None) -
         .subquery()
     )
 
+    invoice_agg = (                                        # invoices per project, through their quotes
+        db.query(Quote.project_id.label("pid"), func.count(Invoice.id).label("cnt"))
+        .join(Invoice, Invoice.quote_id == Quote.id)
+        .group_by(Quote.project_id)
+        .subquery()
+    )
+
     query = (
         db.query(
             Project.id,
@@ -179,10 +187,12 @@ def _build_list_view_rows(db: Session, project_ids: Optional[Set[int]] = None) -
             func.coalesce(po_agg.c.cnt, 0).label("po_count"),
             po_agg.c.seq.label("latest_po_seq"),
             po_agg.c.ver.label("latest_po_ver"),
+            func.coalesce(invoice_agg.c.cnt, 0).label("invoice_count"),   # 0 when it has none
         )
         .outerjoin(Profile, Project.customer_id == Profile.id)
         .outerjoin(quote_agg, and_(quote_agg.c.pid == Project.id, quote_agg.c.rn == 1))
         .outerjoin(po_agg, and_(po_agg.c.pid == Project.id, po_agg.c.rn == 1))
+        .outerjoin(invoice_agg, invoice_agg.c.pid == Project.id)   # one row per project, so no fan-out
         .order_by(Project.id)
     )
 
@@ -218,6 +228,7 @@ def _build_list_view_rows(db: Session, project_ids: Optional[Set[int]] = None) -
                 created_on=r.created_on,
                 quote_count=r.quote_count,
                 po_count=r.po_count,
+                invoice_count=r.invoice_count,
                 latest_quote_number=latest_quote_number,
                 latest_po_number=latest_po_number,
             )
