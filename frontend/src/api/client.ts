@@ -19,7 +19,7 @@ import type {
   BacklogQuoteItem, InventoryHealthReport, PricebookImportResult, MigrationResult,
   SystemRate, SystemRateCreate, SystemRateUpdate,
   VisionDecisionStep, VisionDecisionPage, VisionDecisionCase, VisionAcceptResult,
-  ArchivedProjectSearch, ArchivedProject,
+  ArchivedProjectSearch, ArchivedProject, ArchiveByHandResult, UnarchiveResult,
 } from '@/types';
 import { tel } from '@/lib/tel';
 
@@ -91,6 +91,9 @@ async function request<T>(
     } else if (Array.isArray(error.detail)) {
       // Join each validation error's msg into one string (FastAPI `detail` is an array of { msg }).
       message = error.detail.map((e: { msg?: string }) => e.msg).join('; ');
+    } else if (error.detail && Array.isArray((error.detail as { reasons?: string[] }).reasons)) {
+      // Archive/unarchive refusals return { detail: { reasons: [...] } } — surface them as the message.
+      message = (error.detail as { reasons: string[] }).reasons.join('; ');
     }
     throw new Error(message);
   }
@@ -183,6 +186,9 @@ export const api = {
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: number) =>
       request<{ message: string }>(`/projects/${id}`, { method: 'DELETE' }),
+    /** Archive a live project by hand (#319); 409 with reasons when anything is open. */
+    archive: (id: number) =>
+      request<ArchiveByHandResult>(`/projects/${id}/archive`, { method: 'POST' }),
   },
 
   // ===== Miscellaneous =====
@@ -409,15 +415,18 @@ export const api = {
     getInventoryHealth: () => request<InventoryHealthReport>('/reports/inventory-health'),
   },
 
-  // ===== Archived projects (#304): read-only, from the bucket =====
+  // ===== Archived projects (#304 read, #319 database index + restore) =====
   archive: {
-    /** Search the archive by UCA number, name or customer. */
-    search: (q: string, offset = 0, limit = 50) =>
+    /** Search the archive by UCA number, name or customer; `all` returns every match in one response (#326). */
+    search: (q = '', all = false) =>
       request<ArchivedProjectSearch>(
-        `/archive/projects?${new URLSearchParams({ q, offset: String(offset), limit: String(limit) })}`
+        `/archive/projects${buildQuery({ q: q || undefined, all: all || undefined })}`
       ),
     /** One archived project's file. */
     get: (uca: string) => request<ArchivedProject>(`/archive/projects/${encodeURIComponent(uca)}`),
+    /** Put an archived project back (#319); 409 with reasons when it cannot be restored. */
+    unarchive: (uca: string) =>
+      request<UnarchiveResult>(`/archive/projects/${encodeURIComponent(uca)}/unarchive`, { method: 'POST' }),
   },
 
   // ===== Vision cutover decisions (#297) =====

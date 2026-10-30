@@ -4,8 +4,15 @@ from sqlalchemy.orm import Session, aliased, joinedload
 from typing import Dict, List, Optional, Set
 import re
 
+import json
+from datetime import datetime
+
+import log_store
+from auth import current_actor
 from database import get_db
-from models import Project, Profile, ProfileType, PurchaseOrder, Quote
+from models import ArchivedProjectRow, Project, Profile, ProfileType, PurchaseOrder, Quote
+from scripts.vision_delta.archive import (NotSafe, PREFIX, by_hand_file, by_hand_remove, index_entry, open_blockers,
+                                          sha)
 from schemas import (
     Paginated,
     ProjectCreate,
@@ -63,6 +70,10 @@ def generate_next_uca_number(db: Session) -> str:
     """
     existing = db.query(Project.uca_project_number).all()
     existing_numbers = [row[0] for row in existing if row[0]]
+    # Archived projects keep their numbers (#319): archiving the newest project must not
+    # free its number for the next new project, or two jobs (and their invoices) would share it
+    existing_numbers += [row[0] for row in db.query(ArchivedProjectRow.uca)
+                         .filter(ArchivedProjectRow.state == "archived").all() if row[0]]
 
     def parse_uca(uca: str) -> tuple:
         """Parse UCA into (letter_prefix, number)"""
@@ -474,3 +485,101 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
     db.delete(db_project)
     db.commit()
     return {"message": "Project deleted successfully"}
+
+
+# ---- archive a project by hand (#319) ----------------------------------- #
+
+def _archive_actor() -> str:
+    """Who is archiving; refuses an anonymous request (same rule as the decisions page).
+
+    Raises:
+        HTTPException: 401 when no signed-in user is attached.
+    """
+    a = current_actor.get()
+    if not a:
+        raise HTTPException(status_code=401, detail="sign in to archive a project")
+    return a.get("email") or a["user_id"]
+
+
+def _archive_store():
+    """The store the archive files go to.
+
+    Raises:
+        HTTPException: 503 when none is configured.
+    """
+    store = log_store.from_env()
+    if store is None:
+        raise HTTPException(status_code=503, detail="the archive store is not configured")
+    return store
+
+
+def _date_text(v):
+    """A stored date value as plain text (the file already holds strings; guard anyway)."""
+    return None if v is None else str(v)
+
+
+@router.post("/{project_id}/archive")
+def archive_project(project_id: int, db: Session = Depends(get_db)) -> dict:
+    """Archive a live project by hand (signed-in). 409 with reasons when anything is open.
+
+    Refuses when a quote or PO line still has quantity pending, or an unsettled
+    cutover decision is on the project (see ``open_blockers``). Otherwise it builds
+    the archive file server-side (format 2, invoices and their snapshots included),
+    writes it to the store and reads it back to verify, inserts the
+    ``archived_projects`` row, and deletes the project's rows -- the row insert and
+    the row deletes commit together, so a failure anywhere leaves the project live.
+    Any signed-in user may archive any closed project, of any year.
+
+    Endpoint: ``POST /projects/{project_id}/archive``.
+
+    Raises:
+        HTTPException: 401 no actor, 404 no project, 409 open work / rows changed,
+            502 the file did not read back the same, 503 no store.
+    """
+    who = _archive_actor()                                 # 401 when not signed in
+    store = _archive_store()
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    if proj is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    uca, vnum = proj.uca_project_number, proj.vision_project_number
+    pending = (db.query(ArchivedProjectRow)                # already in the archive, live rows awaiting the bulk removal
+               .filter(ArchivedProjectRow.velocity_project_id == project_id, ArchivedProjectRow.state == "archived",
+                       ArchivedProjectRow.rows_removed.is_(False)).first())
+    if pending is not None:
+        raise HTTPException(status_code=409, detail={"reasons": ["already in the archive; its removal from the "
+                                                                 "database is pending"]})
+    blockers = open_blockers(db, project_id, uca, vnum)    # decision 3: refuse while anything is open
+    if blockers:
+        raise HTTPException(status_code=409, detail={"reasons": blockers})
+    prior = (db.query(ArchivedProjectRow).filter(ArchivedProjectRow.uca == uca)   # carry a past Vision block over
+             .order_by(ArchivedProjectRow.archived_at.desc().nullslast(), ArchivedProjectRow.id.desc()).first())
+    prior_vision = None
+    if prior is not None:
+        try:
+            prior_vision = (store.get_json(prior.file_key) or {}).get("vision")
+        except KeyError:
+            prior_vision = None
+    f = by_hand_file(db, project_id, prior_vision)          # build the file from the live rows
+    doc = json.loads(json.dumps(f, default=str))           # exactly what the file will hold (dates as strings)
+    key = f"{PREFIX}/projects/{uca}.json"                   # default key; never overwrite a live archived row's file
+    owned = (db.query(ArchivedProjectRow).filter(ArchivedProjectRow.file_key == key,
+             ArchivedProjectRow.state == "archived").first())
+    if owned is not None:                                  # a currently-archived row owns the default: pick a fresh key
+        key = f"{PREFIX}/projects/{uca}-{int(datetime.utcnow().timestamp())}.json"
+    store.put_json(key, doc)                               # write first; if this fails nothing is deleted
+    if sha(store.get_json(key)) != sha(doc):               # read back: the store holds exactly this
+        raise HTTPException(status_code=502, detail=f"{key} did not read back the same")
+    entry = index_entry(doc, key)                          # the list's counts for the row
+    db.add(ArchivedProjectRow(
+        uca=uca, velocity_project_id=project_id, file_key=key, name=doc.get("name"), customer=doc.get("customer"),
+        created_on=_date_text(doc.get("created_on")), last_activity=_date_text(doc.get("last_activity")),
+        work_orders=entry["work_orders"], pos=entry["pos"], velocity_quotes=entry["velocity_quotes"],
+        velocity_pos=entry["velocity_pos"], in_velocity=True, state="archived", archived_at=datetime.utcnow(),
+        archived_by=who, rows_removed=True, source="by hand"))
+    try:
+        removed = by_hand_remove(db, doc)                  # delete the project's rows, children first
+        db.commit()                                        # row insert + row deletes land together
+    except NotSafe as e:
+        db.rollback()                                      # project untouched: the file is an orphan, harmless
+        raise HTTPException(status_code=409, detail={"reasons": [str(e)]}) from e
+    return {"uca": uca, "archived": True, "file_key": key, "removed": removed}

@@ -412,6 +412,74 @@ async def finish_archive(request: Request, store=Depends(get_store)):
     return {"index": len(index), "files": len(manifest)}
 
 
+@router.post("/archive/index/import", dependencies=[Depends(require_key)])
+async def import_archive_index(db: Session = Depends(get_db), store=Depends(get_store)):
+    """Fill ``archived_projects`` from the store's index.json and removed/ markers (#319).
+
+    Insert-only and idempotent: a project already in the table (matched by
+    ``file_key``, any state) is left untouched, so a restored project is never
+    re-archived by a re-run. ``rows_removed`` is set true when a removal marker
+    exists for the UCA; ``velocity_project_id`` is read from the manifest. The
+    archive files themselves are not touched. Run it once after the 2018 bulk
+    archive has been pushed, so the list and lookups have their rows.
+
+    Returns:
+        ``{"total": index entries, "inserted": new rows, "skipped": already present}``.
+    """
+    from datetime import datetime
+    from sqlalchemy import text
+    from scripts.vision_delta.archive import PREFIX
+    from models import ArchivedProjectRow
+
+    def work():
+        try:
+            index = store.get_json(f"{PREFIX}/index.json")
+        except KeyError:
+            return {"total": 0, "inserted": 0, "skipped": 0}   # nothing archived yet
+        try:
+            manifest = store.get_json(f"{PREFIX}/manifest.json").get("files", {})   # key -> velocity_project_id
+        except KeyError:
+            manifest = {}
+        entries = index.get("projects", [])
+        when = (index.get("meta") or {}).get("made_at")        # when the archive was built, if recorded
+        try:
+            archived_at = datetime.fromisoformat(when) if when else datetime.utcnow()
+        except (TypeError, ValueError):
+            archived_at = datetime.utcnow()
+        have = {k for (k,) in db.execute(text("SELECT file_key FROM archived_projects"))}   # any state: never re-add
+        inserted = 0
+        for e in entries:
+            key = e.get("key")
+            if not key or key in have:
+                continue                                       # already indexed: insert-only
+            uca = str(e.get("uca"))
+            removed = False
+            try:
+                store.get_json(f"{PREFIX}/removed/{uca}.json")   # a marker means the live rows were deleted already
+                removed = True
+            except KeyError:
+                pass
+            db.add(ArchivedProjectRow(
+                uca=uca, velocity_project_id=(manifest.get(key) or {}).get("velocity_project_id"),
+                file_key=key, name=e.get("name"), customer=e.get("customer"),
+                created_on=_as_text(e.get("created_on")), last_activity=_as_text(e.get("last_activity")),
+                work_orders=int(e.get("work_orders") or 0), pos=int(e.get("pos") or 0),
+                velocity_quotes=int(e.get("velocity_quotes") or 0), velocity_pos=int(e.get("velocity_pos") or 0),
+                in_velocity=bool(e.get("in_velocity")), state="archived", archived_at=archived_at,
+                archived_by="vision cutover", rows_removed=removed, source="vision cutover"))
+            have.add(key)
+            inserted += 1
+        db.commit()
+        return {"total": len(entries), "inserted": inserted, "skipped": len(entries) - inserted}
+
+    return await run_in_threadpool(work)
+
+
+def _as_text(v):
+    """A stored date value as plain text (the index already holds strings; guard anyway)."""
+    return None if v is None else str(v)
+
+
 @router.post("/archive/remove", dependencies=[Depends(require_key)])
 async def remove_archived(request: Request, db: Session = Depends(get_db), store=Depends(get_store)):
     """Remove archived projects' rows from the database, after the pre-flight check.
@@ -459,6 +527,10 @@ async def remove_archived(request: Request, db: Session = Depends(get_db), store
                 continue
             except KeyError:
                 pass
+            state = db.execute(text("SELECT state FROM archived_projects WHERE file_key = :k "   # #319
+                                    "ORDER BY id DESC LIMIT 1"), {"k": key}).scalar()
+            if state == "restored":                        # someone unarchived it: it is a live project again
+                refused[key] = "unarchived since the archive was built"; continue
             try:
                 f = store.get_json(key)
             except KeyError:
@@ -469,6 +541,8 @@ async def remove_archived(request: Request, db: Session = Depends(get_db), store
             gone = pid and db.execute(text("SELECT 1 FROM projects WHERE id = :p"), {"p": pid}).first() is None
             try:
                 rows = {} if gone else remove_project(db, f, june_day)
+                db.execute(text("UPDATE archived_projects SET rows_removed = true "   # mark the table row (#319)
+                                "WHERE file_key = :k AND state = 'archived'"), {"k": key})
                 db.commit()
             except NotSafe as e:
                 db.rollback()
