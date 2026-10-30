@@ -34,9 +34,10 @@ Configure these variables on the UC Velocity backend service:
 - `SMTP2GO_SENDER`: `UC Velocity <HR@s2gms.com>`.
 - `MAILER_URL`: the mailer's address,
   `https://ucsh-mailer-production.up.railway.app`.
-- `MAILER_KEY`: Velocity's `ucshm_...` key. Request access for the product
-  `uc-velocity` in the mailer's console (`/console`, **Request access**); IT
-  approves it and hands over the key once.
+- `MAILER_KEY`: Velocity's `ucshm_...` key, for the mailer product
+  `velocity` (sender `notifications@ucsh.com`). The console shows a key only
+  once; if it is lost, use **Rotate key** on that product in the mailer's
+  console (`/console`) and store the new one here.
 - `MAILER_DOMAINS` (optional): comma-separated internal domains; defaults to
   `ucsh.com`. Only list domains in the mailer's own allowed domains.
 
@@ -85,7 +86,7 @@ After the Railway variables and Clerk endpoint are configured:
 7. Once `MAILER_URL` and `MAILER_KEY` are set, sign in with a `ucsh.com`
    address: the code arrives from `notifications@ucsh.com`, the backend logs
    `mailer outcome=accepted`, and the mailer console's usage shows one
-   recipient for `uc-velocity`. An outside address still logs an SMTP2GO
+   recipient for `velocity`. An outside address still logs an SMTP2GO
    outcome.
 
 This repository change does not itself deploy the service, create the Clerk
