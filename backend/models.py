@@ -722,3 +722,45 @@ class VisionCase(Base):
     decided_at = Column(DateTime, nullable=True)          # when (UTC)
     decision_note = Column(Text, nullable=True)           # their note
     result = Column(JSON, nullable=True)                  # what the decision wrote, if anything
+
+
+class ArchivedProjectRow(Base):
+    """One archived project, kept in the database so the list and lookups are fast (#319).
+
+    The archive file itself still lives in the store (``vision-archive/...``); this
+    row is an index over it plus the audit of who archived or unarchived it. History
+    is kept: unarchiving flips an existing row to ``state='restored'`` rather than
+    deleting it, and archiving the same UCA again inserts a new row. ``file_key`` is
+    unique only among ``state='archived'`` rows, so a restored row's old key may be
+    reused. ``uca`` is indexed but not unique (two projects can share a number, and a
+    UCA can be archived, restored, then archived again).
+    """
+
+    __tablename__ = "archived_projects"
+    __table_args__ = (
+        # One live archived row per file; restored rows (history) are left unconstrained.
+        Index("uq_archived_projects_file_key", "file_key", unique=True,
+              postgresql_where=text("state = 'archived'")),
+    )
+
+    id = Column(Integer, primary_key=True)
+    uca = Column(String, nullable=False, index=True)       # the UCA project number (not unique on its own)
+    velocity_project_id = Column(Integer, nullable=True)   # the Velocity project id, or NULL for a Vision-only archive
+    file_key = Column(String, nullable=False)              # the store key of the archive file
+    name = Column(String, nullable=True)                   # project name, copied from the file for the list
+    customer = Column(String, nullable=True)               # customer name, copied from the file for the list
+    created_on = Column(String, nullable=True)             # project start, ISO text exactly as the file holds it
+    last_activity = Column(String, nullable=True)          # newest activity, ISO text; the list sorts on it
+    # server_default mirrors migration 036 so the model and the migration agree.
+    work_orders = Column(Integer, nullable=False, default=0, server_default="0")       # Vision work-order count
+    pos = Column(Integer, nullable=False, default=0, server_default="0")              # Vision PO count
+    velocity_quotes = Column(Integer, nullable=False, default=0, server_default="0")  # Velocity quote count
+    velocity_pos = Column(Integer, nullable=False, default=0, server_default="0")     # Velocity PO count
+    in_velocity = Column(Boolean, nullable=False, default=False, server_default="false")  # file carries Velocity rows
+    state = Column(String, nullable=False, default="archived", server_default="archived")  # 'archived' or 'restored'
+    archived_at = Column(DateTime, nullable=True)          # when it was archived (UTC)
+    archived_by = Column(String, nullable=True)            # who archived it (email/id, or 'vision cutover')
+    restored_at = Column(DateTime, nullable=True)          # when it was unarchived (UTC), if ever
+    restored_by = Column(String, nullable=True)            # who unarchived it
+    rows_removed = Column(Boolean, nullable=False, default=False, server_default="false")  # live rows deleted
+    source = Column(String, nullable=False, default="vision cutover", server_default="vision cutover")  # origin

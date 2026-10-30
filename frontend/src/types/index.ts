@@ -996,6 +996,22 @@ export interface ArchivedPO {
   lines: ArchivedLine[];
 }
 
+/** Result of archiving a live project by hand (#319). */
+export interface ArchiveByHandResult {
+  uca: string;
+  archived: boolean;
+  file_key: string;
+  removed: Record<string, number>;
+}
+
+/** Result of unarchiving a project (#319). */
+export interface UnarchiveResult {
+  uca: string;
+  project_id: number | null;
+  reinserted: boolean;
+  restored: Record<string, number>;
+}
+
 /** One archived project's file: Vision's version and Velocity's rows. */
 export interface ArchivedProject {
   uca: string;

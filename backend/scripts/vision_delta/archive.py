@@ -63,6 +63,60 @@ CHILD_TABLES = [                                           # (table, parent tabl
     ("projects", None, "SELECT t.* FROM projects t WHERE t.id = :pid"),
 ]
 
+# The SELECT for each table's rows of one project, by table name. Built from
+# CHILD_TABLES (the 2018 bulk archive, format 1) and extended with invoices and
+# their line items and snapshots, which a by-hand archive (#319, format 2) keeps.
+_SELECT = {t: sql for t, _parent, sql in CHILD_TABLES}
+_SELECT.update({
+    "invoices": "SELECT t.* FROM invoices t JOIN quotes q ON q.id = t.quote_id WHERE q.project_id = :pid",
+    "invoice_line_items": "SELECT t.* FROM invoice_line_items t JOIN invoices i ON i.id = t.invoice_id "
+                          "JOIN quotes q ON q.id = i.quote_id WHERE q.project_id = :pid",
+    "invoice_snapshots": "SELECT t.* FROM invoice_snapshots t JOIN invoices i ON i.id = t.invoice_id "
+                         "JOIN quotes q ON q.id = i.quote_id WHERE q.project_id = :pid",
+    "invoice_line_item_snapshots": "SELECT t.* FROM invoice_line_item_snapshots t "
+                                   "JOIN invoice_snapshots s ON s.id = t.snapshot_id "
+                                   "JOIN invoices i ON i.id = s.invoice_id JOIN quotes q ON q.id = i.quote_id "
+                                   "WHERE q.project_id = :pid",
+})
+
+# A correct children-before-parents order for a by-hand archive (format 2): every
+# table of a live project, invoices included. It fixes the order the format-1
+# CHILD_TABLES gets wrong once a project has receivings AND snapshots -- po_snapshots
+# carries a foreign key to po_receivings (receiving_id), so po_snapshots and their
+# line-item snapshots must be DELETED before po_receivings. This list is the delete
+# order; reversed, it is the parents-first order a restore inserts in. (2018 projects
+# had no snapshots, so CHILD_TABLES never tripped this; by-hand archiving can.)
+ARCHIVE_ORDER = [
+    "quote_line_item_snapshots",
+    "invoice_line_item_snapshots",
+    "invoice_snapshots",
+    "invoice_line_items",
+    "invoices",
+    "quote_snapshots",
+    "quote_line_items",
+    "quotes",
+    "po_receiving_line_items",
+    "po_line_item_snapshots",
+    "po_snapshots",
+    "po_receivings",
+    "po_line_items",
+    "purchase_orders",
+    "projects",
+]
+
+# External foreign keys (to rows outside the project tree) a restore must find
+# present before it re-inserts, or the INSERT would raise a constraint error. Only
+# the real database foreign keys are listed; the bare id columns in snapshot and
+# invoice-line rows carry no constraint, so a missing historical reference there
+# never blocks an INSERT. table -> {column: referenced table}.
+RESTORE_FK = {
+    "projects": {"customer_id": "profiles"},
+    "quotes": {"cost_code_id": "cost_codes"},
+    "purchase_orders": {"vendor_id": "profiles", "cost_code_id": "cost_codes"},
+    "quote_line_items": {"labor_id": "labor", "part_id": "parts", "misc_id": "miscellaneous"},
+    "po_line_items": {"part_id": "parts"},
+}
+
 
 def sha(obj) -> str:
     """SHA-256 of an object's canonical JSON (sorted keys), as the manifest records it."""
@@ -282,6 +336,187 @@ def remove_project(db, archived: dict, june_day: date) -> dict[str, int]:
             db.execute(text(f"DELETE FROM {table} WHERE id = ANY(:ids)"), {"ids": ids})
         out[table] = len(ids)
     return out
+
+
+# ---- by-hand archive and restore (#319) --------------------------------- #
+
+def project_rows(db, project_id: int, tables: list[str]) -> dict[str, list[dict]]:
+    """Every row of one project for the named tables, as ``row_to_json``, sorted by id.
+
+    Like :func:`velocity_rows`, but for any set of tables: a by-hand archive reads the
+    whole :data:`ARCHIVE_ORDER`, a restore reads back only the tables its file holds.
+
+    Args:
+        db: A SQLAlchemy session.
+        project_id: The Velocity project.
+        tables: Table names to read (keys of :data:`_SELECT`).
+
+    Returns:
+        table -> its rows, each a dict, sorted by id.
+    """
+    from sqlalchemy import text
+    out = {}
+    for t in tables:
+        rows = [r[0] for r in db.execute(text(f"SELECT row_to_json(x) FROM ({_SELECT[t]}) x"), {"pid": project_id})]
+        out[t] = sorted(rows, key=lambda r: r["id"])       # id order so the same database gives the same file
+    return out
+
+
+class RestoreError(Exception):
+    """A restore that must not run; nothing was inserted. Carries the reasons."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        self.reasons = reasons                             # each a plain sentence, shown to the user in a 409
+        super().__init__("; ".join(reasons))
+
+
+def restore_project(db, f: dict) -> dict[str, int]:
+    """Re-insert an archived project's Velocity rows with their original ids, verified.
+
+    The caller holds the transaction and commits; this flushes and raises on any
+    problem so the caller rolls back and a restore is all-or-nothing. Rows go back
+    parents-first through ``json_populate_record``, so every column and type comes
+    back exactly as it was archived; afterwards the project is read again and each
+    table's SHA must equal the file's.
+
+    Args:
+        db: A SQLAlchemy session.
+        f: The project's archive file (read back from the store).
+
+    Returns:
+        table -> rows inserted.
+
+    Raises:
+        RestoreError: Vision-only, a referenced outside row is gone, an id is already
+            taken, the UCA is live again, or a table does not read back identical.
+    """
+    from sqlalchemy import text
+    velocity = f.get("velocity")
+    pid = f.get("velocity_project_id")
+    if not velocity or pid is None:
+        raise RestoreError(["exists only in Vision"])      # never had Velocity rows to put back
+    uca = f.get("uca")
+    reasons: list[str] = []
+    if uca and db.execute(text("SELECT 1 FROM projects WHERE uca_project_number = :u OR vision_project_number = :u LIMIT 1"),
+                          {"u": uca}).first():
+        reasons.append(f"a live project already carries {uca}")   # the number is back in use: never collide
+    tables = [t for t in ARCHIVE_ORDER if t in velocity]   # children-first, only the tables the file holds
+    for t in tables:
+        rows = velocity[t]
+        ids = [r["id"] for r in rows]
+        if ids:                                            # an id already present means the row was re-used elsewhere
+            for (i,) in db.execute(text(f"SELECT id FROM {t} WHERE id = ANY(:ids)"), {"ids": ids}):
+                reasons.append(f"{t} id {i} already exists")
+        for col, ref in RESTORE_FK.get(t, {}).items():     # outside rows the real foreign keys need present
+            need = sorted({r[col] for r in rows if r.get(col) is not None})
+            if need:
+                have = {i for (i,) in db.execute(text(f"SELECT id FROM {ref} WHERE id = ANY(:ids)"), {"ids": need})}
+                reasons += [f"{ref} {i} (referenced by {t}) is gone" for i in need if i not in have]
+    if reasons:
+        raise RestoreError(reasons)
+    for t in reversed(tables):                             # parents first: project, then quotes/pos, then their lines
+        for r in velocity[t]:
+            db.execute(text(f"INSERT INTO {t} SELECT * FROM json_populate_record(NULL::{t}, CAST(:j AS json))"),
+                       {"j": json.dumps(r, default=str)})   # every column/type comes back exactly as archived
+    db.flush()
+    now = project_rows(db, pid, tables)                    # read the project back and prove it equals the file
+    for t in tables:
+        if sha(now.get(t, [])) != sha(velocity[t]):
+            raise RestoreError([f"{t} did not read back identical after restore"])
+    return {t: len(velocity[t]) for t in tables}
+
+
+def by_hand_file(db, project_id: int, prior_vision: Optional[dict] = None) -> dict:
+    """Build a format-2 archive file for a live project (reads the database only).
+
+    Args:
+        db: A SQLAlchemy session.
+        project_id: The Velocity project to archive.
+        prior_vision: An earlier archive's ``vision`` block to carry over (when this
+            UCA was archived before), or None for a project with no Vision history.
+
+    Returns:
+        The archive file dict (dates still native; the caller JSON-normalises it).
+
+    Raises:
+        LookupError: No such project.
+    """
+    from sqlalchemy import text
+    head = db.execute(text(
+        "SELECT p.uca_project_number AS uca, p.vision_project_number AS vnum, p.name, p.created_on, "
+        "pr.name AS customer FROM projects p JOIN profiles pr ON pr.id = p.customer_id WHERE p.id = :pid"),
+        {"pid": project_id}).mappings().first()
+    if head is None:
+        raise LookupError(f"no project {project_id}")
+    last_activity = db.execute(text(                       # newest of the project start and its quote/PO dates
+        "SELECT max(d) FROM (SELECT created_on AS d FROM projects WHERE id = :pid "
+        "UNION ALL SELECT created_at FROM quotes WHERE project_id = :pid "
+        "UNION ALL SELECT created_at FROM purchase_orders WHERE project_id = :pid) x"), {"pid": project_id}).scalar()
+    vel = project_rows(db, project_id, ARCHIVE_ORDER)      # every table of the project, invoices included
+    vision = prior_vision or {"project": None, "work_orders": [], "pos": []}   # no Vision side unless carried over
+    return {"format": 2, "uca": head["uca"], "name": head["name"], "customer": head["customer"],
+            "created_on": head["created_on"], "last_activity": last_activity,
+            "velocity_project_id": project_id, "vision": vision, "velocity": vel}
+
+
+def by_hand_remove(db, f: dict) -> dict[str, int]:
+    """Delete a by-hand-archived project's rows after checking they still equal the file.
+
+    Children before parents (:data:`ARCHIVE_ORDER`), so the foreign keys are satisfied.
+    The June/touched check the bulk 2018 removal applies does NOT apply here. The caller
+    holds the transaction and commits, so a failure leaves the project live.
+
+    Raises:
+        NotSafe: The project changed since the file was built moments ago.
+    """
+    from sqlalchemy import text
+    velocity = f.get("velocity") or {}
+    pid = f.get("velocity_project_id")
+    if pid is None:
+        return {}
+    db.execute(text("SELECT id FROM projects WHERE id = :pid FOR UPDATE"), {"pid": pid})   # hold it while checking
+    tables = [t for t in ARCHIVE_ORDER if t in velocity]
+    now = project_rows(db, pid, tables)
+    for t in tables:                                       # the rows must still be exactly what the file holds
+        if sha(now.get(t, [])) != sha(velocity[t]):
+            raise NotSafe(f"{f.get('uca')}: {t} changed since the file was built")
+    out = {}
+    for t in tables:                                       # children first: lines/snapshots before quotes/pos/project
+        ids = [r["id"] for r in now[t]]
+        if ids:
+            db.execute(text(f"DELETE FROM {t} WHERE id = ANY(:ids)"), {"ids": ids})
+        out[t] = len(ids)
+    return out
+
+
+def open_blockers(db, project_id: int, uca: Optional[str] = None, vision_number: Optional[str] = None) -> list[str]:
+    """Why a live project may not be archived by hand yet (decision 3, #319).
+
+    Open means any of: a quote line with quantity still pending (credits are negative,
+    so a non-zero value counts), a PO line still awaiting receipt, or an unsettled
+    cutover decision -- an open ``vision_cases`` row for the project. Every held /
+    'kept: conflict' log row became a case, and settling the case does not rewrite
+    the log row, so the case (not the log row) is what clears the project.
+
+    Returns:
+        A list of reasons; empty when the project is closed and safe to archive.
+    """
+    from sqlalchemy import text
+    reasons: list[str] = []
+    if db.execute(text("SELECT 1 FROM quote_line_items l JOIN quotes q ON q.id = l.quote_id "
+                       "WHERE q.project_id = :pid AND coalesce(l.qty_pending, 0) <> 0 LIMIT 1"),
+                  {"pid": project_id}).first():
+        reasons.append("a quote line still has quantity pending")
+    if db.execute(text("SELECT 1 FROM po_line_items l JOIN purchase_orders o ON o.id = l.purchase_order_id "
+                       "WHERE o.project_id = :pid AND coalesce(l.qty_pending, 0) <> 0 LIMIT 1"),
+                  {"pid": project_id}).first():
+        reasons.append("a purchase order line still has quantity pending receipt")
+    nums = [n for n in (uca, vision_number) if n]          # match a case by either UCA number the project shows
+    if nums and db.execute(text("SELECT to_regclass('vision_cases')")).scalar() is not None:
+        if db.execute(text("SELECT 1 FROM vision_cases WHERE decision IS NULL AND project = ANY(:nums) LIMIT 1"),
+                      {"nums": nums}).first():
+            reasons.append("an unsettled cutover decision is open on this project")
+    return reasons
 
 
 # ---- command line -------------------------------------------------------- #

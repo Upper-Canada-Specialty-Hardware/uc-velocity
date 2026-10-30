@@ -60,6 +60,8 @@ import {
   ChevronRight,
   Clock,
   Search,
+  Archive,
+  Loader2,
 } from "lucide-react"
 
 const QuoteEditor = lazy(() =>
@@ -148,6 +150,11 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
 
   // Delete confirmation (replaces window.confirm)
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: "quote" | "po"; id: number } | null>(null)
+
+  // Archive-by-hand confirmation + in-flight flag (#319): move this whole project to the
+  // archive, which removes its live rows and sends it to the Archived projects page.
+  const [archiveConfirm, setArchiveConfirm] = useState(false)
+  const [archiving, setArchiving] = useState(false)
 
   // Unsaved changes navigation guard
   const editorDirtyRef = useRef(false)
@@ -442,6 +449,30 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
     }
   }
 
+  /**
+   * Archive this whole project by hand (#319): writes an archive file, removes the
+   * project's live rows, and leaves for the Archived projects page. The backend
+   * refuses (409) when anything is still open — a quote or PO with quantity pending,
+   * or an unsettled cutover decision — and those reasons are shown as-is.
+   */
+  const performArchive = async () => {
+    setArchiveConfirm(false)
+    setArchiving(true)
+    try {
+      await api.projects.archive(projectId)                          // POST /projects/{id}/archive
+      toast({ title: "Project archived", description: "It moved to Archived projects." })
+      navigate("/archive")                                           // leave the now-removed project
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Could not archive",
+        description: err instanceof Error ? err.message : "Unknown error",
+      })
+    } finally {
+      setArchiving(false)
+    }
+  }
+
   // Filtered lists (memoized against debounced filter input)
   const filteredQuotes = useMemo(() => {
     if (!project) return []
@@ -583,7 +614,20 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
               )}
             </div>
           </div>
-          <StatusBadge status={project.status} />
+          <div className="flex items-center gap-3 shrink-0">
+            <StatusBadge status={project.status} />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setArchiveConfirm(true)}
+              disabled={archiving}
+              className="gap-2"
+              aria-label="Archive this project"
+            >
+              {archiving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
+              Archive
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -896,6 +940,24 @@ export function ProjectDetailsPage({ projectId, onBack, initialDoc }: ProjectDet
             >
               Delete
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Archive Confirmation (#319) */}
+      <AlertDialog open={archiveConfirm} onOpenChange={(open) => { if (!open) setArchiveConfirm(false) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Archive this project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This moves <span className="font-medium">{project.name}</span> and all of its quotes, purchase orders and
+              invoices out of the live database into the archive. It stops showing in Projects. You can restore it later
+              from Archived projects. Archiving is refused while anything is still open.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={performArchive}>Archive project</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
