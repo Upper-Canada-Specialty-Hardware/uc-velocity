@@ -1,9 +1,17 @@
-# Clerk email delivery through SMTP2GO
+# Clerk email delivery through ucsh-mailer and SMTP2GO
 
 Clerk still generates every sign-in code, verifies the submitted code, and
 creates the user session. UC Velocity replaces delivery: Clerk signs an
-`email.created` webhook, Railway verifies it, and SMTP2GO sends the message from
-the approved sender. For `verification_code` and `reset_password_code`, UC Velocity puts Clerk's
+`email.created` webhook, Railway verifies it, and the backend sends the message.
+
+- Recipients on an internal domain (`ucsh.com` by default) go through the
+  org's internal mailer, [ucsh-mailer](https://github.com/Upper-Canada-Specialty-Hardware/ucsh-mailer),
+  which sends over Microsoft 365 High Volume Email (HVE) from the shared
+  `notifications@ucsh.com` sender, so the code arrives as internal mail.
+- Every other recipient goes through SMTP2GO from the approved sender. HVE
+  only delivers inside the Microsoft 365 tenant, so it can never reach them.
+- While `MAILER_URL` and `MAILER_KEY` are not both set, every recipient goes
+  through SMTP2GO, exactly as before the mailer was added. For `verification_code` and `reset_password_code`, UC Velocity puts Clerk's
 signed `event.data.data.otp_code` value into fixed local HTML and plain-text
 templates. It does not generate or verify the code, and it never extracts the
 code from rendered HTML. Other Clerk email slugs retain Clerk's original subject
@@ -24,6 +32,16 @@ Configure these variables on the UC Velocity backend service:
 - `SMTP2GO_API_KEY`: the SMTP2GO API credential authorized to use the approved
   sender domain.
 - `SMTP2GO_SENDER`: `UC Velocity <HR@s2gms.com>`.
+- `MAILER_URL`: the mailer's address,
+  `https://ucsh-mailer-production.up.railway.app`.
+- `MAILER_KEY`: Velocity's `ucshm_...` key. Request access for the product
+  `uc-velocity` in the mailer's console (`/console`, **Request access**); IT
+  approves it and hands over the key once.
+- `MAILER_DOMAINS` (optional): comma-separated internal domains; defaults to
+  `ucsh.com`. Only list domains in the mailer's own allowed domains.
+
+If only one of `MAILER_URL` and `MAILER_KEY` is set, the backend logs
+`mailer outcome=not_configured` and keeps every recipient on SMTP2GO.
 
 The app loads these values only when a selected webhook needs delivery. Missing
 values do not prevent startup, but the endpoint returns a retryable error and
@@ -64,6 +82,11 @@ After the Railway variables and Clerk endpoint are configured:
    without a second SMTP2GO message.
 6. Send a webhook with an invalid signature in a controlled check and confirm
    it is rejected without an SMTP2GO request or receipt.
+7. Once `MAILER_URL` and `MAILER_KEY` are set, sign in with a `ucsh.com`
+   address: the code arrives from `notifications@ucsh.com`, the backend logs
+   `mailer outcome=accepted`, and the mailer console's usage shows one
+   recipient for `uc-velocity`. An outside address still logs an SMTP2GO
+   outcome.
 
 This repository change does not itself deploy the service, create the Clerk
 endpoint, set Railway credentials, switch templates, or prove inbox delivery.
@@ -109,6 +132,15 @@ status, integer succeeded/failed counts, and strictly bounded safe-token values
 for SMTP2GO's request id, email id, and error code. They never include provider
 error text, response bodies, headers, recipient, subject, message content, code,
 API key, or network exception details.
+
+Mailer responses produce one fixed log line, `mailer outcome=... http_status=...
+error_code=...`, with the outcome `accepted`, `logged` (the mailer runs in its
+no-send mode), `http_rejected`, `invalid_response` or `network_error`, and
+only the mailer's short error code such as `rate_limited` or `hve_unavailable`.
+Each request carries an `Idempotency-Key` derived from Clerk's email id, so a
+Clerk retry within the mailer's 10-minute window never sends the code twice.
+A mailer failure is not retried on SMTP2GO: the endpoint returns `502` and
+Clerk retries.
 
 `accepted` means only that the SMTP2GO API accepted one message; it does not prove
 inbox delivery. That log is written before the database receipt commits, so a
