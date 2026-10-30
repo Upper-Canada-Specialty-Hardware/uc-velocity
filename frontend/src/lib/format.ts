@@ -245,3 +245,32 @@ export function titleCaseStatus(value: string): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ")
 }
+
+// A stored timestamp as the cutover logged it: `YYYY-MM-DD`, optionally with
+// ` HH:MM:SS` (space or `T`) and a fraction of any length (Excel pads to 6 digits).
+const LOGGED_STAMP_RE = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?)?$/
+
+/**
+ * Render a value the Vision cutover logged (decisions page) so dates read like the rest of the app.
+ *
+ * Text that is not a timestamp passes through unchanged. A timestamp at exactly
+ * midnight, or a bare date, is a calendar day (Vision stores dates without a time)
+ * and shows as `MMM d, yyyy`. Any other timestamp is Velocity's naive-UTC and shows
+ * in the viewer's local time, like {@link formatDateTime}. A Vision value that
+ * does carry a time is Access wall-clock time, so it is shown as-is, not converted.
+ *
+ * @param value - The logged text (or null).
+ * @param vision - True when the value is Vision's side, which is never UTC.
+ * @returns The display text; em-dash for missing values.
+ */
+export function formatLoggedValue(value: string | null | undefined, vision = false): string {
+  if (value == null || value === "") return EMPTY_VALUE
+  const m = LOGGED_STAMP_RE.exec(value.trim())
+  if (!m) return value                                         // not a timestamp: shown as logged
+  const [, day, hh, mm, ss, frac] = m
+  const midnight = hh === undefined || (hh === "00" && mm === "00" && ss === "00" && !/[1-9]/.test(frac ?? ""))
+  if (midnight) return formatDate(day)                         // a calendar day: no time, no zone shift
+  if (vision) return `${formatDate(day)}, ${hh}:${mm}`         // Access wall-clock time: never shifted
+  const ms = (frac ?? "").padEnd(3, "0").slice(0, 3)          // Excel's 6-digit padding -> milliseconds
+  return formatDateTime(`${day}T${hh}:${mm}:${ss}.${ms}`)      // naive UTC -> viewer's local time
+}

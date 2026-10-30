@@ -15,6 +15,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { formatLoggedValue } from "@/lib/format"
 import type { VisionDecisionCase, VisionDecisionLink, VisionDecisionStep } from "@/types"
 
 /** How each answer reads on its button. */
@@ -324,12 +325,13 @@ export function VisionDecisionsPage() {
                         <tr key={r.change_id} className="border-t align-top">
                           <td className="py-1 pr-3 text-muted-foreground">{show(r.context)}</td>
                           <td className="py-1 pr-3">{r.field ?? "whole record"}</td>
-                          <td className="py-1 pr-3 whitespace-pre-wrap">{r.field ? show(r.velocity) : "missing"}</td>
-                          <td className="py-1 pr-3 whitespace-pre-wrap">{r.field ? show(r.vision) : "has it"}</td>
+                          <td className="py-1 pr-3 whitespace-pre-wrap">{r.field ? formatLoggedValue(r.velocity) : "missing"}</td>
+                          {/* Vision's side is never UTC: true keeps any time it carries as-is */}
+                          <td className="py-1 pr-3 whitespace-pre-wrap">{r.field ? formatLoggedValue(r.vision, true) : "has it"}</td>
                           <td className="py-1 whitespace-pre-wrap">
                             {r.changed_since ? (
                               <span className="text-amber-600 inline-flex items-center gap-1">
-                                <AlertTriangle className="h-3 w-3" /> {show(r.now)}
+                                <AlertTriangle className="h-3 w-3" /> {formatLoggedValue(r.now)}
                               </span>
                             ) : (
                               <span className="text-muted-foreground">{r.changed_since === null ? "—" : "same"}</span>
@@ -352,7 +354,8 @@ export function VisionDecisionsPage() {
                           <th className="py-1 pr-3 text-left font-normal text-muted-foreground whitespace-nowrap">{col}</th>
                           {foundRows.map((fr, i) => (
                             <td key={i} className="py-1 pr-4 whitespace-pre-wrap">
-                              {show(fr[col])}
+                              {/* report columns named "vision ..." hold Vision's (non-UTC) values */}
+                              {formatLoggedValue(fr[col], col.startsWith("vision"))}
                             </td>
                           ))}
                         </tr>
