@@ -137,6 +137,25 @@ def _value(field: str, text: Optional[str]) -> Any:
     return text
 
 
+def _relabel(row: dict) -> dict:
+    """A logged row with a project status of "archived" read as "closed" (#330).
+
+    The cutover logged project statuses before migration 037 renamed "archived" to
+    "closed", so without this a status case would show the old word, compare
+    unequal to the relabelled record, and write the retired value back.
+
+    Args:
+        row: One logged row of a case (``velocity`` / ``vision`` hold the logged text).
+
+    Returns:
+        The row, or a copy with either side's "archived" read as "closed".
+    """
+    if row.get("record_table") != "projects" or row.get("field") != "status":
+        return row                                         # only the project status changed its word
+    fix = lambda v: "closed" if v == "archived" else v     # other statuses pass through
+    return dict(row, velocity=fix(row.get("velocity")), vision=fix(row.get("vision")))
+
+
 def _record(db: Session, row: dict, lock: bool = False):
     """The Velocity record a logged row points at, or None."""
     model = MODELS.get(row.get("record_table"))
@@ -189,6 +208,7 @@ def case_out(db: Session, c: VisionCase) -> dict:
     links = []
     rows = []
     for r in detail.get("rows", []):
+        r = _relabel(r)                                    # a logged "archived" project status reads "closed"
         readable = r.get("field") in ATTRS.get(r.get("record_table"), {})   # item, vendor, category: not read back
         now = _now(db, r) if readable else None
         rows.append(dict(r, now=_txt(now) if readable else None,
@@ -336,7 +356,7 @@ def apply_vision(db: Session, rows: list[dict]) -> dict:
     pos_lines.update(_po_lines(db, [r for r in rows if r["record_table"] == "po_line_items"]))
 
     # Single-field records: quote and PO headers, inventory, projects, profiles
-    for r in (r for r in rows if r["record_table"] not in ("quote_line_items", "po_line_items")):
+    for r in (_relabel(r) for r in rows if r["record_table"] not in ("quote_line_items", "po_line_items")):
         rec = _record(db, r, lock=True)
         attr = ATTRS[r["record_table"]][r["field"]]
         if rec is None:

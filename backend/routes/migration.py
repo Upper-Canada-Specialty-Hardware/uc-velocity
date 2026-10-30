@@ -870,8 +870,9 @@ async def import_legacy_data(
 
                 created_on = parse_date(row.get("dtmStartDate", "")) or datetime.utcnow()
                 # blnArchive is an Access boolean: TRUE exports as -1 (or 1). Use the
-                # shared parser so a -1 export is read as archived, not active.
-                status = "archived" if parse_bool(row.get("blnArchive")) else "active"
+                # shared parser so a -1 export is read as closed, not active. A finished job reads
+                # "closed" (#330); "archived" now means moved to the archive store.
+                status = "closed" if parse_bool(row.get("blnArchive")) else "active"
 
                 project = Project(
                     name=name,

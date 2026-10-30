@@ -87,6 +87,17 @@ def test_same_treats_numbers_blanks_and_line_endings_loosely():
     assert not same(2.0, "3.0") and not same(None, "x") and not same("A", "B")
 
 
+def test_a_logged_archived_project_status_reads_closed():
+    """Cases logged before migration 037 say "archived"; the page reads and writes "closed" (#330)."""
+    from routes.vision_decisions import _relabel
+    row = _log(1, level="projects", table="projects", rid=5, field="status", before="active", after="archived")
+    row.update(velocity=row.pop("before"), vision=row.pop("after"))         # the case-detail shape
+    out = _relabel(row)
+    assert out["vision"] == "closed" and out["velocity"] == "active" and row["vision"] == "archived"   # a copy
+    other = dict(row, field="name", vision="archived")
+    assert _relabel(other) is other                                          # only the project status is renamed
+
+
 # ---- the endpoints (scratch database) ---------------------------------------
 
 @pytest.fixture

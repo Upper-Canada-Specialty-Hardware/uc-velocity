@@ -13,7 +13,6 @@ const STATUS_STYLES: Record<string, string> = {
   "active":       "bg-green-500/10 text-green-700 border-green-500/30 dark:text-green-300",
   "completed":    "bg-blue-500/10 text-blue-700 border-blue-500/30 dark:text-blue-300",
   "on hold":      "bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300",
-  "archived":     "bg-slate-500/10 text-slate-700 border-slate-500/30 dark:text-slate-300",
 
   // Quote statuses
   "draft":        "bg-gray-500/10 text-gray-700 border-gray-500/30 dark:text-gray-300",
@@ -23,7 +22,7 @@ const STATUS_STYLES: Record<string, string> = {
   // PO statuses (Draft already covered above)
   "sent":         "bg-indigo-500/10 text-indigo-700 border-indigo-500/30 dark:text-indigo-300",
   "received":     "bg-green-500/10 text-green-700 border-green-500/30 dark:text-green-300",
-  "closed":       "bg-blue-500/10 text-blue-700 border-blue-500/30 dark:text-blue-300",
+  "closed":       "bg-blue-500/10 text-blue-700 border-blue-500/30 dark:text-blue-300",   // POs, and finished projects (#330)
 
   // Invoice statuses (Draft / Sent / Paid / Voided)
   "paid":         "bg-green-500/10 text-green-700 border-green-500/30 dark:text-green-300",

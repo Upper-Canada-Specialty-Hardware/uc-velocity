@@ -423,7 +423,23 @@ def restore_project(db, f: dict) -> dict[str, int]:
     for t in tables:
         if sha(now.get(t, [])) != sha(velocity[t]):
             raise RestoreError([f"{t} did not read back identical after restore"])
+    mark_closed(db, pid)                                   # only after the check: the file holds the archived status
     return {t: len(velocity[t]) for t in tables}
+
+
+def mark_closed(db, project_id: int) -> None:
+    """Set an unarchived project's status to closed (#330).
+
+    An archived project had no activity for years, so it comes back as a finished
+    job, not an active one; a person reopens it by editing the project. The caller
+    holds the transaction, so this lands or rolls back with the unarchive.
+
+    Args:
+        db: A SQLAlchemy session.
+        project_id: The Velocity project being put back.
+    """
+    from sqlalchemy import text
+    db.execute(text("UPDATE projects SET status = 'closed' WHERE id = :pid"), {"pid": project_id})
 
 
 def by_hand_file(db, project_id: int, prior_vision: Optional[dict] = None) -> dict:

@@ -235,7 +235,7 @@ export function parseQuantityInput(raw: string, itemType: LineItemType): number 
 /** The single empty-value glyph used everywhere a read-only value is missing. */
 export const EMPTY_VALUE = "—"
 
-/** Title-case a status string for display (e.g. `archived` -> `Archived`, `work_order` -> `Work Order`). */
+/** Title-case a status string for display (e.g. `closed` -> `Closed`, `work_order` -> `Work Order`). */
 export function titleCaseStatus(value: string): string {
   if (!value) return EMPTY_VALUE
   return value
