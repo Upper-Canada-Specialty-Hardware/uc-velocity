@@ -205,7 +205,7 @@ export function VisionDecisionsPage() {
     }
   }
 
-  /** Carry out the merge on the step's cases answered before merges existed (#342). */
+  /** Carry out the merge on the step's cases answered before merges existed (#341). */
   const carryOut = async () => {
     if (!kind) return
     setBusy(true)

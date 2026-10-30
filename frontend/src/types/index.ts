@@ -883,7 +883,7 @@ export interface VisionDecisionStep {
   open: number;
   settled: number;
   open_with_prediction: number;
-  /** Cases settled with this step's merge answer before merges were carried out (#342). */
+  /** Cases settled with this step's merge answer before merges were carried out (#341). */
   unmerged: number;
 }
 
@@ -940,7 +940,7 @@ export interface VisionAcceptResult {
   refused: { id: number; title: string | null; reason: string }[];
 }
 
-/** What carrying out earlier merge answers did (#342). */
+/** What carrying out earlier merge answers did (#341). */
 export interface VisionCarryOutResult {
   merged: number[];
   refused: { id: number; title: string | null; reason: string }[];

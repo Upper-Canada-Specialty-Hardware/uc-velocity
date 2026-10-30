@@ -228,7 +228,7 @@ def test_a_settled_case_cannot_be_settled_again_and_answers_are_checked(world):
     assert again.status_code == 409 and "already settled" in again.json()["detail"]
 
 
-# ---- merges (#342): one record kept, the other in its audit trail, then deleted ----
+# ---- merges (#341): one record kept, the other in its audit trail, then deleted ----
 
 _WO = __import__("itertools").count(900_000_000 + int(datetime.utcnow().strftime("%H%M%S")) * 1000)   # free Vision keys
 
