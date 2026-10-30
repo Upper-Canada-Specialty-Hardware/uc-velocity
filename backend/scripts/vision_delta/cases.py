@@ -45,18 +45,23 @@ KINDS = [
      "Vision projects named like test data. The cutover held them, with their work orders."),
     ("duplicate project", "Projects entered twice",
      ["duplicate", "separate projects"],
-     "One project entered twice in Velocity since June. Nothing is merged; the answer is recorded for whoever tidies them."),
+     "One project entered twice in Velocity since June. 'Duplicate' moves the other project's quotes and POs "
+     "into the one holding the work and deletes the emptied project."),
     ("same job", "Same job in both systems",
      ["separate jobs", "same job"],
      "A Vision work order Velocity lacked, added beside a Velocity quote that looks alike. "
-     "'Same job' records the Vision WO # on the Velocity quote."),
+     "'Same job' merges them: the Velocity quote stays with the Vision WO #, and the added quote is "
+     "kept in its audit trail, then deleted."),
     ("same order", "Same PO in both systems",
      ["separate orders", "same order"],
      "A Vision PO Velocity lacked, added beside a Velocity PO to the same vendor. "
-     "'Same order' records the Vision PO # on the Velocity PO."),
+     "'Same order' merges them: the Velocity PO stays with the Vision PO #, and the added PO is "
+     "kept in its audit trail, then deleted."),
     ("velocity copy", "Velocity copies of June quotes",
      ["keep both", "copy replaces original"],
-     "A Velocity copy of a June quote; Vision's later changes went to the original, not the copy."),
+     "A Velocity copy of a June quote; Vision's later changes went to the original, not the copy. "
+     "'Copy replaces original' merges them: the copy stays, and the original is kept in its audit trail, "
+     "then deleted."),
     ("credit memo", "Credit-only work orders",
      ["vision", "velocity", "left out", "entered by hand"],
      "Work orders that hold only credits. June stored them as positive lines; Vision holds the credit."),
