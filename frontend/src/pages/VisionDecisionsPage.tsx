@@ -38,12 +38,18 @@ const OPTION_LABEL: Record<string, string> = {
 const OPTION_EFFECT: Record<string, string> = {
   vision: "writes Vision's values into Velocity (refused if Velocity changed since the cutover)",
   velocity: "Velocity stays as it is; on a quote or PO, Vision's version is added to its audit trail",
-  "same job": "records the Vision WO # on the Velocity quote",
-  "same order": "records the Vision PO # on the Velocity PO",
+  "same job":
+    "merges them: the Velocity quote stays and takes the Vision WO #; the added quote goes into its audit trail, then is deleted",
+  "same order":
+    "merges them: the Velocity PO stays and takes the Vision PO #; the added PO goes into its audit trail, then is deleted",
+  "copy replaces original":
+    "merges them: the copy stays; the original goes into its audit trail, then is deleted",
+  duplicate:
+    "moves the other project's quotes and POs into the one holding the work (they get new numbers), then deletes the emptied project",
 }
 
 /** Answers that change data, so accepting them in bulk asks first. */
-const WRITING = new Set(["vision", "velocity", "same job", "same order"])
+const WRITING = new Set(["vision", "velocity", "same job", "same order", "copy replaces original", "duplicate"])
 
 /** Cases fetched per request. */
 const PAGE = 20
@@ -199,6 +205,25 @@ export function VisionDecisionsPage() {
     }
   }
 
+  /** Carry out the merge on the step's cases answered before merges existed (#342). */
+  const carryOut = async () => {
+    if (!kind) return
+    setBusy(true)
+    setError(null)
+    try {
+      const r = await api.visionDecisions.carryOut(kind)
+      const refused = r.refused.map((x) => `${x.title ?? x.id}: ${x.reason}`) // why each one was left as it was
+      toast({ title: `Merged ${r.merged.length} earlier answers`, description: refused.length ? `${refused.length} could not be merged` : undefined })
+      if (refused.length) setError(`Not merged:\n${refused.slice(0, 10).join("\n")}${refused.length > 10 ? "\n…" : ""}`)
+      await loadSteps()
+      await loadCases(0, true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const found = current?.found ?? null // the report's findings for this case, if any
   const foundRows = Array.isArray(found) ? found : found ? [found] : [] // one row, or a group of rows
   const foundCols = foundRows.length ? Object.keys(foundRows[0]) : [] // the report's headings
@@ -256,6 +281,12 @@ export function VisionDecisionsPage() {
                   <Button size="sm" variant="secondary" disabled={busy} onClick={() => setConfirmAccept(true)}>
                     <Sparkles className="h-4 w-4 mr-1" />
                     Accept {step.open_with_prediction} predicted
+                  </Button>
+                )}
+                {step.unmerged > 0 && (
+                  // Answers recorded before merges existed: carry them out now
+                  <Button size="sm" variant="secondary" disabled={busy} onClick={carryOut}>
+                    Merge {step.unmerged} earlier answers
                   </Button>
                 )}
               </div>

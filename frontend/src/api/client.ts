@@ -18,7 +18,7 @@ import type {
   CompanySettings, CompanySettingsUpdate, InvoiceSummaryItem,
   BacklogQuoteItem, InventoryHealthReport, PricebookImportResult, MigrationResult,
   SystemRate, SystemRateCreate, SystemRateUpdate,
-  VisionDecisionStep, VisionDecisionPage, VisionDecisionCase, VisionAcceptResult,
+  VisionDecisionStep, VisionDecisionPage, VisionDecisionCase, VisionAcceptResult, VisionCarryOutResult,
   ArchivedProjectSearch, ArchivedProject, ArchiveByHandResult, UnarchiveResult,
 } from '@/types';
 import { tel } from '@/lib/tel';
@@ -447,6 +447,11 @@ export const api = {
     acceptPredictions: (kind: string, caseIds: number[]) =>
       request<VisionAcceptResult>(`/vision-decisions/steps/${encodeURIComponent(kind)}/accept`, {
         method: 'POST', body: JSON.stringify({ case_ids: caseIds }),
+      }),
+    /** Carry out the merge on a step's cases answered before merges existed. */
+    carryOut: (kind: string) =>
+      request<VisionCarryOutResult>(`/vision-decisions/steps/${encodeURIComponent(kind)}/carry-out`, {
+        method: 'POST',
       }),
   },
 

@@ -883,6 +883,8 @@ export interface VisionDecisionStep {
   open: number;
   settled: number;
   open_with_prediction: number;
+  /** Cases settled with this step's merge answer before merges were carried out (#342). */
+  unmerged: number;
 }
 
 /** One logged field of a case: Velocity's value beside Vision's. */
@@ -935,6 +937,12 @@ export interface VisionDecisionPage {
 /** What accepting the predicted answers did. */
 export interface VisionAcceptResult {
   settled: number[];
+  refused: { id: number; title: string | null; reason: string }[];
+}
+
+/** What carrying out earlier merge answers did (#342). */
+export interface VisionCarryOutResult {
+  merged: number[];
   refused: { id: number; title: string | null; reason: string }[];
 }
 
