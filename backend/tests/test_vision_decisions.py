@@ -351,6 +351,35 @@ def test_duplicate_moves_the_records_and_deletes_the_emptied_project(world):
     assert keep.vision_project_number == other_uca and keep.legacy_source == "tblProjects"
     last = db.query(QuoteSnapshot).filter(QuoteSnapshot.quote_id == q.id).order_by(QuoteSnapshot.version.desc()).first()
     assert last.action_type == "move" and f"({other_uca}-0001-0)" in last.action_description
+    assert r.json()["result"]["new_cases"] == []                            # nothing in common: no pair to decide
+
+
+def test_duplicate_opens_a_same_job_case_for_a_look_alike_and_its_answer_merges(world):
+    from models import Project, Quote, QuoteLineItem, VisionCase
+    db = world["db"]
+    other = Project(name="[TEST] twin", customer_id=world["customer"].id, uca_project_number=f"TF{world['tag']}")
+    db.add(other)
+    db.flush()
+    world["projects"].append(other.id)
+    other_uca = other.uca_project_number
+    twin, wo = _vision_quote(world, project=other, seq=1)
+    db.add(QuoteLineItem(quote_id=twin.id, item_type="misc", description="Service", quantity=2, unit_price=10,
+                         qty_fulfilled=0, qty_pending=2))                   # the same item as the Velocity quote
+    db.commit()
+    twin_id = twin.id
+    found = [{"uca": world["project"].uca_project_number, "quotes": "1", "pos": "0", "created": "2026-07-17 13:15:19"},
+             {"uca": other_uca, "quotes": "0", "pos": "0", "created": "2026-08-12 14:43:55"}]
+    c = _case(world, kind="duplicate project", prediction="duplicate", found=found)
+    cl = _client()
+    r = cl.post(f"/vision-decisions/cases/{c.id}/decide", json={"decision": "duplicate"})
+    assert r.status_code == 200, r.text
+    assert len(r.json()["result"]["new_cases"]) == 1                        # the pair is put to a person
+    pair = db.query(VisionCase).filter(VisionCase.run_id == world["run"].id, VisionCase.kind == "same job").one()
+    assert pair.prediction is None and pair.detail["found"]["vision WO"] == str(wo)
+    r = cl.post(f"/vision-decisions/cases/{pair.id}/decide", json={"decision": "same job"})
+    assert r.status_code == 200, r.text                                     # and the answer is carried out
+    db.expire_all()
+    assert db.get(Quote, twin_id) is None and world["quote"].vision_wo_number == wo
 
 
 def test_carry_out_merges_cases_settled_before_merges_existed(world):

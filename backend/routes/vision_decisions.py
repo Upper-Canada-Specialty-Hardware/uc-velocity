@@ -24,7 +24,8 @@ What a decision writes:
   * ``duplicate`` -- the project holding the work is kept; the other one's
     quotes and POs move into it (each gets a "move" entry naming its old
     number), it takes the other's Vision number and import key, and the
-    emptied project is deleted.
+    emptied project is deleted. A moved Vision quote (PO) that looks like one
+    of the kept project's own opens a new same job (same order) case.
   * every other answer only records the decision: nothing needs to change.
 
 Each decision stores who made it and when. A settled case cannot be settled
@@ -432,9 +433,11 @@ def record_vision_version(db: Session, rows: list[dict]) -> dict:
 # The answers that merge two records, by step.
 MERGES = {"same job": "same job", "same order": "same order", "velocity copy": "copy replaces original",
           "duplicate project": "duplicate"}
-# Snapshot types only the cutover and this page write; any other means a person edited the record.
-QUOTE_UNTOUCHED = {"vision_sync", "vision_version"}
-PO_UNTOUCHED = {"create", "vision_sync", "vision_version"}   # the cutover's PO insert writes the app's "create"
+# Snapshot types that leave a record's content as it arrived: the cutover's and this
+# page's entries, and a move (a new project and number, same lines -- a duplicate
+# project's merge writes one). Any other means a person edited the record.
+QUOTE_UNTOUCHED = {"vision_sync", "vision_version", "move"}
+PO_UNTOUCHED = {"create", "vision_sync", "vision_version", "move"}   # the cutover's PO insert writes "create"
 
 
 def _quote_number(db: Session, q: Quote) -> str:
@@ -629,7 +632,7 @@ def _count(v: Any) -> int:
     return int(float(v)) if v not in (None, "") else 0
 
 
-def merge_projects(db: Session, found: Any) -> dict:
+def merge_projects(db: Session, found: Any, run_id: Optional[int] = None) -> dict:
     """Merge a project entered twice: move the other's quotes and POs into the one holding the work.
 
     The kept project is the one that held the most quotes and POs before the
@@ -640,9 +643,13 @@ def merge_projects(db: Session, found: Any) -> dict:
     Args:
         db: The request's session (the caller commits).
         found: The case's report rows, one per project of the group.
+        run_id: The case's cutover run; when given, a moved Vision record
+            beside a look-alike of the kept project's own gets a new same job
+            (same order) case in that run, so a person still decides the pair.
 
     Returns:
-        ``{"merged": "projects", "kept": uca, "deleted": uca, "moved": [old -> new, ...]}``.
+        ``{"merged": "projects", "kept": uca, "deleted": uca, "moved": [old -> new, ...],
+        "new_cases": [title, ...]}``.
 
     Raises:
         Refused: Not exactly two projects, no clear one to keep, one is gone,
@@ -667,6 +674,13 @@ def merge_projects(db: Session, found: Any) -> dict:
         raise Refused(f"{keep.uca_project_number} already carries Vision project {keep.vision_project_number}")
     _take_key(db, keep, gone, keep.uca_project_number)
     keep.vision_project_number = keep.vision_project_number or vision_no
+    # The kept project's own Velocity records, before anything moves in: a moved
+    # Vision record may be the same job as one of them, which the cutover never
+    # compared because the two sat in different projects.
+    own_quotes = db.query(Quote).filter(Quote.project_id == keep.id, Quote.legacy_id.is_(None)).all()
+    own_pos = db.query(PurchaseOrder).filter(PurchaseOrder.project_id == keep.id,
+                                             PurchaseOrder.legacy_id.is_(None)).all()
+    moved_quotes, moved_pos = [], []
     moved = []
     note = f"when duplicate project {gone.uca_project_number} was merged into {keep.uca_project_number}"
     for q in db.query(Quote).filter(Quote.project_id == gone.id).order_by(Quote.quote_sequence).with_for_update():
@@ -677,6 +691,7 @@ def merge_projects(db: Session, found: Any) -> dict:
         create_snapshot(db, q, "move", f"Moved from {gone.uca_project_number} ({old}) to "
                                        f"{keep.uca_project_number} {note}")
         moved.append(f"{old} -> {new}")
+        moved_quotes.append(q)
     for po in db.query(PurchaseOrder).filter(PurchaseOrder.project_id == gone.id).order_by(
             PurchaseOrder.po_sequence).with_for_update():
         old = _po_number(db, po)
@@ -686,6 +701,7 @@ def merge_projects(db: Session, found: Any) -> dict:
         create_po_snapshot(db, po, "move", f"Moved from {gone.uca_project_number} ({old}) to "
                                            f"{keep.uca_project_number} {note}")
         moved.append(f"{old} -> {new}")
+        moved_pos.append(po)
     db.flush()
     left = (db.query(Quote).filter(Quote.project_id == gone.id).count()
             + db.query(PurchaseOrder).filter(PurchaseOrder.project_id == gone.id).count())
@@ -695,7 +711,77 @@ def merge_projects(db: Session, found: Any) -> dict:
     db.expunge(gone)                                       # its stale quote/PO lists must not cascade
     db.query(Project).filter(Project.id == gone.id).delete(synchronize_session=False)
     db.flush()
-    return {"merged": "projects", "kept": keep.uca_project_number, "deleted": gone_uca, "moved": moved}
+    new_cases = _pair_cases(db, run_id, keep, own_quotes, moved_quotes, own_pos, moved_pos) if run_id else []
+    return {"merged": "projects", "kept": keep.uca_project_number, "deleted": gone_uca, "moved": moved,
+            "new_cases": new_cases}
+
+
+def _item_keys(lines: list) -> set:
+    """What a quote's or PO's lines order: inventory item ids, else the description."""
+    keys = set()
+    for li in lines:
+        ref = tuple(getattr(li, f, None) for f in ("part_id", "labor_id", "misc_id"))
+        keys.add((li.item_type, ref) if any(ref) else (li.item_type, (li.description or "").strip().lower()))
+    return keys
+
+
+def _pair_cases(db: Session, run_id: int, keep: Project, own_quotes: list, moved_quotes: list,
+                own_pos: list, moved_pos: list) -> list[str]:
+    """Open a same job (same order) case for each moved Vision record beside a look-alike Velocity one.
+
+    A duplicate project's merge brings its Vision quotes and POs beside the kept
+    project's own; the cutover only compared records within one project, so
+    these pairs were never put to a person. Quotes pair when they share an
+    ordered item, POs when they go to the same vendor -- the cutover's tests.
+    Each new case lands in its step, where its answer merges as usual.
+
+    Args:
+        db: The request's session (the caller commits).
+        run_id: The cutover run the duplicate-project case belongs to.
+        keep: The kept project.
+        own_quotes, own_pos: Its own Velocity records, from before the move.
+        moved_quotes, moved_pos: What moved in.
+
+    Returns:
+        The new cases' titles.
+    """
+    made: list[str] = []
+
+    def add(kind: str, key: str, title: str, found: dict, reason: str) -> None:
+        """Insert one case unless the run already has it."""
+        if db.query(VisionCase).filter(VisionCase.run_id == run_id, VisionCase.kind == kind,
+                                       VisionCase.case_key == key).first():
+            return                                         # already open or settled
+        db.add(VisionCase(run_id=run_id, kind=kind, case_key=key, project=keep.uca_project_number, title=title,
+                          prediction=None, prediction_reason=reason, detail={"found": found}, change_ids=[]))
+        made.append(title)
+
+    for vq in (q for q in moved_quotes if q.legacy_id is not None and q.vision_wo_number):   # Vision work orders
+        v_items = _item_keys(db.query(QuoteLineItem).filter(QuoteLineItem.quote_id == vq.id).all())
+        for oq in own_quotes:
+            o_lines = db.query(QuoteLineItem).filter(QuoteLineItem.quote_id == oq.id).all()
+            shared = len(v_items & _item_keys(o_lines))
+            if not shared:
+                continue                                   # nothing in common: a separate job
+            number = _quote_number(db, oq)
+            add("same job", f"wo:{vq.vision_wo_number}:{oq.id}",
+                f"{keep.uca_project_number}: Vision WO {vq.vision_wo_number} beside {number}",
+                {"project": keep.uca_project_number, "vision WO": str(vq.vision_wo_number),
+                 "vision quote": _quote_number(db, vq), "velocity quote": number, "velocity quote id": str(oq.id),
+                 "items in both": str(shared), "vision lines": str(len(v_items)), "velocity lines": str(len(o_lines))},
+                f"moved in with duplicate project; {shared} item(s) in both")
+    for vp in (p for p in moved_pos if p.legacy_id is not None and p.vision_po_number):     # Vision POs
+        for op in own_pos:
+            if op.vendor_id != vp.vendor_id:
+                continue                                   # another vendor: another order
+            number = _po_number(db, op)
+            add("same order", f"po:{vp.vision_po_number}:{number}",
+                f"{keep.uca_project_number}: Vision PO {vp.vision_po_number} beside {number}",
+                {"project": keep.uca_project_number, "vision PO": vp.vision_po_number,
+                 "velocity PO": number, "evidence": "same vendor"},
+                "moved in with duplicate project; same vendor")
+    db.flush()
+    return made
 
 
 def merge(db: Session, c: VisionCase) -> dict:
@@ -707,7 +793,7 @@ def merge(db: Session, c: VisionCase) -> dict:
     from scripts.vision_delta.apply import SOURCE
     found = (c.detail or {}).get("found") or {}
     if c.kind == "duplicate project":
-        return merge_projects(db, found)
+        return merge_projects(db, found, c.run_id)         # opens cases for look-alikes it brings together
     if c.kind == "same job":
         vq, wo = found.get("velocity quote id"), found.get("vision WO")
         keep = db.query(Quote).filter(Quote.id == int(vq)).with_for_update().first() if (vq or "").isdigit() else None

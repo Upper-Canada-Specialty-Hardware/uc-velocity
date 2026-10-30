@@ -45,7 +45,7 @@ const OPTION_EFFECT: Record<string, string> = {
   "copy replaces original":
     "merges them: the copy stays; the original goes into its audit trail, then is deleted",
   duplicate:
-    "moves the other project's quotes and POs into the one holding the work (they get new numbers), then deletes the emptied project",
+    "moves the other project's quotes and POs into the one holding the work (they get new numbers), then deletes the emptied project; a moved Vision quote or PO that looks like one already there opens a Same job or Same order case",
 }
 
 /** Answers that change data, so accepting them in bulk asks first. */
