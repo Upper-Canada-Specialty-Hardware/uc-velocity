@@ -599,9 +599,9 @@ def test_import_stamps_legacy_keys_on_profiles_and_projects():
         active = db.query(Project).filter(Project.legacy_id == 10).one()
         assert active.legacy_source == "tblProjects" and active.uca_project_number == "A9001"
         assert active.status == "active"
-        # blnArchive = -1 (Access TRUE) must import as archived, not active.
-        archived = db.query(Project).filter(Project.legacy_id == 11).one()
-        assert archived.status == "archived"
+        # blnArchive = -1 (Access TRUE) must import as closed, not active (#330).
+        closed_project = db.query(Project).filter(Project.legacy_id == 11).one()
+        assert closed_project.status == "closed"
         # Idempotent: a second press yields the same rows, not duplicates.
         assert db.query(Quote).filter(Quote.legacy_source == "tblServiceRecords").count() == 15
         assert db.query(QuoteLineItem).filter(QuoteLineItem.legacy_source.isnot(None)).count() == 20

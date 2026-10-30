@@ -274,7 +274,7 @@ def load_projects(rows: list[dict], customers: dict[int, str]) -> list[dict]:
             "name": safe_str(row.get("ProjectName", "")) or f"Project {vid}",
             "customer": customers.get(safe_int(row.get("ClientID", "")), UNKNOWN_CUSTOMER),
             "created_on": parse_date(row.get("dtmStartDate", "")),
-            "status": "archived" if parse_bool(row.get("blnArchive")) else "active",
+            "status": "closed" if parse_bool(row.get("blnArchive")) else "active",   # Vision's archive flag = a finished job (#330)
             "ucsh": safe_str(row.get("UCSHProjectNr", "")) or None,
             "lead": safe_str(row.get("EmployeeID", "")) or None,
         })

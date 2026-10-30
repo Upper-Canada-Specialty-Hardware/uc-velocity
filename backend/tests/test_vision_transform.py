@@ -313,8 +313,8 @@ def test_project_uca_padding_and_archive_status():
                              "UCAProjectNr": "42", "blnArchive": True})
     assert p["uca_project_number"] == "A0042"
     assert p["client_legacy_id"] == 5
-    assert p["status"] == "archived"
-    # non-numeric UCA passes through; not archived
+    assert p["status"] == "closed"
+    # non-numeric UCA passes through; not closed
     p2 = t.transform_project({"ProjectID": 8, "UCAProjectNr": "A9999", "blnArchive": 0})
     assert p2["uca_project_number"] == "A9999"
     assert p2["status"] == "active"

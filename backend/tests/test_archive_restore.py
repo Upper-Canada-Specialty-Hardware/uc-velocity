@@ -245,8 +245,13 @@ def test_by_hand_archive_holds_every_row_then_unarchive_restores_them_identicall
     assert db.get(Project, pid) is not None and db.get(Quote, world["ids"]["quote"]) is not None   # same ids back
     assert db.query(Invoice).filter(Invoice.quote_id == world["ids"]["quote"]).count() == 1
     assert db.query(POSnapshot).filter(POSnapshot.purchase_order_id == world["ids"]["po"]).count() == 1
+    assert db.get(Project, pid).status == "closed"                              # unarchived comes back closed (#330)
     now = project_rows(db, pid, [t for t in ARCHIVE_ORDER if t in vel])
     for t in now:
+        if t == "projects":                                                     # identical apart from the new status
+            blank = lambda rows: [{**r, "status": None} for r in rows]
+            assert sha(blank(now[t])) == sha(blank(vel[t])), "projects did not round-trip apart from status"
+            continue
         assert sha(now[t]) == sha(vel[t]), f"{t} did not round-trip identically"
     # re-archive works now that the rows are back and closed
     again = c.post(f"/projects/{pid}/archive")
@@ -335,6 +340,9 @@ def test_pending_bulk_removal_guards(world):
     assert r.status_code == 409 and "pending" in r.json()["detail"]["reasons"][0], r.text
     un = c.post(f"/archive/projects/{uca}/unarchive")       # rows still live: just flips to restored
     assert un.status_code == 200 and un.json()["reinserted"] is False, un.text
+    db.expire_all()
+    from models import Project
+    assert db.get(Project, pid).status == "closed"         # the flip-only path closes it too (#330)
     body = {"keys": [key], "operator": "test", "june_day": "2026-06-19", "estimate": {"wal_bytes": 1000, "db_bytes": 0}}
     rm = c.post("/admin/vision-cutover/archive/remove", json=body, headers=h)
     if rm.status_code == 409:                              # a busy scratch database: the pre-flight check said wait

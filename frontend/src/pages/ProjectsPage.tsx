@@ -78,21 +78,21 @@ export function ProjectsPage({
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: number; name: string } | null>(null)
 
   // UX-4 filter controls
-  const [showArchived, setShowArchived] = useState(false)
+  const [showClosed, setShowClosed] = useState(false)
   type SortColumn = "name" | "customer_name" | "uca_project_number" | "ucsh_project_number" | "project_lead" | "status" | "created_on"
   const [sortBy, setSortBy] = useState<SortColumn>("uca_project_number")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
 
-  // Apply archived filter + sort to the raw results before render.
+  // Apply the closed filter + sort (finished jobs hidden by default, #330) to the raw results before render.
   const rawProjects = searchResults ?? baseProjects
-  const archivedCount = useMemo(
-    () => rawProjects.filter((p) => p.status.toLowerCase() === "archived").length,
+  const closedCount = useMemo(
+    () => rawProjects.filter((p) => p.status.toLowerCase() === "closed").length,
     [rawProjects]
   )
   const displayProjects = useMemo(() => {
-    const filtered = showArchived
+    const filtered = showClosed
       ? rawProjects
-      : rawProjects.filter((p) => p.status.toLowerCase() !== "archived")
+      : rawProjects.filter((p) => p.status.toLowerCase() !== "closed")
     const sorted = [...filtered].sort((a, b) => {
       const av = (a[sortBy] ?? "") as string
       const bv = (b[sortBy] ?? "") as string
@@ -100,9 +100,9 @@ export function ProjectsPage({
       return sortDir === "asc" ? cmp : -cmp
     })
     return sorted
-  }, [rawProjects, showArchived, sortBy, sortDir])
+  }, [rawProjects, showClosed, sortBy, sortDir])
 
-  // Totals for what is listed now: follow the search and the archived toggle
+  // Totals for what is listed now: follow the search and the closed toggle
   const totals = useMemo(
     () => displayProjects.reduce(
       (t, p) => ({
@@ -295,16 +295,16 @@ export function ProjectsPage({
           )}
         </div>
         <Button
-          variant={showArchived ? "secondary" : "outline"}
+          variant={showClosed ? "secondary" : "outline"}
           size="sm"
-          onClick={() => setShowArchived((v) => !v)}
+          onClick={() => setShowClosed((v) => !v)}
           className="gap-2"
         >
-          {showArchived ? "Hide archived" : `Show archived (${archivedCount})`}
+          {showClosed ? "Hide closed" : `Show closed (${closedCount})`}
         </Button>
         {!loading && (
           <p className="text-sm text-muted-foreground ml-auto" aria-live="polite">
-            {/* What is listed: changes with the search and the archived toggle */}
+            {/* What is listed: changes with the search and the closed toggle */}
             {displayProjects.length.toLocaleString()} {displayProjects.length === 1 ? "project" : "projects"}
             {" · "}{totals.quotes.toLocaleString()} {totals.quotes === 1 ? "quote" : "quotes"}
             {" · "}{totals.pos.toLocaleString()} {totals.pos === 1 ? "PO" : "POs"}

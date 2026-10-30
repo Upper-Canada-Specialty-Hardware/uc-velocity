@@ -533,7 +533,7 @@ def _report_projects(cur: Any, summary: dict[str, Any]) -> None:
         return
     all_ids, surviving, _pm, _cm = _surviving_projects(cur)
     rows = _fetch_dicts(cur, SCHEMA, proj_tab)
-    archived = active = dropped_client = 0
+    closed = active = dropped_client = 0
     uca_seen: dict[str, int] = {}
     for r in rows:
         p = transform_project(r)
@@ -541,8 +541,8 @@ def _report_projects(cur: Any, summary: dict[str, Any]) -> None:
         if pid is not None and pid in surviving:
             # Only surviving (migrating) projects count toward the split + UCA
             # dedup -- the importer dedups seen_uca only after the client check.
-            if p["status"] == "archived":
-                archived += 1
+            if p["status"] == "closed":
+                closed += 1
             else:
                 active += 1
             uca = p["uca_project_number"]
@@ -553,7 +553,7 @@ def _report_projects(cur: Any, summary: dict[str, Any]) -> None:
     uca_dups = sum(c - 1 for c in uca_seen.values() if c > 1)
     print(f"  projects (tblProjects): {len(rows)}  ->  migrate {len(surviving)}, "
           f"drop (client unresolved) {dropped_client}")
-    print(f"    active {active}, archived {archived}; duplicate UCA numbers {uca_dups}")
+    print(f"    active {active}, closed {closed}; duplicate UCA numbers {uca_dups}")
 
 
 def _report_po_domain(cur: Any, summary: dict[str, Any]) -> None:

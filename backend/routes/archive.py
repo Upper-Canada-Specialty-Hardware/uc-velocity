@@ -25,7 +25,7 @@ import log_store
 from auth import current_actor
 from database import get_db
 from models import ArchivedProjectRow
-from scripts.vision_delta.archive import PREFIX, RestoreError, restore_project
+from scripts.vision_delta.archive import PREFIX, RestoreError, mark_closed, restore_project
 
 router = APIRouter(prefix="/archive", tags=["archive"])
 
@@ -111,8 +111,9 @@ async def unarchive(uca: str, db: Session = Depends(get_db), store=Depends(get_s
     When the live rows were never removed (the bulk removal had not reached it) the
     project is still in the database, so this only flips the row to ``restored``.
     Otherwise every Velocity row is re-inserted from the file with its original ids,
-    verified, and the bulk removal marker is cleared. A Vision-only archive has no
-    Velocity rows and cannot be unarchived.
+    verified, and the bulk removal marker is cleared. Either way the project comes
+    back with status ``closed`` (#330). A Vision-only archive has no Velocity rows
+    and cannot be unarchived.
 
     Raises:
         HTTPException: 400 bad number, 401 no actor, 404 not archived, 409 cannot restore.
@@ -135,6 +136,7 @@ async def unarchive(uca: str, db: Session = Depends(get_db), store=Depends(get_s
     pid = f["velocity_project_id"]
     if not row.rows_removed:                               # the live rows are still there: just flip the row back
         row.state, row.restored_by, row.restored_at = "restored", who, datetime.utcnow()
+        mark_closed(db, pid)                               # back as closed either way (#330), same commit
         db.commit()
         return {"uca": uca, "project_id": pid, "reinserted": False, "restored": {}}
 

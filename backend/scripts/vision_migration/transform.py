@@ -628,7 +628,7 @@ def transform_project(row: dict[str, Any]) -> dict[str, Any]:
         "uca_project_number": uca or None,
         "ucsh_project_number": to_str(row.get("UCSHProjectNr")) or None,
         "created_on": to_datetime(row.get("dtmStartDate")),
-        "status": "archived" if to_bool(row.get("blnArchive")) else "active",
+        "status": "closed" if to_bool(row.get("blnArchive")) else "active",   # Vision's archive flag = a finished job (#330)
         "project_lead": to_str(row.get("EmployeeID")) or None,  # a name string, not an FK
     }
 

@@ -193,6 +193,8 @@ export function ProjectForm({ project, onSuccess, onCancel }: ProjectFormProps) 
             <SelectItem value="active">Active</SelectItem>
             <SelectItem value="completed">Completed</SelectItem>
             <SelectItem value="on_hold">On Hold</SelectItem>
+            {/* a finished job; also how an unarchived project comes back (#330) */}
+            <SelectItem value="closed">Closed</SelectItem>
           </SelectContent>
         </Select>
       </div>
